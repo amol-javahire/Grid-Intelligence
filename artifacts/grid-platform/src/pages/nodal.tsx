@@ -31,7 +31,7 @@ const MONTH_NAMES = ["January","February","March","April","May","June","July","A
 
 export default function NodalAnalysis() {
   const [searchTerm, setSearchTerm] = useState("");
-  const [year, setYear] = useState<number>(2023);
+  const [year, setYear] = useState<number>(2025);
   const [month, setMonth] = useState<number>(6);
   const [sortField, setSortField] = useState<"avgDaPrice" | "spread" | "negPricePercent">("avgDaPrice");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
@@ -80,9 +80,10 @@ export default function NodalAnalysis() {
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
+              <SelectItem value="2026">2026</SelectItem>
+              <SelectItem value="2025">2025</SelectItem>
               <SelectItem value="2024">2024</SelectItem>
               <SelectItem value="2023">2023</SelectItem>
-              <SelectItem value="2022">2022</SelectItem>
             </SelectContent>
           </Select>
           <Select value={month.toString()} onValueChange={(v) => setMonth(parseInt(v))}>

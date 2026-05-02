@@ -35,7 +35,7 @@ const NODES = ["HB_HOUSTON", "HB_NORTH", "HB_SOUTH", "HB_WEST", "LZ_HOUSTON", "L
 
 export default function ErcotHistorical() {
   const [node, setNode] = useState<string>("HB_HOUSTON");
-  const [year, setYear] = useState<number>(2023);
+  const [year, setYear] = useState<number>(2025);
   const [compareYear, setCompareYear] = useState<number>(2022);
   const [showCompare, setShowCompare] = useState(false);
 
@@ -83,6 +83,8 @@ export default function ErcotHistorical() {
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
+              <SelectItem value="2026">2026</SelectItem>
+              <SelectItem value="2025">2025</SelectItem>
               <SelectItem value="2024">2024</SelectItem>
               <SelectItem value="2023">2023</SelectItem>
               <SelectItem value="2022">2022</SelectItem>
@@ -103,6 +105,8 @@ export default function ErcotHistorical() {
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
+              <SelectItem value="2026">2026</SelectItem>
+              <SelectItem value="2025">2025</SelectItem>
               <SelectItem value="2024">2024</SelectItem>
               <SelectItem value="2023">2023</SelectItem>
               <SelectItem value="2022">2022</SelectItem>
@@ -141,10 +145,10 @@ export default function ErcotHistorical() {
                     <YAxis stroke={C.mutedFg} tick={{ fill: C.mutedFg, fontSize: 12 }} />
                     <RechartsTooltip contentStyle={TOOLTIP_STYLE} />
                     <Legend />
-                    <Line type="monotone" dataKey="daPrice" name={`DA ${year}`} stroke={C.teal} strokeWidth={2} dot={{ r: 3, fill: C.teal }} activeDot={{ r: 5 }} connectNulls />
-                    <Line type="monotone" dataKey="rtPrice" name={`RT ${year}`} stroke={C.amber} strokeWidth={2} dot={{ r: 3, fill: C.amber }} activeDot={{ r: 5 }} connectNulls />
-                    {showCompare && <Line type="monotone" dataKey="daComp" name={`DA ${compareYear}`} stroke={C.teal} strokeWidth={1.5} strokeDasharray="5 5" dot={false} connectNulls />}
-                    {showCompare && <Line type="monotone" dataKey="rtComp" name={`RT ${compareYear}`} stroke={C.amber} strokeWidth={1.5} strokeDasharray="5 5" dot={false} connectNulls />}
+                    <Line isAnimationActive={false} type="monotone" dataKey="daPrice" name={`DA ${year}`} stroke={C.teal} strokeWidth={2} dot={{ r: 3, fill: C.teal }} activeDot={{ r: 5 }} connectNulls />
+                    <Line isAnimationActive={false} type="monotone" dataKey="rtPrice" name={`RT ${year}`} stroke={C.amber} strokeWidth={2} dot={{ r: 3, fill: C.amber }} activeDot={{ r: 5 }} connectNulls />
+                    {showCompare && <Line isAnimationActive={false} type="monotone" dataKey="daComp" name={`DA ${compareYear}`} stroke={C.teal} strokeWidth={1.5} strokeDasharray="5 5" dot={false} connectNulls />}
+                    {showCompare && <Line isAnimationActive={false} type="monotone" dataKey="rtComp" name={`RT ${compareYear}`} stroke={C.amber} strokeWidth={1.5} strokeDasharray="5 5" dot={false} connectNulls />}
                   </LineChart>
                 </ResponsiveContainer>
               </CardContent>
@@ -165,8 +169,8 @@ export default function ErcotHistorical() {
                     <YAxis stroke={C.mutedFg} tick={{ fill: C.mutedFg, fontSize: 12 }} />
                     <RechartsTooltip contentStyle={TOOLTIP_STYLE} formatter={(v: number) => [`$${v.toFixed(2)}/MWh`]} />
                     <Legend />
-                    <Bar dataKey="onPeak" name="On-Peak Avg" fill={C.teal} radius={[3, 3, 0, 0]} />
-                    <Bar dataKey="offPeak" name="Off-Peak Avg" fill={C.purple} radius={[3, 3, 0, 0]} />
+                    <Bar isAnimationActive={false} dataKey="onPeak" name="On-Peak Avg" fill={C.teal} radius={[3, 3, 0, 0]} />
+                    <Bar isAnimationActive={false} dataKey="offPeak" name="Off-Peak Avg" fill={C.purple} radius={[3, 3, 0, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
               </CardContent>
@@ -187,7 +191,7 @@ export default function ErcotHistorical() {
                       <XAxis dataKey="month" stroke={C.mutedFg} tick={{ fill: C.mutedFg, fontSize: 12 }} />
                       <YAxis stroke={C.mutedFg} tick={{ fill: C.mutedFg, fontSize: 12 }} />
                       <RechartsTooltip contentStyle={TOOLTIP_STYLE} formatter={(v: number) => [`$${v.toFixed(2)}`]} />
-                      <Bar dataKey="volatility" name="Volatility" radius={[3, 3, 0, 0]}>
+                      <Bar isAnimationActive={false} dataKey="volatility" name="Volatility" radius={[3, 3, 0, 0]}>
                         {chartData.map((entry, i) => (
                           <Cell key={i} fill={(entry.volatility || 0) > 10 ? C.red : (entry.volatility || 0) > 5 ? C.amber : C.teal} />
                         ))}
@@ -209,7 +213,7 @@ export default function ErcotHistorical() {
                       <XAxis dataKey="month" stroke={C.mutedFg} tick={{ fill: C.mutedFg, fontSize: 12 }} />
                       <YAxis stroke={C.mutedFg} tick={{ fill: C.mutedFg, fontSize: 12 }} />
                       <RechartsTooltip contentStyle={TOOLTIP_STYLE} formatter={(v: number) => [`${v.toFixed(1)}%`]} />
-                      <Bar dataKey="negPercent" name="Neg. Price %" radius={[3, 3, 0, 0]}>
+                      <Bar isAnimationActive={false} dataKey="negPercent" name="Neg. Price %" radius={[3, 3, 0, 0]}>
                         {chartData.map((entry, i) => (
                           <Cell key={i} fill={(entry.negPercent || 0) > 5 ? C.red : C.amber} />
                         ))}
