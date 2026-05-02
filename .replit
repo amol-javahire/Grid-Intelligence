@@ -37,3 +37,10 @@ externalPort = 80
 
 [nix]
 channel = "stable-25_05"
+
+[userenv]
+
+[userenv.shared]
+EIA_API_KEY = "3791d308261c8222421117fba0550b92"
+ERCOT_SUBSCRIPTION_KEY = "37498b5cc9e145769fd948d1762e1965"
+ERCOT_USERNAME = "amol.javahire@gmail.com"
