@@ -8,6 +8,7 @@ export const ercotNodalStatsTable = pgTable("ercot_nodal_stats", {
   year: integer("year").notNull(),
   month: integer("month").notNull(),
   avgDaPrice: numeric("avg_da_price", { precision: 10, scale: 4 }).notNull(),
+  avgRtPrice: numeric("avg_rt_price", { precision: 10, scale: 4 }),
   stdDev: numeric("std_dev", { precision: 10, scale: 4 }),
   negPricePercent: numeric("neg_price_percent", { precision: 6, scale: 3 }),
   onPeakAvg: numeric("on_peak_avg", { precision: 10, scale: 4 }),

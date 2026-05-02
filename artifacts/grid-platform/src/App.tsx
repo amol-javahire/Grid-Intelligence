@@ -11,6 +11,7 @@ import ErcotHistorical from "@/pages/ercot";
 import CaisoHistorical from "@/pages/caiso";
 import PjmHistorical from "@/pages/pjm";
 import NodalAnalysis from "@/pages/nodal";
+import CongestionAnalysis from "@/pages/congestion";
 import InterconnectionQueue from "@/pages/queue";
 import QACopilot from "@/pages/qa";
 import ExportCenter from "@/pages/export";
@@ -30,6 +31,7 @@ function Router() {
         <Route path="/caiso" component={CaisoHistorical} />
         <Route path="/pjm" component={PjmHistorical} />
         <Route path="/nodal" component={NodalAnalysis} />
+        <Route path="/congestion" component={CongestionAnalysis} />
         <Route path="/queue" component={InterconnectionQueue} />
         <Route path="/qa" component={QACopilot} />
         <Route path="/export" component={ExportCenter} />

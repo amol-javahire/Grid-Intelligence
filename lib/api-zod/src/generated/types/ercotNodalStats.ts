@@ -12,6 +12,7 @@ export interface ErcotNodalStats {
   year: number;
   month: number;
   avgDaPrice: number;
+  avgRtPrice?: number;
   stdDev?: number;
   negPricePercent?: number;
   onPeakAvg?: number;

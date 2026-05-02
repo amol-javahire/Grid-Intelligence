@@ -66,6 +66,7 @@ router.get("/ercot-nodal-stats", async (req, res) => {
     res.json(rows.map(r => ({
       ...r,
       avgDaPrice: Number(r.avgDaPrice),
+      avgRtPrice: r.avgRtPrice ? Number(r.avgRtPrice) : null,
       stdDev: r.stdDev ? Number(r.stdDev) : null,
       negPricePercent: r.negPricePercent ? Number(r.negPricePercent) : null,
       onPeakAvg: r.onPeakAvg ? Number(r.onPeakAvg) : null,

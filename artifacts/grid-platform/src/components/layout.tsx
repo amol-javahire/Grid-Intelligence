@@ -13,7 +13,8 @@ import {
   Bookmark,
   ChevronRight,
   Menu,
-  TerminalSquare
+  TerminalSquare,
+  GitBranch
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -27,6 +28,7 @@ const sidebarNavItems = [
   { title: "CAISO Historical", href: "/caiso", icon: Zap },
   { title: "PJM Historical", href: "/pjm", icon: Activity },
   { title: "Nodal Analysis", href: "/nodal", icon: Layers },
+  { title: "Congestion Analysis", href: "/congestion", icon: GitBranch },
   { title: "Interconnection Queue", href: "/queue", icon: Database },
   { title: "Q&A Copilot", href: "/qa", icon: MessageSquare },
   { title: "Export Center", href: "/export", icon: Download },

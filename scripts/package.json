@@ -6,6 +6,7 @@
   "scripts": {
     "hello": "tsx ./src/hello.ts",
     "seed-pjm": "tsx ./src/seed-pjm.ts",
+    "seed-ercot-rt": "tsx ./src/seed-ercot-rt.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {

@@ -695,6 +695,8 @@ components:
           type: integer
         avgDaPrice:
           type: number
+        avgRtPrice:
+          type: number
         stdDev:
           type: number
         negPricePercent:

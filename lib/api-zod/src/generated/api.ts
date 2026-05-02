@@ -335,6 +335,7 @@ export const ListErcotNodalStatsResponseItem = zod.object({
   year: zod.number(),
   month: zod.number(),
   avgDaPrice: zod.number(),
+  avgRtPrice: zod.number().optional(),
   stdDev: zod.number().optional(),
   negPricePercent: zod.number().optional(),
   onPeakAvg: zod.number().optional(),
