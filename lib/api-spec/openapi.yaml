@@ -3,20 +3,34 @@ info:
   # Do not change the title, if the title changes, the import paths will be broken
   title: Api
   version: 0.1.0
-  description: API specification
+  description: Grid Origination Intelligence Platform API
 servers:
   - url: /api
     description: Base API path
 tags:
   - name: health
     description: Health operations
+  - name: candidates
+    description: Project candidate operations
+  - name: screenings
+    description: Screening session operations
+  - name: ercot-node-stats
+    description: ERCOT hub/zone node stats
+  - name: ercot-nodal-stats
+    description: ERCOT resource nodal stats
+  - name: caiso-node-stats
+    description: CAISO node stats
+  - name: queue-projects
+    description: Interconnection queue projects
+  - name: dashboard
+    description: Dashboard summary endpoints
+
 paths:
   /healthz:
     get:
       operationId: healthCheck
       tags: [health]
       summary: Health check
-      description: Returns server health status
       responses:
         "200":
           description: Healthy
@@ -24,6 +38,385 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+
+  /candidates:
+    get:
+      operationId: listCandidates
+      tags: [candidates]
+      summary: List all candidates
+      parameters:
+        - name: market
+          in: query
+          schema:
+            type: string
+            enum: [ERCOT, CAISO, PJM]
+        - name: assetType
+          in: query
+          schema:
+            type: string
+            enum: [solar, wind, storage, solar_storage, wind_storage]
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [active, inactive, under_review, contracted]
+        - name: minScore
+          in: query
+          schema:
+            type: number
+        - name: maxScore
+          in: query
+          schema:
+            type: number
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 100
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+      responses:
+        "200":
+          description: List of candidates
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Candidate"
+    post:
+      operationId: createCandidate
+      tags: [candidates]
+      summary: Create a new candidate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCandidateBody"
+      responses:
+        "201":
+          description: Created candidate
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Candidate"
+
+  /candidates/{id}:
+    get:
+      operationId: getCandidate
+      tags: [candidates]
+      summary: Get a single candidate
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Candidate
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Candidate"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    put:
+      operationId: updateCandidate
+      tags: [candidates]
+      summary: Update a candidate
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCandidateBody"
+      responses:
+        "200":
+          description: Updated candidate
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Candidate"
+    delete:
+      operationId: deleteCandidate
+      tags: [candidates]
+      summary: Delete a candidate
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Deleted
+
+  /screenings:
+    get:
+      operationId: listScreenings
+      tags: [screenings]
+      summary: List saved screening sessions
+      responses:
+        "200":
+          description: List of screenings
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Screening"
+    post:
+      operationId: createScreening
+      tags: [screenings]
+      summary: Save a screening session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateScreeningBody"
+      responses:
+        "201":
+          description: Created screening
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Screening"
+
+  /screenings/{id}:
+    get:
+      operationId: getScreening
+      tags: [screenings]
+      summary: Get a screening session
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Screening
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Screening"
+    delete:
+      operationId: deleteScreening
+      tags: [screenings]
+      summary: Delete a screening session
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Deleted
+
+  /ercot-node-stats:
+    get:
+      operationId: listErcotNodeStats
+      tags: [ercot-node-stats]
+      summary: List ERCOT hub/zone monthly stats
+      parameters:
+        - name: node
+          in: query
+          schema:
+            type: string
+        - name: year
+          in: query
+          schema:
+            type: integer
+        - name: month
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: ERCOT node stats
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ErcotNodeStats"
+
+  /ercot-nodal-stats:
+    get:
+      operationId: listErcotNodalStats
+      tags: [ercot-nodal-stats]
+      summary: List ERCOT resource nodal stats
+      parameters:
+        - name: settlementPoint
+          in: query
+          schema:
+            type: string
+        - name: year
+          in: query
+          schema:
+            type: integer
+        - name: month
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: ERCOT nodal stats
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ErcotNodalStats"
+
+  /caiso-node-stats:
+    get:
+      operationId: listCaisoNodeStats
+      tags: [caiso-node-stats]
+      summary: List CAISO node stats
+      parameters:
+        - name: node
+          in: query
+          schema:
+            type: string
+            enum: [NP15, SP15, ZP26]
+        - name: year
+          in: query
+          schema:
+            type: integer
+        - name: month
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: CAISO node stats
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/CaisoNodeStats"
+
+  /queue-projects:
+    get:
+      operationId: listQueueProjects
+      tags: [queue-projects]
+      summary: List interconnection queue projects
+      parameters:
+        - name: market
+          in: query
+          schema:
+            type: string
+            enum: [ERCOT, CAISO, PJM]
+        - name: status
+          in: query
+          schema:
+            type: string
+        - name: fuelType
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 200
+      responses:
+        "200":
+          description: Queue projects
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/QueueProject"
+
+  /dashboard/summary:
+    get:
+      operationId: getDashboardSummary
+      tags: [dashboard]
+      summary: Get dashboard summary stats
+      responses:
+        "200":
+          description: Dashboard summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DashboardSummary"
+
+  /dashboard/market-breakdown:
+    get:
+      operationId: getMarketBreakdown
+      tags: [dashboard]
+      summary: Get candidate breakdown by market and asset type
+      responses:
+        "200":
+          description: Market breakdown
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/MarketBreakdown"
+
+  /dashboard/top-candidates:
+    get:
+      operationId: getTopCandidates
+      tags: [dashboard]
+      summary: Get top-scored candidates
+      parameters:
+        - name: objective
+          in: query
+          schema:
+            type: string
+            enum: [lowest_lcoe, risk_adjusted_value, load_hedge, decarbonization]
+            default: risk_adjusted_value
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 10
+      responses:
+        "200":
+          description: Top candidates
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Candidate"
+
+  /dashboard/queue-summary:
+    get:
+      operationId: getQueueSummary
+      tags: [dashboard]
+      summary: Get queue project fuel-type and status breakdown
+      responses:
+        "200":
+          description: Queue summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QueueSummary"
+
 components:
   schemas:
     HealthStatus:
@@ -31,6 +424,409 @@ components:
       properties:
         status:
           type: string
-      required:
-        - status
+      required: [status]
 
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+        message:
+          type: string
+      required: [error, message]
+
+    Candidate:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        market:
+          type: string
+          enum: [ERCOT, CAISO, PJM]
+        assetType:
+          type: string
+          enum: [solar, wind, storage, solar_storage, wind_storage]
+        status:
+          type: string
+          enum: [active, inactive, under_review, contracted]
+        capacityMw:
+          type: number
+        latitude:
+          type: number
+        longitude:
+          type: number
+        county:
+          type: string
+        state:
+          type: string
+        interconnectionNode:
+          type: string
+        pricingHubNode:
+          type: string
+        estimatedLcoe:
+          type: number
+        offtakePriceMwh:
+          type: number
+        overallScore:
+          type: number
+        priceScore:
+          type: number
+        locationScore:
+          type: number
+        curtailmentScore:
+          type: number
+        interconnectionScore:
+          type: number
+        regulatoryScore:
+          type: number
+        financialScore:
+          type: number
+        environmentalScore:
+          type: number
+        gridStabilityScore:
+          type: number
+        demandProximityScore:
+          type: number
+        developmentRiskScore:
+          type: number
+        notes:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - name
+        - market
+        - assetType
+        - status
+        - capacityMw
+        - latitude
+        - longitude
+        - overallScore
+        - createdAt
+        - updatedAt
+
+    CreateCandidateBody:
+      type: object
+      properties:
+        name:
+          type: string
+        market:
+          type: string
+          enum: [ERCOT, CAISO, PJM]
+        assetType:
+          type: string
+          enum: [solar, wind, storage, solar_storage, wind_storage]
+        status:
+          type: string
+          enum: [active, inactive, under_review, contracted]
+        capacityMw:
+          type: number
+        latitude:
+          type: number
+        longitude:
+          type: number
+        county:
+          type: string
+        state:
+          type: string
+        interconnectionNode:
+          type: string
+        pricingHubNode:
+          type: string
+        estimatedLcoe:
+          type: number
+        offtakePriceMwh:
+          type: number
+        priceScore:
+          type: number
+        locationScore:
+          type: number
+        curtailmentScore:
+          type: number
+        interconnectionScore:
+          type: number
+        regulatoryScore:
+          type: number
+        financialScore:
+          type: number
+        environmentalScore:
+          type: number
+        gridStabilityScore:
+          type: number
+        demandProximityScore:
+          type: number
+        developmentRiskScore:
+          type: number
+        notes:
+          type: string
+      required:
+        - name
+        - market
+        - assetType
+        - capacityMw
+        - latitude
+        - longitude
+
+    Screening:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        market:
+          type: string
+        assetType:
+          type: string
+        objective:
+          type: string
+        filters:
+          type: object
+          additionalProperties: true
+        candidateIds:
+          type: array
+          items:
+            type: integer
+        createdAt:
+          type: string
+          format: date-time
+      required: [id, name, market, assetType, objective, createdAt]
+
+    CreateScreeningBody:
+      type: object
+      properties:
+        name:
+          type: string
+        market:
+          type: string
+        assetType:
+          type: string
+        objective:
+          type: string
+        filters:
+          type: object
+          additionalProperties: true
+        candidateIds:
+          type: array
+          items:
+            type: integer
+      required: [name, market, assetType, objective]
+
+    ErcotNodeStats:
+      type: object
+      properties:
+        id:
+          type: integer
+        node:
+          type: string
+        nodeType:
+          type: string
+          enum: [hub, load_zone]
+        year:
+          type: integer
+        month:
+          type: integer
+        avgDaPrice:
+          type: number
+        avgRtPrice:
+          type: number
+        volatility:
+          type: number
+        negPricePercent:
+          type: number
+        onPeakAvg:
+          type: number
+        offPeakAvg:
+          type: number
+        minPrice:
+          type: number
+        maxPrice:
+          type: number
+      required: [id, node, nodeType, year, month, avgDaPrice, avgRtPrice]
+
+    ErcotNodalStats:
+      type: object
+      properties:
+        id:
+          type: integer
+        settlementPoint:
+          type: string
+        year:
+          type: integer
+        month:
+          type: integer
+        avgDaPrice:
+          type: number
+        stdDev:
+          type: number
+        negPricePercent:
+          type: number
+        onPeakAvg:
+          type: number
+        offPeakAvg:
+          type: number
+        minPrice:
+          type: number
+        maxPrice:
+          type: number
+        sampleCount:
+          type: integer
+      required: [id, settlementPoint, year, month, avgDaPrice]
+
+    CaisoNodeStats:
+      type: object
+      properties:
+        id:
+          type: integer
+        node:
+          type: string
+          enum: [NP15, SP15, ZP26]
+        year:
+          type: integer
+        month:
+          type: integer
+        avgDaPrice:
+          type: number
+        avgRtPrice:
+          type: number
+        volatility:
+          type: number
+        negPricePercent:
+          type: number
+        onPeakAvg:
+          type: number
+        offPeakAvg:
+          type: number
+      required: [id, node, year, month, avgDaPrice, avgRtPrice]
+
+    QueueProject:
+      type: object
+      properties:
+        id:
+          type: integer
+        projectName:
+          type: string
+        market:
+          type: string
+          enum: [ERCOT, CAISO, PJM]
+        queueId:
+          type: string
+        fuelType:
+          type: string
+        capacityMw:
+          type: number
+        status:
+          type: string
+        latitude:
+          type: number
+        longitude:
+          type: number
+        county:
+          type: string
+        state:
+          type: string
+        interconnectionNode:
+          type: string
+        requestDate:
+          type: string
+          format: date-time
+        studyGroupPhase:
+          type: string
+        withdrawalDate:
+          type: string
+          format: date-time
+      required: [id, projectName, market, fuelType, capacityMw, status]
+
+    DashboardSummary:
+      type: object
+      properties:
+        totalCandidates:
+          type: integer
+        activeCandidates:
+          type: integer
+        totalCapacityMw:
+          type: number
+        avgOverallScore:
+          type: number
+        totalScreenings:
+          type: integer
+        candidatesByMarket:
+          type: object
+          additionalProperties:
+            type: integer
+        candidatesByAssetType:
+          type: object
+          additionalProperties:
+            type: integer
+        queueProjectCount:
+          type: integer
+      required:
+        - totalCandidates
+        - activeCandidates
+        - totalCapacityMw
+        - avgOverallScore
+        - totalScreenings
+        - candidatesByMarket
+        - candidatesByAssetType
+        - queueProjectCount
+
+    MarketBreakdown:
+      type: object
+      properties:
+        market:
+          type: string
+        assetType:
+          type: string
+        count:
+          type: integer
+        avgScore:
+          type: number
+        totalCapacityMw:
+          type: number
+      required: [market, assetType, count, avgScore, totalCapacityMw]
+
+    QueueSummary:
+      type: object
+      properties:
+        byFuelType:
+          type: array
+          items:
+            type: object
+            properties:
+              fuelType:
+                type: string
+              count:
+                type: integer
+              totalCapacityMw:
+                type: number
+            required: [fuelType, count, totalCapacityMw]
+        byStatus:
+          type: array
+          items:
+            type: object
+            properties:
+              status:
+                type: string
+              count:
+                type: integer
+            required: [status, count]
+        byMarket:
+          type: array
+          items:
+            type: object
+            properties:
+              market:
+                type: string
+              count:
+                type: integer
+              totalCapacityMw:
+                type: number
+            required: [market, count, totalCapacityMw]
+      required: [byFuelType, byStatus, byMarket]

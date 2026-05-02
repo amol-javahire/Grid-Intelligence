@@ -6,6 +6,7 @@
  * OpenAPI spec version: 0.1.0
  */
 
-export interface HealthStatus {
+export type QueueSummaryByStatusItem = {
   status: string;
-}
+  count: number;
+};

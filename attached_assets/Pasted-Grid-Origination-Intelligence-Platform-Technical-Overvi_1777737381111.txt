@@ -1,0 +1,89 @@
+Grid Origination Intelligence Platform — Technical Overview
+What It Is
+A full-stack power market siting and origination intelligence tool built for energy procurement professionals. It automates the data-heavy, analyst-intensive work of screening renewable energy and storage project candidates across ERCOT, CAISO, and PJM markets.
+
+Frontend Stack
+React 18 + Vite — SPA with client-side routing via React Router v6
+Tailwind CSS + shadcn/ui — design system built on CSS tokens (index.css → tailwind.config.js → components), dark/light mode ready
+TanStack Query (React Query v5) — all entity/API data fetching with caching, stale-time control, and manual refetch triggers
+Recharts — all charting (line, bar, radar, reference lines)
+React Leaflet — interactive geospatial map with custom markers, popups, and tile layers
+Framer Motion — page/component animations
+Base44 SDK (@/api/base44Client) — unified client for entities, backend functions, integrations, auth
+Backend & Data Layer (Base44 Platform)
+Entities (database schema):
+
+Entity	Purpose
+Candidate	Core project records — scores, location, pricing, risks, structure
+Screening	Saved screening sessions with filters and candidate ID lists
+ERCOTNodeStats	Hub & Load Zone monthly stats (DA, RT, volatility, neg price %)
+ERCOTNodalStats	~1,000 ERCOT resource nodes — monthly aggregated DA stats
+CAISONodeStats	CAISO NP15/SP15/ZP26 monthly DA/RT stats
+QueueProject	Interconnection queue records (ERCOT, CAISO, PJM)
+User	Built-in auth with role-based access
+Backend Functions (Deno Deploy, edge-executed):
+
+Function	What It Does
+fetchERCOTNodal	Authenticates with ERCOT ROPC OAuth → fetches one day of DA SPP for all ~1,000 resource nodes via np4-190-cd/dam_stlmnt_pnt_prices API → returns per-node daily aggregates (sum, sumSq, n, min, max, on/off-peak)
+saveERCOTNodalMonth	Receives a full month's accumulated node stats from the frontend → computes final monthly metrics (avg, std dev, neg price %, peak averages) → deletes old records → bulk-writes new records in batches of 20
+fetchERCOTHistorical	Downloads ERCOT annual RT zip files, unzips xlsx inside zip, parses shared strings + sheet XML, extracts hub/zone RT prices, patches ERCOTNodeStats records
+fetchCAISOHistorical	Fetches CAISO OASIS zipped CSVs month-by-month, parses hourly LMP, computes DA/RT stats for NP15/SP15/ZP26, writes to CAISONodeStats
+fetchEIAGenerators / fetchPowerPlants	EIA bulk generator data via API key, stored for map visualization
+testERCOTApi / probeGridStatus	Diagnostic/debug utilities
+ERCOT Nodal Data Ingestion Pipeline (The Hard Part)
+This was the most technically complex piece. The challenge: ERCOT's public API returns ~22,000 rows per day (one per settlement point per hour), and fetching a full month naively in one function call hits the 180-second execution timeout.
+
+Solution — Frontend-Orchestrated Day Loop:
+
+Frontend (NodalAnalysis page)
+  └── for each month in trailing 12:
+        └── for each day (1–30/31):
+              ├── call fetchERCOTNodal({ year, month, day })   ~4s per call
+              ├── accumulate node stats in memory (client-side)
+              └── await 10s (rate-limit buffer)
+        └── call saveERCOTNodalMonth({ year, month, accumulated })
+The frontend acts as the orchestrator — it holds the running accumulator object in React state across the loop, merging daily stats incrementally:
+
+s.sum += node.sum
+s.sumSq += node.sumSq   // needed for σ = sqrt(E[x²] - E[x]²)
+s.n += node.n
+if (node.min < s.min) s.min = node.min
+At month-end, it ships the full accumulated object to saveERCOTNodalMonth which computes final statistics and writes to the DB.
+
+Why this works within timeout constraints:
+
+Each fetchERCOTNodal call: ~4–5 seconds (well under 180s)
+saveERCOTNodalMonth: batched writes of 20 records with 600ms pauses → stays under rate limits
+Total time: ~7.5 min/month × 12 months = ~90 minutes total (runs in browser background)
+ERCOT Auth: ERCOT's public API uses ROPC OAuth flow (Resource Owner Password Credentials) against Azure B2C (ercotb2c.b2clogin.com). Credentials are stored as secrets (ERCOT_USERNAME, ERCOT_PASSWORD, ERCOT_SUBSCRIPTION_KEY). Each function call re-authenticates and gets a fresh id_token.
+
+Scoring Engine (Client-Side)
+Candidates are scored across 10 dimensions, each weighted by the selected investment objective:
+
+overall_score = Σ (dimension_score × objective_weight[dimension])
+Objectives like lowest_lcoe, risk_adjusted_value, load_hedge, decarbonization each re-weight the same underlying scores differently — no re-scoring needed, just re-weighting at render time in lib/scoring.js.
+
+Key Pages
+Page	Purpose
+Home / Screening	Entry point — select market, asset type, objective → navigate to Rankings
+Rankings	Filtered/sorted candidate table with weighted scores, CSV export
+Map Workspace	Leaflet map with generator layers, candidate pins, filter controls
+ERCOT Historical	Hub & zone multi-year DA/RT analysis — YoY bar charts, monthly trends, curtailment proxy, volatility
+CAISO Historical	Same as above for NP15/SP15/ZP26
+Nodal Analysis	Hub/Zone/Resource Node spread calculator — pulls from all three stat tables
+Interconnection Queue	ERCOT/CAISO/PJM queue projects with status filters and fuel-type breakdown
+Q&A Copilot	LLM chat grounded in the candidate database — answers market/project questions
+Export	CSV export + LLM-generated executive memos, site cards, slide summaries
+Data Flow Summary
+ERCOT API ──────► fetchERCOTNodal (Deno) ──► frontend accumulator ──► saveERCOTNodalMonth ──► ERCOTNodalStats DB
+ERCOT zip files ► fetchERCOTHistorical ────────────────────────────────────────────────────► ERCOTNodeStats DB
+CAISO OASIS ────► fetchCAISOHistorical ─────────────────────────────────────────────────────► CAISONodeStats DB
+EIA API ─────────► fetchEIAGenerators ──────────────────────────────────────────────────────► Map layer data
+                                                                                                      │
+                                                              React UI ◄─── TanStack Query ◄──────────┘
+Notable Design Decisions
+No separate backend server — Base44's edge functions replace a traditional API layer entirely
+Frontend as pipeline orchestrator — avoids timeout limits by keeping long loops in the browser, which has no execution cap
+Variance via sum-of-squares — σ = sqrt(sumSq/n - (sum/n)²) computed incrementally without storing raw hourly prices
+Token-based design system — all colors defined as CSS HSL variables in index.css, mapped to Tailwind tokens — trivial to retheme
+Objective-based re-weighting — scoring weights are a lookup table, not re-computed data, so switching objectives is instant
