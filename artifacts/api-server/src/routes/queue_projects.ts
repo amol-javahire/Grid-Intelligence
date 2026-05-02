@@ -12,10 +12,11 @@ router.get("/queue-projects", async (req, res) => {
       res.status(400).json({ error: "Invalid query", message: parsed.error.message });
       return;
     }
-    const { market, status, fuelType, limit = 200 } = parsed.data;
+    const { market, status, fuelType, limit = 500 } = parsed.data;
+    const statusLower = status?.toLowerCase();
     const conditions = [];
     if (market) conditions.push(eq(queueProjectsTable.market, market));
-    if (status) conditions.push(eq(queueProjectsTable.status, status));
+    if (statusLower) conditions.push(eq(queueProjectsTable.status, statusLower));
     if (fuelType) conditions.push(eq(queueProjectsTable.fuelType, fuelType));
 
     const rows = await db.select().from(queueProjectsTable)
