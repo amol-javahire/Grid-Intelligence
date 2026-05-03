@@ -62,7 +62,7 @@ export default function MapWorkspace() {
   const [fuelFilter, setFuelFilter] = useState("all");
   const [marketFilter, setMarketFilter] = useState("all");
 
-  const { data: candidates, isLoading: isLoadingCandidates } = useListCandidates({ limit: 500 });
+  const { data: candidates, isLoading: isLoadingCandidates } = useListCandidates({ limit: 5000 });
   const { data: queueProjects, isLoading: isLoadingQueue } = useListQueueProjects();
 
   const filteredCandidates = useMemo(() => {
