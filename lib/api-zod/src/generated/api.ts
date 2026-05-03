@@ -17,7 +17,7 @@ export const HealthCheckResponse = zod.object({
 /**
  * @summary List all candidates
  */
-export const listCandidatesQueryLimitDefault = 100;
+export const listCandidatesQueryLimitDefault = 5000;
 export const listCandidatesQueryOffsetDefault = 0;
 
 export const ListCandidatesQueryParams = zod.object({

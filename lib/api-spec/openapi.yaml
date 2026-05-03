@@ -74,7 +74,7 @@ paths:
           in: query
           schema:
             type: integer
-            default: 100
+            default: 5000
         - name: offset
           in: query
           schema:
