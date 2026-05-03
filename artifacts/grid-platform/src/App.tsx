@@ -16,6 +16,7 @@ import InterconnectionQueue from "@/pages/queue";
 import QACopilot from "@/pages/qa";
 import ExportCenter from "@/pages/export";
 import SavedScreenings from "@/pages/screenings";
+import PlatformGuide from "@/pages/guide";
 import NotFound from "@/pages/not-found";
 
 const queryClient = new QueryClient();
@@ -36,6 +37,7 @@ function Router() {
         <Route path="/qa" component={QACopilot} />
         <Route path="/export" component={ExportCenter} />
         <Route path="/screenings" component={SavedScreenings} />
+        <Route path="/guide" component={PlatformGuide} />
         <Route component={NotFound} />
       </Switch>
     </Layout>

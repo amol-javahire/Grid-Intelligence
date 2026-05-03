@@ -14,7 +14,8 @@ import {
   ChevronRight,
   Menu,
   TerminalSquare,
-  GitBranch
+  GitBranch,
+  BookOpen
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -33,6 +34,7 @@ const sidebarNavItems = [
   { title: "Q&A Copilot", href: "/qa", icon: MessageSquare },
   { title: "Export Center", href: "/export", icon: Download },
   { title: "Saved Screenings", href: "/screenings", icon: Bookmark },
+  { title: "Platform Guide", href: "/guide", icon: BookOpen },
 ];
 
 interface LayoutProps {
