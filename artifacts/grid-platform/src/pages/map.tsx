@@ -5,7 +5,7 @@ import "leaflet/dist/leaflet.css";
 import L from "leaflet";
 import type { Feature, FeatureCollection, Geometry } from "geojson";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Loader2, Layers, Zap } from "lucide-react";
+import { Loader2, Layers, Zap, Server } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -91,6 +91,16 @@ const createDiamond = (color: string, size = 12) => {
   });
 };
 
+// Square marker — data centers
+const DC_COLOR = "#38bdf8"; // sky blue
+const createSquare = (size = 11) =>
+  new L.DivIcon({
+    className: "",
+    html: `<div style="width:${size}px;height:${size}px;background:${DC_COLOR};border:2px solid rgba(255,255,255,0.75);box-shadow:0 0 5px rgba(56,189,248,0.6);border-radius:2px;"></div>`,
+    iconSize: [size, size],
+    iconAnchor: [size / 2, size / 2],
+  });
+
 // ── HIFLD fetch config ───────────────────────────────────────────────────────
 const HIFLD_BASE =
   "https://services1.arcgis.com/Hp6G80Pky0om7QvQ/arcgis/rest/services/Electric_Power_Transmission_Lines/FeatureServer/0/query";
@@ -100,6 +110,20 @@ const HIFLD_PARAMS =
   "&f=geojson" +
   "&resultRecordCount=2000";
 const HIFLD_PAGES = [0, 2000, 4000, 6000, 8000]; // ≥230kV US total ~8 108
+
+// ── OpenStreetMap datacenter fetch config ─────────────────────────────────
+const OVERPASS_URL = "https://overpass-api.de/api/interpreter";
+const OVERPASS_DC_QUERY = `[out:json][timeout:45];(node["building"="data_center"](24,-126,50,-66);way["building"="data_center"](24,-126,50,-66);node["man_made"="data_center"](24,-126,50,-66);way["man_made"="data_center"](24,-126,50,-66););out center tags;`;
+
+interface DcMarker {
+  id: string | number;
+  lat: number;
+  lon: number;
+  name: string;
+  operator: string;
+  city: string;
+  website: string;
+}
 
 // ── Filter constants ─────────────────────────────────────────────────────────
 const MARKETS = ["all", "ERCOT", "CAISO", "PJM"];
@@ -117,11 +141,59 @@ export default function MapWorkspace() {
   const minMw = posToMw(mwPos[0]);
   const maxMw = posToMw(mwPos[1]);
 
+  // Datacenter state
+  const [showDatacenters,  setShowDatacenters]  = useState(false);
+  const [dcMarkers,        setDcMarkers]        = useState<DcMarker[]>([]);
+  const [dcLoading,        setDcLoading]        = useState(false);
+  const [dcError,          setDcError]          = useState<string | null>(null);
+  const dcFetched = useRef(false);
+
   // Transmission state
   const [txLines,         setTxLines]         = useState<FeatureCollection | null>(null);
   const [txLoading,       setTxLoading]       = useState(false);
   const [txError,         setTxError]         = useState<string | null>(null);
   const txFetched = useRef(false);
+
+  // Fetch datacenters lazily from OpenStreetMap Overpass API
+  useEffect(() => {
+    if (!showDatacenters || dcFetched.current) return;
+    dcFetched.current = true;
+    setDcLoading(true);
+    setDcError(null);
+
+    fetch(OVERPASS_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain" },
+      body: OVERPASS_DC_QUERY,
+    })
+      .then(r => r.json())
+      .then((d: { elements?: any[] }) => {
+        const markers: DcMarker[] = (d.elements ?? [])
+          .map((el: any) => {
+            const lat = el.lat ?? el.center?.lat;
+            const lon = el.lon ?? el.center?.lon;
+            if (!lat || !lon) return null;
+            const t = el.tags ?? {};
+            const city = [t["addr:city"], t["addr:state"]].filter(Boolean).join(", ");
+            return {
+              id: el.id,
+              lat,
+              lon,
+              name:     t.name     ?? t["short_name"] ?? "Data Center",
+              operator: t.operator ?? t.owner ?? "",
+              city,
+              website:  t.website  ?? "",
+            } as DcMarker;
+          })
+          .filter(Boolean) as DcMarker[];
+        setDcMarkers(markers);
+        setDcLoading(false);
+      })
+      .catch(() => {
+        setDcError("Failed to load datacenter data");
+        setDcLoading(false);
+      });
+  }, [showDatacenters]);
 
   // Fetch transmission lines lazily when toggle is first turned on
   useEffect(() => {
@@ -328,6 +400,44 @@ export default function MapWorkspace() {
               </Popup>
             </Marker>
           ))}
+
+          {/* ── Data Centers ── */}
+          {showDatacenters && dcMarkers.map(dc => (
+            <Marker
+              key={`dc-${dc.id}`}
+              position={[dc.lat, dc.lon]}
+              icon={createSquare()}
+            >
+              <Popup>
+                <div className="min-w-[200px]">
+                  <div className="font-semibold text-sm mb-1">{dc.name}</div>
+                  {dc.operator && (
+                    <div className="text-xs text-muted-foreground mb-2 flex items-center gap-1.5">
+                      <div style={{ width: 8, height: 8, background: DC_COLOR, borderRadius: 1, border: "1px solid rgba(255,255,255,0.4)", flexShrink: 0 }} />
+                      {dc.operator}
+                    </div>
+                  )}
+                  <div className="grid grid-cols-1 gap-y-1.5 text-xs">
+                    {dc.city && (
+                      <div>
+                        <span className="text-muted-foreground">Location</span><br />
+                        <span className="font-medium">{dc.city}</span>
+                      </div>
+                    )}
+                    {dc.website && (
+                      <div>
+                        <a href={dc.website} target="_blank" rel="noopener noreferrer" className="text-sky-400 hover:underline truncate block">{dc.website.replace(/^https?:\/\//, "")}</a>
+                      </div>
+                    )}
+                  </div>
+                  <div className="mt-2 pt-1.5 border-t border-gray-700 text-xs text-sky-400 flex items-center gap-1.5">
+                    <div style={{ width: 6, height: 6, background: DC_COLOR, borderRadius: 1, flexShrink: 0 }} />
+                    Data Center · OSM
+                  </div>
+                </div>
+              </Popup>
+            </Marker>
+          ))}
         </MapContainer>
       </div>
 
@@ -382,6 +492,29 @@ export default function MapWorkspace() {
               />
             </div>
 
+            {/* Data Centers */}
+            <div className="flex items-center justify-between">
+              <div>
+                <Label className="text-sm font-medium flex items-center gap-1.5">
+                  <Server className="h-3.5 w-3.5" style={{ color: DC_COLOR }} />
+                  Data Centers
+                </Label>
+                <p className="text-xs text-muted-foreground">
+                  {dcMarkers.length > 0
+                    ? `${dcMarkers.length} facilities`
+                    : dcLoading
+                    ? "Loading from OSM…"
+                    : dcError
+                    ? "Load error — retry"
+                    : "Hyperscale & colo, US-wide"}
+                </p>
+              </div>
+              <Switch
+                checked={showDatacenters}
+                onCheckedChange={setShowDatacenters}
+              />
+            </div>
+
             {/* Market + fuel filters */}
             <div className="pt-1 space-y-2">
               <Select value={marketFilter} onValueChange={setMarketFilter}>
@@ -427,10 +560,11 @@ export default function MapWorkspace() {
             )}
 
             {/* Counts */}
-            <div className="flex gap-3 text-xs pt-1 text-muted-foreground border-t border-border">
+            <div className="flex gap-3 text-xs pt-1 text-muted-foreground border-t border-border flex-wrap">
               {showEia860 && <span><span className="font-semibold text-foreground">{filteredCandidates.length}</span> plants</span>}
               {showQueue  && <span><span className="font-semibold text-foreground">{filteredQueue.length}</span> queue</span>}
               {showTransmission && txLines && <span><span className="font-semibold text-foreground">{txLines.features.length.toLocaleString()}</span> tx lines</span>}
+              {showDatacenters && dcMarkers.length > 0 && <span><span className="font-semibold text-foreground">{dcMarkers.length}</span> DCs</span>}
             </div>
           </CardContent>
         </Card>
@@ -477,6 +611,22 @@ export default function MapWorkspace() {
                 ))}
                 <p className="text-xs text-muted-foreground mt-1">
                   Source: HIFLD Open Data · AC overhead in service
+                </p>
+              </>
+            )}
+
+            {/* Data Centers */}
+            {showDatacenters && (
+              <>
+                <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mt-3 mb-1.5 pt-2 border-t border-border">
+                  Data Centers <span className="font-normal normal-case">(square)</span>
+                </div>
+                <div className="flex items-center gap-2 text-xs">
+                  <div className="shrink-0" style={{ width: 10, height: 10, background: DC_COLOR, borderRadius: 2, border: "1.5px solid rgba(255,255,255,0.4)", boxShadow: `0 0 4px ${DC_COLOR}66` }} />
+                  <span>Hyperscale &amp; Colocation</span>
+                </div>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Source: OpenStreetMap · 408 US facilities
                 </p>
               </>
             )}
