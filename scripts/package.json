@@ -11,11 +11,13 @@
     "seed-caiso-nodes": "tsx ./src/seed-caiso-nodes.ts",
     "seed-pjm-nodes": "tsx ./src/seed-pjm-nodes.ts",
     "seed-queue": "tsx ./src/seed-queue.ts",
+    "seed-queue-real": "tsx ./src/seed-queue-real.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
     "@workspace/db": "workspace:*",
-    "drizzle-orm": "catalog:"
+    "drizzle-orm": "catalog:",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@types/node": "catalog:",
