@@ -8,6 +8,14 @@ import { Loader2, Layers } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Slider } from "@/components/ui/slider";
+
+// Log-scale helpers — range 1 MW to 3000 MW
+const LOG_MIN = Math.log10(1);
+const LOG_MAX = Math.log10(3000);
+const posToMw = (pos: number) => Math.round(Math.pow(10, LOG_MIN + (pos / 100) * (LOG_MAX - LOG_MIN)));
+const mwToPos = (mw: number) => Math.round(((Math.log10(Math.max(1, mw)) - LOG_MIN) / (LOG_MAX - LOG_MIN)) * 100);
+const fmtMw = (mw: number) => mw >= 1000 ? `${(mw / 1000).toFixed(1)} GW` : `${mw} MW`;
 
 // Fix leaflet default icon
 delete (L.Icon.Default.prototype as any)._getIconUrl;
@@ -61,6 +69,10 @@ export default function MapWorkspace() {
   const [showQueue, setShowQueue] = useState(true);
   const [fuelFilter, setFuelFilter] = useState("all");
   const [marketFilter, setMarketFilter] = useState("all");
+  // Log-scale slider positions [0..100] → actual MW via posToMw()
+  const [mwPos, setMwPos] = useState<[number, number]>([0, 100]);
+  const minMw = posToMw(mwPos[0]);
+  const maxMw = posToMw(mwPos[1]);
 
   const { data: candidates, isLoading: isLoadingCandidates } = useListCandidates({ limit: 5000 });
   const { data: queueProjects, isLoading: isLoadingQueue } = useListQueueProjects();
@@ -71,9 +83,10 @@ export default function MapWorkspace() {
       if (!c.latitude || !c.longitude) return false;
       if (fuelFilter !== "all" && c.assetType !== fuelFilter) return false;
       if (marketFilter !== "all" && c.market !== marketFilter) return false;
+      if (c.capacityMw < minMw || c.capacityMw > maxMw) return false;
       return true;
     });
-  }, [candidates, fuelFilter, marketFilter]);
+  }, [candidates, fuelFilter, marketFilter, minMw, maxMw]);
 
   const filteredQueue = useMemo(() => {
     if (!queueProjects) return [];
@@ -223,6 +236,34 @@ export default function MapWorkspace() {
                 </Select>
               )}
             </div>
+
+            {/* MW range slider */}
+            {showEia860 && (
+              <div className="pt-1 space-y-2 border-t border-border">
+                <div className="flex items-center justify-between">
+                  <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Capacity Range</Label>
+                  <button
+                    className="text-xs text-primary hover:underline"
+                    onClick={() => setMwPos([0, 100])}
+                  >
+                    Reset
+                  </button>
+                </div>
+                <Slider
+                  min={0}
+                  max={100}
+                  step={1}
+                  value={mwPos}
+                  onValueChange={(v) => setMwPos(v as [number, number])}
+                  className="my-1"
+                />
+                <div className="flex justify-between text-xs font-medium">
+                  <span className="text-primary">{fmtMw(minMw)}</span>
+                  <span className="text-muted-foreground">—</span>
+                  <span className="text-primary">{fmtMw(maxMw)}</span>
+                </div>
+              </div>
+            )}
 
             {/* Counts */}
             <div className="flex gap-3 text-xs pt-1 text-muted-foreground border-t border-border">
