@@ -30,6 +30,7 @@ import type {
   ListCandidatesParams,
   ListErcotNodalStatsParams,
   ListErcotNodeStatsParams,
+  ListErcotSettlementPointsParams,
   ListPjmNodeStatsParams,
   ListQueueProjectsParams,
   MarketBreakdown,
@@ -983,6 +984,109 @@ export function useListErcotNodeStats<
   },
 ): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
   const queryOptions = getListErcotNodeStatsQueryOptions(params, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary List distinct ERCOT settlement point names (resource nodes only)
+ */
+export const getListErcotSettlementPointsUrl = (
+  params?: ListErcotSettlementPointsParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/ercot-settlement-points?${stringifiedParams}`
+    : `/api/ercot-settlement-points`;
+};
+
+export const listErcotSettlementPoints = async (
+  params?: ListErcotSettlementPointsParams,
+  options?: RequestInit,
+): Promise<string[]> => {
+  return customFetch<string[]>(getListErcotSettlementPointsUrl(params), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getListErcotSettlementPointsQueryKey = (
+  params?: ListErcotSettlementPointsParams,
+) => {
+  return [`/api/ercot-settlement-points`, ...(params ? [params] : [])] as const;
+};
+
+export const getListErcotSettlementPointsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listErcotSettlementPoints>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: ListErcotSettlementPointsParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listErcotSettlementPoints>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getListErcotSettlementPointsQueryKey(params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listErcotSettlementPoints>>
+  > = ({ signal }) =>
+    listErcotSettlementPoints(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listErcotSettlementPoints>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type ListErcotSettlementPointsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listErcotSettlementPoints>>
+>;
+export type ListErcotSettlementPointsQueryError = ErrorType<unknown>;
+
+/**
+ * @summary List distinct ERCOT settlement point names (resource nodes only)
+ */
+
+export function useListErcotSettlementPoints<
+  TData = Awaited<ReturnType<typeof listErcotSettlementPoints>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: ListErcotSettlementPointsParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listErcotSettlementPoints>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getListErcotSettlementPointsQueryOptions(
+    params,
+    options,
+  );
 
   const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
     queryKey: QueryKey;

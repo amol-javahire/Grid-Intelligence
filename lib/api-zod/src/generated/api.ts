@@ -321,6 +321,18 @@ export const ListErcotNodeStatsResponse = zod.array(
 );
 
 /**
+ * @summary List distinct ERCOT settlement point names (resource nodes only)
+ */
+export const ListErcotSettlementPointsQueryParams = zod.object({
+  year: zod.coerce.number().optional(),
+});
+
+export const ListErcotSettlementPointsResponseItem = zod.string();
+export const ListErcotSettlementPointsResponse = zod.array(
+  ListErcotSettlementPointsResponseItem,
+);
+
+/**
  * @summary List ERCOT resource nodal stats
  */
 export const ListErcotNodalStatsQueryParams = zod.object({

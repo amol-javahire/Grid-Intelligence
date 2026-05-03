@@ -7,10 +7,12 @@
     "hello": "tsx ./src/hello.ts",
     "seed-pjm": "tsx ./src/seed-pjm.ts",
     "seed-ercot-rt": "tsx ./src/seed-ercot-rt.ts",
+    "seed-ercot-nodes": "tsx ./src/seed-ercot-nodes.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@workspace/db": "workspace:*"
+    "@workspace/db": "workspace:*",
+    "drizzle-orm": "catalog:"
   },
   "devDependencies": {
     "@types/node": "catalog:",

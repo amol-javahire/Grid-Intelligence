@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { db, ercotNodeStatsTable, ercotNodalStatsTable, caisoNodeStatsTable, pjmNodeStatsTable } from "@workspace/db";
-import { eq, and } from "drizzle-orm";
+import { eq, and, sql } from "drizzle-orm";
 import {
   ListErcotNodeStatsQueryParams,
   ListErcotNodalStatsQueryParams,
@@ -9,6 +9,22 @@ import {
 } from "@workspace/api-zod";
 
 const router = Router();
+
+// ERCOT Settlement Points — distinct resource node names (excludes HB_* and LZ_*)
+router.get("/ercot-settlement-points", async (req, res) => {
+  try {
+    const rows = await db.execute<{ settlement_point: string }>(
+      sql`SELECT DISTINCT settlement_point
+          FROM ercot_nodal_stats
+          WHERE LEFT(settlement_point, 3) NOT IN ('HB_', 'LZ_')
+          ORDER BY settlement_point`
+    );
+    res.json(rows.rows.map(r => r.settlement_point));
+  } catch (err) {
+    req.log.error({ err }, "listErcotSettlementPoints error");
+    res.status(500).json({ error: "internal_error", message: "Failed to list settlement points" });
+  }
+});
 
 // ERCOT Node Stats
 router.get("/ercot-node-stats", async (req, res) => {

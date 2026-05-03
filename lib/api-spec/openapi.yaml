@@ -260,6 +260,26 @@ paths:
                 items:
                   $ref: "#/components/schemas/ErcotNodeStats"
 
+  /ercot-settlement-points:
+    get:
+      operationId: listErcotSettlementPoints
+      tags: [ercot-nodal-stats]
+      summary: List distinct ERCOT settlement point names (resource nodes only)
+      parameters:
+        - name: year
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: List of settlement point names
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: string
+
   /ercot-nodal-stats:
     get:
       operationId: listErcotNodalStats

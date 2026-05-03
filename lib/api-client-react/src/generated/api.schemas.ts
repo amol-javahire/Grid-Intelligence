@@ -364,6 +364,10 @@ export type ListErcotNodeStatsParams = {
   month?: number;
 };
 
+export type ListErcotSettlementPointsParams = {
+  year?: number;
+};
+
 export type ListErcotNodalStatsParams = {
   settlementPoint?: string;
   year?: number;

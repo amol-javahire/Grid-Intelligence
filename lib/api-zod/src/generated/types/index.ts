@@ -34,6 +34,7 @@ export * from "./listCandidatesParams";
 export * from "./listCandidatesStatus";
 export * from "./listErcotNodalStatsParams";
 export * from "./listErcotNodeStatsParams";
+export * from "./listErcotSettlementPointsParams";
 export * from "./listPjmNodeStatsNode";
 export * from "./listPjmNodeStatsParams";
 export * from "./listQueueProjectsMarket";

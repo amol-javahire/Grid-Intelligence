@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import {
   useListErcotNodeStats,
   useListErcotNodalStats,
@@ -10,20 +10,13 @@ import {
   LineChart, Line, XAxis, YAxis, CartesianGrid,
   Tooltip as RechartsTooltip, Legend, ResponsiveContainer, ReferenceLine,
 } from "recharts";
-import { Loader2 } from "lucide-react";
+import { Loader2, Search } from "lucide-react";
 
 const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 const YEARS = [2022, 2023, 2024, 2025, 2026];
 
 const ERCOT_ZONES = ["LZ_HOUSTON","LZ_NORTH","LZ_SOUTH","LZ_WEST","LZ_AEN","LZ_CPS","LZ_LCRA","LZ_RAYBN"];
 const ERCOT_HUBS  = ["HB_HOUSTON","HB_NORTH","HB_SOUTH","HB_WEST","HB_BUSAVG","HB_HUBAVG","HB_PAN"];
-const ERCOT_NODES = [
-  "BES_DALLAS","BES_HOUSTON_N","BES_HOUSTON_S",
-  "HB_HOUSTON","HB_NORTH","HB_WEST",
-  "LZ_HOUSTON","LZ_NORTH","LZ_SOUTH","LZ_WEST",
-  "SUN_MIDLAND","SUN_PERMIAN","SUN_RIO_GRANDE",
-  "WTG_ABILENE","WTG_AMARILLO","WTG_LUBBOCK","WTG_ODESSA",
-];
 const CAISO_ZONES = ["NP15","SP15","ZP26"];
 const CAISO_LABELS: Record<string,string> = { NP15:"NP15 (North)", SP15:"SP15 (South)", ZP26:"ZP26 (Central)" };
 
@@ -206,11 +199,73 @@ function HubCompare({ year, priceType }: { year:number; priceType:PriceType }) {
   );
 }
 
+// ── Searchable node picker ────────────────────────────────────────────────────
+function NodePicker({ value, onChange, nodes, loading, placeholder = "Select node…" }: {
+  value: string; onChange: (v: string) => void;
+  nodes: string[]; loading: boolean; placeholder?: string;
+}) {
+  const [search, setSearch] = useState("");
+  const filtered = useMemo(() => {
+    if (!search.trim()) return nodes;
+    const q = search.toLowerCase();
+    return nodes.filter(n => n.toLowerCase().includes(q));
+  }, [nodes, search]);
+
+  return (
+    <Select value={value} onValueChange={v => { onChange(v); setSearch(""); }}>
+      <SelectTrigger className="w-[190px] h-7 text-xs font-mono">
+        {loading ? <Loader2 className="h-3 w-3 animate-spin" /> : <SelectValue placeholder={placeholder} />}
+      </SelectTrigger>
+      <SelectContent className="max-h-72">
+        <div className="flex items-center gap-1 px-2 py-1.5 border-b border-border sticky top-0 bg-popover z-10">
+          <Search className="h-3 w-3 text-muted-foreground shrink-0" />
+          <input
+            className="w-full bg-transparent text-xs outline-none placeholder:text-muted-foreground"
+            placeholder="Search nodes…"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            onKeyDown={e => e.stopPropagation()}
+          />
+        </div>
+        {filtered.length === 0 ? (
+          <div className="text-xs text-muted-foreground px-3 py-2">No matches</div>
+        ) : (
+          filtered.slice(0, 200).map(n => (
+            <SelectItem key={n} value={n} className="text-xs font-mono">{n}</SelectItem>
+          ))
+        )}
+        {filtered.length > 200 && (
+          <div className="text-xs text-muted-foreground px-3 py-1.5">
+            {filtered.length - 200} more — refine search
+          </div>
+        )}
+      </SelectContent>
+    </Select>
+  );
+}
+
 // ── ERCOT Node Comparison ─────────────────────────────────────────────────────
 function NodeCompare({ year, priceType }: { year:number; priceType:PriceType }) {
-  const [nodeA, setNodeA] = useState("SUN_PERMIAN");
-  const [nodeB, setNodeB] = useState("WTG_AMARILLO");
+  const [nodeA, setNodeA] = useState("SUN_PERMIAN_1");
+  const [nodeB, setNodeB] = useState("WTG_AMARILLO_1");
   const isDaRt = priceType === "DA-RT";
+
+  // Fetch dynamic node list from API (only resource nodes, no zones/hubs)
+  const [nodeList, setNodeList] = useState<string[]>([]);
+  const [nodeListLoading, setNodeListLoading] = useState(false);
+  const nodeFetched = useRef(false);
+  useEffect(() => {
+    if (nodeFetched.current) return;
+    nodeFetched.current = true;
+    setNodeListLoading(true);
+    fetch("/api/ercot-settlement-points")
+      .then(r => r.json())
+      .then((data: unknown) => {
+        if (Array.isArray(data)) setNodeList(data as string[]);
+        setNodeListLoading(false);
+      })
+      .catch(() => setNodeListLoading(false));
+  }, []);
 
   const { data: aData=[], isLoading: la } = useListErcotNodalStats({ settlementPoint: nodeA, year });
   const { data: bData=[], isLoading: lb } = useListErcotNodalStats({ settlementPoint: isDaRt ? nodeA : nodeB, year });
@@ -231,18 +286,17 @@ function NodeCompare({ year, priceType }: { year:number; priceType:PriceType }) 
   return (
     <Card>
       <CardHeader className="pb-2">
-        <div className="flex items-center justify-between gap-2 flex-wrap">
-          <CardTitle className="text-sm font-semibold">Node Comparison</CardTitle>
-          <div className="flex gap-2">
-            <Select value={nodeA} onValueChange={setNodeA}>
-              <SelectTrigger className="w-[150px] h-7 text-xs"><SelectValue /></SelectTrigger>
-              <SelectContent>{ERCOT_NODES.map(n=><SelectItem key={n} value={n} className="text-xs">{n}</SelectItem>)}</SelectContent>
-            </Select>
+        <div className="flex flex-col gap-2">
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-sm font-semibold">Node Comparison</CardTitle>
+            {nodeList.length > 0 && (
+              <span className="text-xs text-muted-foreground">{nodeList.length.toLocaleString()} nodes</span>
+            )}
+          </div>
+          <div className="flex gap-2 flex-wrap">
+            <NodePicker value={nodeA} onChange={setNodeA} nodes={nodeList} loading={nodeListLoading} />
             {!isDaRt && (
-              <Select value={nodeB} onValueChange={setNodeB}>
-                <SelectTrigger className="w-[150px] h-7 text-xs"><SelectValue /></SelectTrigger>
-                <SelectContent>{ERCOT_NODES.map(n=><SelectItem key={n} value={n} className="text-xs">{n}</SelectItem>)}</SelectContent>
-              </Select>
+              <NodePicker value={nodeB} onChange={setNodeB} nodes={nodeList} loading={nodeListLoading} />
             )}
           </div>
         </div>
