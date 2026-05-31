@@ -307,8 +307,7 @@ export default function Rankings() {
           <span>
             <span className="font-medium text-foreground">Scoring methodology: </span>
             Curtailment (25%) · Congestion (20%) · Basis Risk (20%) · Price (15%) · Capacity (12%) · Asset Age (8%).{" "}
-            ERCOT curtailment: CDR 12301 neg-price % by zone + asset-type. ERCOT congestion: hub DA basis vs BUSAVG (HB_PAN $20.38 → HB_HOUSTON $35.42, real CDR 13060).{" "}
-            CAISO curtailment: OASIS neg-price % (NP15 3.8%, SP15 13.2%, ZP26 14.8%). CAISO congestion: zone DA basis + volatility (real OASIS). All 28 months, 2024–2026. PJM modeled.
+            ERCOT: each plant assigned to its nearest interconnection-queue node (Haversine, ≤200 km, 480 queue projects) → 11 distinct nodes with individual real DA prices ($20.38 HB_PAN → $36.62 LZ_LCRA). CAISO: queue-confirmed NP15/SP15 per plant (2,433 projects, 100% coverage). All real CDR + OASIS data, 28 months. PJM modeled.
           </span>
         </div>
 
