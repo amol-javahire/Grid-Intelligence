@@ -18,6 +18,8 @@
     "seed-ercot-api": "tsx ./src/seed-ercot-api.ts",
     "score-ercot-curtailment": "tsx ./src/score-ercot-curtailment.ts",
     "score-caiso-curtailment": "tsx ./src/score-caiso-curtailment.ts",
+    "score-ercot-congestion": "tsx ./src/score-ercot-congestion.ts",
+    "score-caiso-congestion": "tsx ./src/score-caiso-congestion.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {

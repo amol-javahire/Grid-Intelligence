@@ -41,7 +41,7 @@ const DIMS = [
     label: "Congestion",
     shortLabel: "Cong",
     color: "#ef4444",
-    tooltip: "Based on DA–RT spread at the nearest proxy node. Wide spreads = constrained transmission = lower score.",
+    tooltip: "ERCOT: hub DA price basis vs HB_BUSAVG ($29.16/MWh) — Panhandle (HB_PAN $20.38, -30%) scores lowest; LZ_HOUSTON (HB_HOUSTON $35.42, +21.5%) scores highest. CAISO: zone DA basis vs reference ($33.19) + volatility penalty — NP15 avg 69, SP15/ZP26 avg 29-34. Real CDR + OASIS data.",
   },
   {
     key: "locationScore" as const,
@@ -307,8 +307,8 @@ export default function Rankings() {
           <span>
             <span className="font-medium text-foreground">Scoring methodology: </span>
             Curtailment (25%) · Congestion (20%) · Basis Risk (20%) · Price (15%) · Capacity (12%) · Asset Age (8%).{" "}
-            ERCOT: CDR 12301 neg-price % (6.42% fleet avg) + zone by lat/lon (LZ_WEST/NORTH/SOUTH/HOUSTON) + asset-type penalties. CAISO: real OASIS neg-price % by zone (NP15: 3.8%, SP15: 13.2%, ZP26: 14.8%) + asset-type multipliers — 28 months of real data.
-            PJM uses hub/zone by state (modeled). All ERCOT and CAISO curtailment scores are derived from real public market data.
+            ERCOT curtailment: CDR 12301 neg-price % by zone + asset-type. ERCOT congestion: hub DA basis vs BUSAVG (HB_PAN $20.38 → HB_HOUSTON $35.42, real CDR 13060).{" "}
+            CAISO curtailment: OASIS neg-price % (NP15 3.8%, SP15 13.2%, ZP26 14.8%). CAISO congestion: zone DA basis + volatility (real OASIS). All 28 months, 2024–2026. PJM modeled.
           </span>
         </div>
 
