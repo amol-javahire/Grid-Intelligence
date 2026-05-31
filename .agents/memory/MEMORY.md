@@ -1,1 +1,2 @@
 - [ERCOT curtailment scoring](ercot-curtailment-scoring.md) — zone+asset-type scoring wired to real CDR data; run score-ercot-curtailment script to refresh after new node data.
+- [CAISO curtailment scoring](caiso-curtailment-scoring.md) — zone+asset-type scoring from real OASIS data; ZP26/SP15 solar score ~68-73, NP15 solar ~92; run score-caiso-curtailment to refresh.

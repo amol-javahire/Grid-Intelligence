@@ -93,7 +93,13 @@ const PROXY_NODE_LABEL: Record<string, Record<string, string>> = {
     default: "ERCOT load zone by lat/lon (CDR 12301 real data)",
   },
   CAISO: {
-    default: "NP15 / ZP26 / SP15 by latitude",
+    solar: "CAISO zone by lat/lon — solar curtailment highest in ZP26/SP15 (13-15% neg-price hours)",
+    wind: "CAISO zone by lat/lon — Tehachapi/Altamont moderate curtailment",
+    storage: "CAISO zone by lat/lon — storage benefits from duck-curve price spreads",
+    natural_gas: "CAISO zone by lat/lon — dispatchable, minimal curtailment exposure",
+    hydro: "CAISO zone by lat/lon — dispatchable, low curtailment risk",
+    geothermal: "CAISO zone by lat/lon — baseload, near-zero curtailment risk",
+    default: "CAISO zone by lat/lon (real OASIS neg-price %, 28 months)",
   },
   PJM: {
     default: "Zone by state (NI/AEP-Dayton/DOM/BGE/PSEG/PPL/Western Hub)",
@@ -301,8 +307,8 @@ export default function Rankings() {
           <span>
             <span className="font-medium text-foreground">Scoring methodology: </span>
             Curtailment (25%) · Congestion (20%) · Basis Risk (20%) · Price (15%) · Capacity (12%) · Asset Age (8%).{" "}
-            ERCOT curtailment: real CDR 12301 neg-price % (6.42% fleet avg, Apr–May 2026) + zone mapping by lat/lon (LZ_WEST/NORTH/SOUTH/HOUSTON) + asset-type penalties. CAISO uses NP15/SP15/ZP26 by latitude.
-            PJM uses hub/zone by state. Data: ERCOT hub/zone (2024-2026) and CAISO DA (2024-2026) are real; PJM is modeled.
+            ERCOT: CDR 12301 neg-price % (6.42% fleet avg) + zone by lat/lon (LZ_WEST/NORTH/SOUTH/HOUSTON) + asset-type penalties. CAISO: real OASIS neg-price % by zone (NP15: 3.8%, SP15: 13.2%, ZP26: 14.8%) + asset-type multipliers — 28 months of real data.
+            PJM uses hub/zone by state (modeled). All ERCOT and CAISO curtailment scores are derived from real public market data.
           </span>
         </div>
 

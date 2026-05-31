@@ -17,6 +17,7 @@
     "seed-ercot-nodes-cdr": "tsx ./src/seed-ercot-nodes-cdr.ts",
     "seed-ercot-api": "tsx ./src/seed-ercot-api.ts",
     "score-ercot-curtailment": "tsx ./src/score-ercot-curtailment.ts",
+    "score-caiso-curtailment": "tsx ./src/score-caiso-curtailment.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
