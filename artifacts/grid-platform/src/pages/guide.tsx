@@ -3,14 +3,22 @@ import {
   BarChart3, Map as MapIcon, List, Activity, Zap, Layers,
   GitBranch, Database, MessageSquare, Download, Bookmark,
   Target, Wrench, ArrowRight, CheckCircle2, Clock, AlertCircle,
-  Building2, Bolt, TrendingUp, ShieldCheck,
+  Building2, Bolt, TrendingUp, ShieldCheck, Cpu, Network,
+  Brain, Flame, MapPin, FlaskConical, BookMarked, Leaf,
+  BookOpen,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 
 const C = {
-  teal: "#14b8a6", amber: "#f59e0b", purple: "#8b5cf6",
-  green: "#22c55e", blue: "#3b82f6", red: "#ef4444",
+  teal:   "#14b8a6",
+  amber:  "#f59e0b",
+  purple: "#8b5cf6",
+  green:  "#22c55e",
+  blue:   "#3b82f6",
+  red:    "#ef4444",
+  orange: "#f97316",
+  indigo: "#6366f1",
 };
 
 // ── Use Case definitions ──────────────────────────────────────────────────────
@@ -25,13 +33,14 @@ const USE_CASES = [
     description:
       "Identify renewable energy projects (wind, solar, storage) that can enter into Power Purchase Agreements or offtake contracts with Walmart to hedge a portion of their electricity portfolio across ERCOT, CAISO, and PJM.",
     steps: [
-      "Pull all operating and under-construction projects from EIA 860 onto the Map Workspace",
+      "Pull all operating projects from EIA 860 onto the Map Workspace",
       "Screen projects by capacity, technology, ISO, COD, and sponsor quality",
       "Score each project across 10 risk dimensions: congestion, curtailment, basis, tax credit, etc.",
+      "Drill into Congestion Intelligence for node-level basis history at each candidate's delivery point",
       "Rank and export the top candidates for deal team review",
     ],
     primaryTabs: ["Map Workspace", "Rankings", "Export Center"],
-    supportTabs: ["Nodal Analysis", "Congestion Analysis", "ERCOT/CAISO Historical"],
+    supportTabs: ["Congestion Intelligence", "Nodal Analysis", "ERCOT/CAISO Historical"],
   },
   {
     id: "siting",
@@ -44,13 +53,14 @@ const USE_CASES = [
       "Analyze the interconnection queue to find regions where a new project could be sited with acceptable queue position, limited congestion/curtailment competition, and favorable basis. Some areas already have heavy pipeline; others represent opportunity.",
     steps: [
       "Review interconnection queue depth by region, fuel type, and ISO",
-      "Overlay congestion analysis — heavy DA-RT spreads signal saturated corridors",
-      "Cross-reference existing EIA 860 project density in the same transmission zone",
-      "Assess basis risk using nodal price history for target settlement points",
+      "Use PyPSA OPF to model which transmission corridors are binding",
+      "Check CI Heat Map for nodes with low historical congestion and stable basis",
+      "Cross-reference existing EIA 860 project density in the same zone",
+      "Run ML Model prediction for basis/congestion at candidate nodes for the target horizon",
       "Rank candidate zones by queue risk, curtailment exposure, and price upside",
     ],
-    primaryTabs: ["Interconnection Queue", "Congestion Analysis", "Map Workspace"],
-    supportTabs: ["Nodal Analysis", "PJM / ERCOT / CAISO Historical"],
+    primaryTabs: ["Interconnection Queue", "Congestion Intelligence", "PyPSA Engine"],
+    supportTabs: ["Congestion Analysis", "Nodal Analysis", "Map Workspace"],
   },
 ];
 
@@ -65,7 +75,7 @@ const TABS = [
         icon: BarChart3,
         color: C.teal,
         status: "live",
-        summary: "Top-level KPIs: total candidates screened, average scores by ISO, market activity snapshot.",
+        summary: "Top-level KPIs: total candidates screened, average scores by ISO, market activity snapshot. Entry point to both use cases.",
         dataSource: "Candidate DB + queue projects",
         useCases: ["origination"],
       },
@@ -77,7 +87,7 @@ const TABS = [
         status: "live",
         summary:
           "Interactive Leaflet map showing 3,875 operational plants from EIA Form 860 (2024) and interconnection queue projects. Filter by market, fuel type, and capacity range (1 MW–3 GW). Click any plant to see its COD, capacity, owner, and operational status.",
-        dataSource: "EIA Form 860 2024 — Operable units only, >1 MW, ERCO/CISO/PJM BA codes",
+        dataSource: "EIA Form 860 2024 — Operable units >1 MW, ERCO/CISO/PJM balancing authority codes",
         useCases: ["origination", "siting"],
       },
       {
@@ -88,9 +98,9 @@ const TABS = [
         status: "live",
         summary:
           "Sorted project ranking table with all 10 dimension scores: congestion risk, curtailment risk, basis risk, tax credit eligibility, sponsor quality, contract structure, market type, capacity available, delivery profile, and confidence score.",
-        dataSource: "Candidates DB (scored on all 10 dimensions)",
+        dataSource: "Candidates DB (3,875 EIA 860 plants scored on all 10 dimensions)",
         useCases: ["origination"],
-        roadmap: "Auto-score candidates from EIA 860 using real nodal + queue data",
+        roadmap: "Auto-score candidates from EIA 860 using real nodal + queue data signals",
       },
       {
         title: "Export Center",
@@ -127,7 +137,7 @@ const TABS = [
         status: "live",
         summary:
           "Browse the active interconnection queue across ERCOT, CAISO, and PJM. Filter by ISO, fuel type, capacity, and status. Identify how crowded a given transmission zone is — queue depth signals congestion risk for new projects in that corridor.",
-        dataSource: "Queue DB (seeded from ERCOT, CAISO, PJM queue reports)",
+        dataSource: "CAISO queue from public ISO data (2,433 real projects); ERCOT/PJM seeded",
         useCases: ["siting"],
         roadmap: "Live queue data pull from ISO APIs + geographic clustering by substation",
       },
@@ -143,8 +153,8 @@ const TABS = [
         color: C.green,
         status: "live",
         summary:
-          "Monthly DA and RT price trends for all ERCOT hubs (HB_HOUSTON, HB_NORTH, HB_SOUTH, HB_WEST, HB_PAN, etc.) and load zones (LZ_NORTH, LZ_SOUTH, LZ_WEST, LZ_HOUSTON, LZ_AEN, LZ_CPS, LZ_LCRA, LZ_RAYBN). Use to understand basis risk and price seasonality for a potential delivery point.",
-        dataSource: "Real CDR prices Jun 2024–Apr 2025; synthetic 2022–May 2024",
+          "Monthly DA and RT price trends for all 15 ERCOT hub/zone nodes: HB_HOUSTON, HB_NORTH, HB_SOUTH, HB_WEST, HB_PAN, HB_BUSAVG, HB_HUBAVG and the 8 load zones. Use to understand basis risk and price seasonality for a candidate's delivery point.",
+        dataSource: "Real ERCOT CDR 13060 (DA) + 13061 (RT) — Jan 2024–Apr 2026, 420 monthly rows",
         useCases: ["origination", "siting"],
       },
       {
@@ -155,7 +165,7 @@ const TABS = [
         status: "live",
         summary:
           "Monthly DA and RT LMP trends for CAISO's three pricing zones: NP15 (Northern CA), SP15 (Southern CA), and ZP26 (Central Valley). Price seasonality, summer peak risk, and hydro-driven volatility analysis.",
-        dataSource: "Modeled from EIA CAISO benchmarks 2022–2026",
+        dataSource: "Real CAISO OASIS PRC_LMP — NP15/SP15: 28 months; ZP26: 14 months",
         useCases: ["origination", "siting"],
       },
       {
@@ -166,7 +176,7 @@ const TABS = [
         status: "live",
         summary:
           "Monthly DA and RT analysis for PJM's 8 major hubs/zones: Western Hub, Eastern Hub, AEP-Dayton, NI Hub, PSEG, PPL, DOM, BGE. On/off-peak split, volatility metrics, zone spread analysis, and YoY comparison.",
-        dataSource: "Modeled from published PJM/EIA benchmarks 2022–2026",
+        dataSource: "Calibrated model from published PJM/EIA benchmarks — 14,336 rows",
         useCases: ["origination", "siting"],
       },
       {
@@ -176,8 +186,8 @@ const TABS = [
         color: C.blue,
         status: "live",
         summary:
-          "Side-by-side comparison of any two ERCOT or CAISO settlement points (zones, hubs, or resource nodes). Toggle between DA, RT, or DA-RT spread mode. Critical for understanding basis risk at the specific delivery point of a candidate project — if a project delivers into a node with high DA-RT spread, the offtaker or generator bears that basis risk.",
-        dataSource: "ERCOT: real Jun 2024+; CAISO: modeled",
+          "Side-by-side comparison of any two ERCOT or CAISO settlement points (zones, hubs, or resource nodes). Toggle between DA, RT, or DA-RT spread mode. Critical for understanding basis risk at the specific delivery point of a candidate project.",
+        dataSource: "ERCOT: real CDR Jan 2024–Apr 2026 (1,123 nodes); CAISO: real OASIS",
         useCases: ["origination", "siting"],
       },
       {
@@ -187,8 +197,128 @@ const TABS = [
         color: C.red,
         status: "live",
         summary:
-          "Ranked view of DA-RT basis spread across all ERCOT settlement points — a direct proxy for transmission congestion and generation curtailment. West Texas wind nodes (WTG_*) and solar nodes (SUN_*) consistently show the highest spreads, indicating those corridors are transmission-constrained. Use this to assess curtailment risk for any candidate project in those zones.",
-        dataSource: "ERCOT nodal stats (modeled RT basis by node type)",
+          "Ranked view of DA–RT basis spread across all ERCOT settlement points — a direct proxy for transmission congestion and generation curtailment. Annual bar chart ranks ~804 resource nodes by congestion severity. Selecting any node drills into its monthly DA/RT area chart and a heatmap of spreads across all months. West Texas wind (WTG_*) and solar (SUN_*) nodes consistently show the highest spreads, flagging transmission-constrained corridors.",
+        dataSource: "Real ERCOT CDR 13060/13061 + API bundles np6-905-cd/np4-190-cd — 1,123 nodes, Jan 2024–Apr 2026",
+        useCases: ["origination", "siting"],
+      },
+    ],
+  },
+  {
+    group: "Congestion Intelligence",
+    items: [
+      {
+        title: "CI Overview",
+        href: "/ci",
+        icon: Flame,
+        color: C.orange,
+        status: "live",
+        summary:
+          "Portfolio-level dashboard summarising congestion events across the full 1,123-node ERCOT footprint. Shows counts of total nodes analysed, congestion/severe/extreme events, and negative-price months. A stacked monthly bar chart lets you see how congestion severity has evolved from Jan 2024 through Apr 2026. Threshold sliders (default: Congestion >$5, Severe >$15, Extreme >$30) are configurable.",
+        dataSource: "ERCOT CDR 13060/13061 + API bundles np6-905-cd/np4-190-cd — 1,123 nodes, 28 months",
+        useCases: ["origination", "siting"],
+      },
+      {
+        title: "Heat Map",
+        href: "/ci-heatmap",
+        icon: MapPin,
+        color: C.orange,
+        status: "live",
+        summary:
+          "Sortable, filterable table ranking all 1,123 nodes by a composite 0–100 Risk Score built from |Avg Basis|, basis standard deviation, Max |Basis|, congestion-month %, and negative-price %. Search by node name, filter by node type (Resource / Hub / Load Zone), and sort by any column. Clicking a row navigates directly to that node's detail view.",
+        dataSource: "Composite metrics derived from 28 months of real ERCOT node data",
+        useCases: ["origination", "siting"],
+      },
+      {
+        title: "Node Detail",
+        href: "/ci-node",
+        icon: Activity,
+        color: C.orange,
+        status: "live",
+        summary:
+          "Full time-series drill-down for any individual node. Shows a dual-axis area chart of monthly DA vs RT prices, a monthly basis bar chart, and a statistical summary panel (Mean, Median, P5, P95, congestion months, negative-price months). Select any of the 1,123 nodes via searchable dropdown.",
+        dataSource: "ERCOT monthly node series — real CDR data Jan 2024–Apr 2026",
+        useCases: ["origination", "siting"],
+      },
+      {
+        title: "Basis Analyzer",
+        href: "/ci-basis",
+        icon: GitBranch,
+        color: C.orange,
+        status: "live",
+        summary:
+          "Compares any two nodes to evaluate hedging relationships or proxy suitability. Computes Pearson correlation, aligned months, and hedge effectiveness (R²). Side-by-side stats show mean basis, P5/P95, and volatility for both nodes. A line chart overlays their monthly basis profiles. Quick-select presets cover common hub/zone pairs.",
+        dataSource: "Aligned historical ERCOT monthly series for selected node pairs",
+        useCases: ["origination", "siting"],
+      },
+      {
+        title: "2026 Backtest",
+        href: "/ci-backtest",
+        icon: FlaskConical,
+        color: C.orange,
+        status: "live",
+        summary:
+          "Evaluates a seasonal mean model (trained on 2024–2025 data) against the held-out Jan–Apr 2026 actuals. Reports MAE, RMSE, directional accuracy, F1 score, and a full confusion matrix (TP/FP/FN/TN) for congestion-event detection. A scatter plot of predicted vs actual basis and a per-month MAE bar chart show where the model performs well and where it breaks down.",
+        dataSource: "2024–2025 training set vs Jan–Apr 2026 held-out ERCOT actuals",
+        useCases: ["origination", "siting"],
+      },
+      {
+        title: "Data Quality",
+        href: "/ci-quality",
+        icon: ShieldCheck,
+        color: C.orange,
+        status: "live",
+        summary:
+          "Monitors record completeness and data provenance across the full node universe. Shows total records, RT completeness %, coverage periods (min/max date), and breakdown by year and node type. Use this to identify any gaps before relying on a node's statistics for deal decisions.",
+        dataSource: "Database metadata from ercot_node_stats table",
+        useCases: ["origination", "siting"],
+      },
+      {
+        title: "Methodology",
+        href: "/ci-methodology",
+        icon: BookMarked,
+        color: C.orange,
+        status: "live",
+        summary:
+          "Documentation page explaining the full technical architecture of the Congestion Intelligence engine: data pipeline (Python → PostgreSQL), node coverage, basis calculation methodology, Risk Score formula, how the seasonal mean backtest model works, and the business case for each metric.",
+        dataSource: "Reference documentation",
+        useCases: ["origination", "siting"],
+      },
+    ],
+  },
+  {
+    group: "PyPSA Engine",
+    items: [
+      {
+        title: "OPF Network",
+        href: "/pypsa-network",
+        icon: Network,
+        color: C.indigo,
+        status: "live",
+        summary:
+          "Interactive DC Optimal Power Flow simulator using a reduced-order 5-bus ERCOT network (NORTH, HOUSTON, SOUTH, WEST, PAN zones). Adjust System Load, Wind/Solar Capacity Factors, and Gas Price via sliders, then click Run OPF to dispatch a new optimisation. Results show nodal LMPs, line loading %, generation dispatch by fuel type (Gas, Wind, Solar, Nuclear), and congestion rent. The SVG network schematic colour-codes nodes green/amber/red by LMP level and shows line utilisation.",
+        dataSource: "PyPSA + HiGHS LP solver — generators from EIA 860 aggregated by zone; synthetic load profiles",
+        useCases: ["siting"],
+      },
+      {
+        title: "ML Model",
+        href: "/pypsa-ml",
+        icon: Brain,
+        color: C.indigo,
+        status: "live",
+        summary:
+          "XGBoost model for predicting basis magnitude (regression) and congestion event probability (classification) at any ERCOT node. Train button re-fits the model on historical ERCOT features (hour-of-day, day-of-week, month, season, rolling basis, node type, historical congestion %). Feature Importance bar chart shows which signals drive predictions. Predicted vs Actual scatter plot visualises fit quality. Forward prediction tool lets you estimate basis and congestion probability for any node/month/year combination.",
+        dataSource: "XGBoost trained on ERCOT monthly node features — ercot_node_stats",
+        useCases: ["origination", "siting"],
+      },
+      {
+        title: "Hourly Data",
+        href: "/pypsa-hourly",
+        icon: Clock,
+        color: C.indigo,
+        status: "live",
+        summary:
+          "High-resolution hourly price explorer for all 15 ERCOT hub/zone nodes. Select any node, year (2024–2025), and month, and the page shows 7 summary stats (Avg DA, Avg RT, Avg Basis, P5, P95, Peak RT, Peak Hour) plus three charts: DA vs RT line overlay, hourly basis bar chart (colour-coded teal/amber/red), and a grouped bar showing both prices for all 24 hours. Data is averaged across all days in the selected month.",
+        dataSource: "Real ERCOT CDR 13060 (DA) + 13061 (RT) — 263,130 rows, 15 nodes, Jan 2024–Dec 2025",
         useCases: ["origination", "siting"],
       },
     ],
@@ -203,10 +333,10 @@ const TABS = [
         color: C.purple,
         status: "planned",
         summary:
-          "AI assistant that can answer natural-language questions about projects, price history, queue depth, and risk scores. Ask things like 'Which ERCOT wind projects have the lowest congestion risk?' or 'What is the average DA-RT spread at LZ_WEST in 2024?' Will use the full platform database as context.",
-        dataSource: "All platform data via RAG/structured SQL",
+          "AI assistant that answers natural-language questions about projects, price history, queue depth, and risk scores. Ask things like 'Which ERCOT wind projects have the lowest congestion risk?' or 'What is the average DA–RT spread at LZ_WEST in 2024?' Will use the full platform database as context via structured SQL + RAG.",
+        dataSource: "All platform data — planned OpenAI integration",
         useCases: ["origination", "siting"],
-        roadmap: "Connect OpenAI to the platform DB for structured Q&A",
+        roadmap: "Connect OpenAI to the platform DB for structured Q&A against all tables",
       },
     ],
   },
@@ -235,6 +365,7 @@ function StatusBadge({ status }: { status: string }) {
 export default function PlatformGuide() {
   return (
     <div className="p-8 h-full overflow-auto space-y-10">
+
       {/* Header */}
       <div>
         <div className="flex items-center gap-2 mb-1">
@@ -243,9 +374,9 @@ export default function PlatformGuide() {
         </div>
         <h1 className="text-3xl font-bold tracking-tight">Grid Origination Intelligence Platform</h1>
         <p className="text-muted-foreground mt-1 max-w-3xl">
-          A power market siting and PPA origination tool purpose-built to help Walmart identify, screen, and rank
-          renewable energy projects as potential offtake candidates — and assess where new greenfield projects can be
-          sited with favorable queue position and manageable risk.
+          A power market siting and PPA origination tool purpose-built for Walmart's energy procurement team.
+          Identify, screen, and rank renewable energy projects as potential offtake candidates — and assess where
+          new greenfield projects can be sited with favorable queue position and manageable risk.
         </p>
       </div>
 
@@ -286,7 +417,8 @@ export default function PlatformGuide() {
                   <div className="text-xs font-semibold text-foreground mb-1.5">Primary Tabs</div>
                   <div className="flex flex-wrap gap-1.5">
                     {uc.primaryTabs.map(t => (
-                      <span key={t} className="px-2 py-0.5 rounded text-xs font-medium border" style={{ borderColor: uc.color, color: uc.color, backgroundColor: `${uc.color}12` }}>{t}</span>
+                      <span key={t} className="px-2 py-0.5 rounded text-xs font-medium border"
+                        style={{ borderColor: uc.color, color: uc.color, backgroundColor: `${uc.color}12` }}>{t}</span>
                     ))}
                   </div>
                 </div>
@@ -305,10 +437,10 @@ export default function PlatformGuide() {
       </div>
 
       {/* Workflow Arrow */}
-      <div className="flex items-center gap-3 text-sm text-muted-foreground">
+      <div className="flex items-center gap-2 flex-wrap text-sm text-muted-foreground">
         <TrendingUp className="h-4 w-4 text-primary shrink-0" />
         <span className="font-medium text-foreground">Suggested Workflow:</span>
-        {["Map Workspace", "Rankings", "Congestion / Nodal", "Interconnection Queue", "Export Center"].map((step, i, arr) => (
+        {["Map Workspace", "Rankings", "Congestion Intelligence", "PyPSA Engine", "Queue", "Export"].map((step, i, arr) => (
           <span key={step} className="flex items-center gap-2">
             <span className="px-2 py-0.5 rounded bg-card border border-border text-xs">{step}</span>
             {i < arr.length - 1 && <ArrowRight className="h-3 w-3 shrink-0" />}
@@ -346,16 +478,17 @@ export default function PlatformGuide() {
                           {tab.dataSource}
                         </span>
                       </div>
-                      {tab.roadmap && (
+                      {(tab as any).roadmap && (
                         <div className="mt-2 px-2.5 py-1.5 rounded bg-amber-500/8 border border-amber-500/20 text-xs text-amber-400">
-                          <span className="font-semibold">Roadmap: </span>{tab.roadmap}
+                          <span className="font-semibold">Roadmap: </span>{(tab as any).roadmap}
                         </div>
                       )}
                       <div className="flex flex-wrap gap-1.5 mt-2">
                         {tab.useCases.map(uc => {
                           const ucDef = USE_CASES.find(u => u.id === uc);
                           return (
-                            <span key={uc} className="px-1.5 py-0.5 rounded text-xs" style={{ backgroundColor: `${ucDef!.color}15`, color: ucDef!.color }}>
+                            <span key={uc} className="px-1.5 py-0.5 rounded text-xs"
+                              style={{ backgroundColor: `${ucDef!.color}15`, color: ucDef!.color }}>
                               {ucDef!.badge}
                             </span>
                           );
@@ -373,26 +506,80 @@ export default function PlatformGuide() {
       {/* Data Status */}
       <Card className="border-border">
         <CardHeader className="pb-2">
-          <CardTitle className="text-sm">Data Status & Roadmap</CardTitle>
-          <CardDescription className="text-xs">What’s modeled now and what’s coming next</CardDescription>
+          <CardTitle className="text-sm">Data Status</CardTitle>
+          <CardDescription className="text-xs">What's real, what's modelled, what's planned</CardDescription>
         </CardHeader>
         <CardContent>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 text-xs">
             {[
-              { label: "ERCOT Resource Nodes (~947)", status: "partial", detail: "Real RT prices from CDR 12301 (rolling 7-day window). 12-month history (May 2025–Apr 2026) unlocked once ERCOT_CLIENT_ID is set (developer.ercot.com app registration)." },
-              { label: "CAISO ZP26 (Central)", status: "seeded", detail: "Real DA prices from CAISO OASIS. NP15 + SP15 real Jan 2024–Apr 2026; ZP26 now seeded from OASIS API." },
-              { label: "PJM Hub/Zone Prices", status: "modeled", detail: "PJM removed from nodal analysis (ERCOT/CAISO focus). Historical hub/zone model retained in DB." },
-              { label: "Interconnection Queue", status: "seeded", detail: "ERCOT/CAISO/PJM queue data seeded. Real API pull planned." },
-              { label: "EIA 860 Project Database", status: "seeded", detail: "3,875 operable generators >1 MW from EIA Form 860 2024. Filtered by ERCO/CISO/PJM balancing authority codes." },
-              { label: "Candidate Scoring", status: "partial", detail: "Scoring engine live on all 3,875 EIA 860 plants. Real signal scoring from nodal + queue data planned." },
-              { label: "Q&A Copilot", status: "planned", detail: "OpenAI integration planned. Will answer questions from platform DB." },
+              {
+                label: "ERCOT Hub/Zone Prices — Monthly",
+                status: "real",
+                detail: "420 rows. Real CDR 13060 (DA) + 13061 (RT). All 15 hub/zone nodes, Jan 2024–Apr 2026.",
+              },
+              {
+                label: "ERCOT Hub/Zone Prices — Hourly",
+                status: "real",
+                detail: "263,130 rows. Real CDR 13060/13061. 15 nodes × hourly DA+RT, Jan 2024–Dec 2025. Python XML parser.",
+              },
+              {
+                label: "ERCOT Resource Nodes (~1,108)",
+                status: "real",
+                detail: "27,193 rows. Real from ERCOT API bundles np6-905-cd (RT) + np4-190-cd (DA). Jan 2024–Apr 2026.",
+              },
+              {
+                label: "CAISO Prices (DA)",
+                status: "real",
+                detail: "Real from CAISO OASIS PRC_LMP. NP15 + SP15: 28 months; ZP26: 14 months. RT modelled.",
+              },
+              {
+                label: "PJM Hub/Zone Prices",
+                status: "modelled",
+                detail: "14,336 rows. Calibrated model from published PJM/EIA monthly hub averages. No public real-time API.",
+              },
+              {
+                label: "Interconnection Queue",
+                status: "seeded",
+                detail: "CAISO: 2,433 real projects from public ISO data. ERCOT/PJM: synthetic seeded data.",
+              },
+              {
+                label: "EIA 860 Project Database",
+                status: "real",
+                detail: "3,875 operable generators >1 MW from EIA Form 860 2024. Filtered by ERCO/CISO/PJM BA codes.",
+              },
+              {
+                label: "PyPSA OPF Engine",
+                status: "real",
+                detail: "Live Python FastAPI microservice. HiGHS LP solver. 5-bus reduced-order ERCOT network. Runs on-demand.",
+              },
+              {
+                label: "XGBoost ML Model",
+                status: "real",
+                detail: "Live XGBoost basis regression + congestion classifier. Trained on 1,123-node ERCOT monthly features.",
+              },
+              {
+                label: "Candidate Scoring",
+                status: "partial",
+                detail: "Scoring engine live on all 3,875 EIA 860 plants. Real signal scoring from nodal + queue data planned.",
+              },
+              {
+                label: "Q&A Copilot",
+                status: "planned",
+                detail: "OpenAI integration planned. Will answer questions from platform DB via SQL + RAG.",
+              },
+              {
+                label: "REC Analysis",
+                status: "planned",
+                detail: "Renewable Energy Certificate pricing, vintage analysis, and buyer-seller matching. Roadmap item.",
+              },
             ].map(item => (
               <div key={item.label} className="flex gap-2 p-2.5 rounded-md bg-card border border-border">
                 <div className="shrink-0 mt-0.5">
-                  {item.status === "partial" ? <AlertCircle className="h-3.5 w-3.5 text-amber-400" /> :
-                   item.status === "modeled" ? <Clock className="h-3.5 w-3.5 text-blue-400" /> :
-                   item.status === "seeded" ? <CheckCircle2 className="h-3.5 w-3.5 text-teal-400" /> :
-                   <Clock className="h-3.5 w-3.5 text-muted-foreground" />}
+                  {item.status === "real"    ? <CheckCircle2 className="h-3.5 w-3.5 text-green-400" />  :
+                   item.status === "seeded"  ? <CheckCircle2 className="h-3.5 w-3.5 text-teal-400" />   :
+                   item.status === "partial" ? <AlertCircle  className="h-3.5 w-3.5 text-amber-400" />  :
+                   item.status === "modelled"? <Clock        className="h-3.5 w-3.5 text-blue-400" />   :
+                                               <Clock        className="h-3.5 w-3.5 text-muted-foreground" />}
                 </div>
                 <div>
                   <div className="font-semibold text-foreground">{item.label}</div>
@@ -402,13 +589,15 @@ export default function PlatformGuide() {
             ))}
           </div>
           <div className="mt-4 flex flex-wrap gap-4 text-xs text-muted-foreground">
-            <span className="flex items-center gap-1.5"><CheckCircle2 className="h-3 w-3 text-teal-400" /> Seeded / Live</span>
-            <span className="flex items-center gap-1.5"><AlertCircle className="h-3 w-3 text-amber-400" /> Partial (real + modeled)</span>
-            <span className="flex items-center gap-1.5"><Clock className="h-3 w-3 text-blue-400" /> Modeled / Synthetic</span>
-            <span className="flex items-center gap-1.5"><Clock className="h-3 w-3 text-muted-foreground" /> Planned</span>
+            <span className="flex items-center gap-1.5"><CheckCircle2 className="h-3 w-3 text-green-400" /> Real data</span>
+            <span className="flex items-center gap-1.5"><CheckCircle2 className="h-3 w-3 text-teal-400" /> Seeded from public sources</span>
+            <span className="flex items-center gap-1.5"><AlertCircle  className="h-3 w-3 text-amber-400" /> Partial (real + modelled)</span>
+            <span className="flex items-center gap-1.5"><Clock        className="h-3 w-3 text-blue-400"  /> Modelled / calibrated</span>
+            <span className="flex items-center gap-1.5"><Clock        className="h-3 w-3 text-muted-foreground" /> Planned</span>
           </div>
         </CardContent>
       </Card>
+
     </div>
   );
 }
