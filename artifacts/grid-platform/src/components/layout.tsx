@@ -5,7 +5,7 @@ import {
   MessageSquare, Download, Bookmark, ChevronRight, Menu,
   TerminalSquare, GitBranch, BookOpen, Leaf, Cpu, Flame,
   MapPin, FlaskConical, ShieldCheck, BookMarked, ChevronDown,
-  Brain, Clock, Network,
+  Brain, Clock, Network, Wind, Battery,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -57,9 +57,13 @@ const sidebarEntries: NavEntry[] = [
       icon: Network,
       defaultOpen: false,
       items: [
-        { title: "OPF Network",     href: "/pypsa-network", icon: Zap },
-        { title: "ML Model",        href: "/pypsa-ml",      icon: Brain },
-        { title: "Hourly Data",     href: "/pypsa-hourly",  icon: Clock },
+        { title: "OPF Network",     href: "/pypsa-network",     icon: Zap },
+        { title: "ML Model",        href: "/pypsa-ml",          icon: Brain },
+        { title: "Hourly Data",     href: "/pypsa-hourly",      icon: Clock },
+        { title: "Curtailment Sim", href: "/pypsa-curtailment", icon: Wind },
+        { title: "TX Relief Sim",   href: "/pypsa-tx-relief",   icon: GitBranch },
+        { title: "Scarcity Sim",    href: "/pypsa-scarcity",    icon: Flame },
+        { title: "Battery Revenue", href: "/pypsa-battery",     icon: Battery },
       ],
     },
   },

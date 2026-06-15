@@ -9,6 +9,10 @@ Endpoints:
   POST /pypsa/ml/train           — train XGBoost on ercot_node_stats
   GET  /pypsa/ml/predict         — predict basis for node/month
   GET  /pypsa/ml/importance      — feature importance ranking
+  POST /pypsa/curtailment        — renewable curtailment + negative price simulator
+  POST /pypsa/tx-relief          — transmission line upgrade before/after comparison
+  POST /pypsa/scarcity           — thermal derate + load shedding scarcity scenario
+  POST /pypsa/battery            — 24-hr multi-period OPF with battery StorageUnit
 """
 
 import os
@@ -72,7 +76,6 @@ def run_opf(req: OPFRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# Pre-run default OPF on startup for caching
 _opf_cache: dict | None = None
 
 @app.on_event("startup")
@@ -158,6 +161,142 @@ def ml_scatter():
     if not meta.get("trained"):
         raise HTTPException(status_code=404, detail="Model not trained")
     return {"scatter": meta.get("scatter_sample", [])}
+
+
+# ---------------------------------------------------------------------------
+# Curtailment Simulator
+# ---------------------------------------------------------------------------
+class CurtailmentRequest(BaseModel):
+    system_load_mw: float   = 45000.0
+    wind_cf: float          = 0.55
+    solar_cf: float         = 0.28
+    gas_price_mmbtu: float  = 3.50
+    west_wind_bonus_pct: float = 0.0
+
+
+@app.post("/curtailment")
+def curtailment(req: CurtailmentRequest):
+    from simulators import run_curtailment
+    try:
+        result = run_curtailment(
+            system_load_mw=req.system_load_mw,
+            wind_cf=req.wind_cf,
+            solar_cf=req.solar_cf,
+            gas_price_mmbtu=req.gas_price_mmbtu,
+            west_wind_bonus_pct=req.west_wind_bonus_pct,
+        )
+        if "error" in result:
+            raise HTTPException(status_code=422, detail=result["error"])
+        return result
+    except Exception as e:
+        logger.error("Curtailment sim failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ---------------------------------------------------------------------------
+# Transmission Relief Simulator
+# ---------------------------------------------------------------------------
+class TxReliefRequest(BaseModel):
+    system_load_mw: float  = 55000.0
+    wind_cf: float         = 0.35
+    solar_cf: float        = 0.22
+    gas_price_mmbtu: float = 3.50
+    upgrade_line: str      = "NORTH-WEST"
+    upgrade_pct: float     = 50.0
+
+
+@app.post("/tx-relief")
+def tx_relief(req: TxReliefRequest):
+    from simulators import run_tx_relief
+    try:
+        result = run_tx_relief(
+            system_load_mw=req.system_load_mw,
+            wind_cf=req.wind_cf,
+            solar_cf=req.solar_cf,
+            gas_price_mmbtu=req.gas_price_mmbtu,
+            upgrade_line=req.upgrade_line,
+            upgrade_pct=req.upgrade_pct,
+        )
+        if "error" in result:
+            raise HTTPException(status_code=422, detail=result["error"])
+        return result
+    except Exception as e:
+        logger.error("TX relief sim failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ---------------------------------------------------------------------------
+# Scarcity / Load Shedding Simulator
+# ---------------------------------------------------------------------------
+class ScarcityRequest(BaseModel):
+    system_load_mw: float    = 70000.0
+    wind_cf: float           = 0.12
+    solar_cf: float          = 0.05
+    gas_price_mmbtu: float   = 5.00
+    gas_derate_pct: float    = 15.0
+    nuclear_derate_pct: float = 0.0
+    voll: float              = 5000.0
+
+
+@app.post("/scarcity")
+def scarcity(req: ScarcityRequest):
+    from simulators import run_scarcity
+    try:
+        result = run_scarcity(
+            system_load_mw=req.system_load_mw,
+            wind_cf=req.wind_cf,
+            solar_cf=req.solar_cf,
+            gas_price_mmbtu=req.gas_price_mmbtu,
+            gas_derate_pct=req.gas_derate_pct,
+            nuclear_derate_pct=req.nuclear_derate_pct,
+            voll=req.voll,
+        )
+        if "error" in result:
+            raise HTTPException(status_code=422, detail=result["error"])
+        return result
+    except Exception as e:
+        logger.error("Scarcity sim failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ---------------------------------------------------------------------------
+# Battery Revenue Simulator
+# ---------------------------------------------------------------------------
+class BatteryRequest(BaseModel):
+    storage_bus: str        = "WEST"
+    storage_mw: float       = 500.0
+    storage_mwh: float      = 2000.0
+    storage_efficiency: float = 0.90
+    node: str               = "HB_WEST"
+    year: int               = 2025
+    month: int              = 7
+    wind_cf: float          = 0.35
+    solar_cf: float         = 0.22
+    gas_price_mmbtu: float  = 3.50
+
+
+@app.post("/battery")
+def battery(req: BatteryRequest):
+    from simulators import run_battery
+    try:
+        result = run_battery(
+            storage_bus=req.storage_bus,
+            storage_mw=req.storage_mw,
+            storage_mwh=req.storage_mwh,
+            storage_efficiency=req.storage_efficiency,
+            node=req.node,
+            year=req.year,
+            month=req.month,
+            wind_cf=req.wind_cf,
+            solar_cf=req.solar_cf,
+            gas_price_mmbtu=req.gas_price_mmbtu,
+        )
+        if "error" in result:
+            raise HTTPException(status_code=422, detail=result["error"])
+        return result
+    except Exception as e:
+        logger.error("Battery sim failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 if __name__ == "__main__":

@@ -28,6 +28,10 @@ import CIMethodology from "@/pages/ci-methodology";
 import PypsaNetwork from "@/pages/pypsa-network";
 import PypsaML from "@/pages/pypsa-ml";
 import PypsaHourly from "@/pages/pypsa-hourly";
+import PypsaCurtailment from "@/pages/pypsa-curtailment";
+import PypsaTxRelief from "@/pages/pypsa-tx-relief";
+import PypsaScarcity from "@/pages/pypsa-scarcity";
+import PypsaBattery from "@/pages/pypsa-battery";
 import NotFound from "@/pages/not-found";
 
 const queryClient = new QueryClient();
@@ -60,6 +64,10 @@ function Router() {
         <Route path="/pypsa-network" component={PypsaNetwork} />
         <Route path="/pypsa-ml" component={PypsaML} />
         <Route path="/pypsa-hourly" component={PypsaHourly} />
+        <Route path="/pypsa-curtailment" component={PypsaCurtailment} />
+        <Route path="/pypsa-tx-relief" component={PypsaTxRelief} />
+        <Route path="/pypsa-scarcity" component={PypsaScarcity} />
+        <Route path="/pypsa-battery" component={PypsaBattery} />
         <Route component={NotFound} />
       </Switch>
     </Layout>
