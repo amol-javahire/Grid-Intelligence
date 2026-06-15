@@ -405,4 +405,72 @@ router.get("/caiso-node-locations", async (req, res) => {
   }
 });
 
+// ─── ERCOT Hub Hourly ──────────────────────────────────────────────────────
+// GET /api/ercot/hub-hourly?node=LZ_WEST&year=2024&month=7
+// Returns 24-row average hourly DA+RT profile for the selected node/month.
+router.get("/ercot/hub-hourly", async (req, res) => {
+  try {
+    const { node, year, month } = req.query as Record<string, string>;
+    if (!node || !year || !month) {
+      res.status(400).json({ error: "bad_request", message: "node, year, month are required" });
+      return;
+    }
+    const yr = parseInt(year, 10);
+    const mo = parseInt(month, 10);
+    if (isNaN(yr) || isNaN(mo) || mo < 1 || mo > 12) {
+      res.status(400).json({ error: "bad_request", message: "Invalid year or month" });
+      return;
+    }
+    const rows = await db.execute<{ hour: number; da_price: string; rt_price: string }>(
+      sql`SELECT hour,
+             ROUND(AVG(da_price::numeric), 4) AS da_price,
+             ROUND(AVG(rt_price::numeric), 4) AS rt_price
+          FROM ercot_hub_hourly
+          WHERE node = ${node}
+            AND year = ${yr}
+            AND month = ${mo}
+          GROUP BY hour
+          ORDER BY hour`
+    );
+    const totalQ = await db.execute<{ cnt: string }>(
+      sql`SELECT COUNT(*) AS cnt FROM ercot_hub_hourly`
+    );
+    res.json({
+      node, year: yr, month: mo,
+      totalRows: parseInt(totalQ.rows[0]?.cnt ?? "0", 10),
+      hourly: rows.rows.map(r => ({
+        hour: Number(r.hour),
+        daPrice: parseFloat(r.da_price),
+        rtPrice: parseFloat(r.rt_price),
+      })),
+    });
+  } catch (err) {
+    req.log.error({ err }, "ercot/hub-hourly error");
+    res.status(500).json({ error: "internal_error", message: "Failed to fetch hourly data" });
+  }
+});
+
+// GET /api/ercot/hub-hourly/nodes — list of distinct nodes with data
+router.get("/ercot/hub-hourly/nodes", async (req, res) => {
+  try {
+    const rows = await db.execute<{ node: string; node_type: string; year_count: string; row_count: string }>(
+      sql`SELECT node, node_type,
+             COUNT(DISTINCT year) AS year_count,
+             COUNT(*) AS row_count
+          FROM ercot_hub_hourly
+          GROUP BY node, node_type
+          ORDER BY node`
+    );
+    res.json(rows.rows.map(r => ({
+      node: r.node,
+      nodeType: r.node_type,
+      yearCount: Number(r.year_count),
+      rowCount: Number(r.row_count),
+    })));
+  } catch (err) {
+    req.log.error({ err }, "ercot/hub-hourly/nodes error");
+    res.status(500).json({ error: "internal_error", message: "Failed to list hub hourly nodes" });
+  }
+});
+
 export default router;

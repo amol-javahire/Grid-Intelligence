@@ -8,3 +8,4 @@
 - [Transmission lines DB](transmission-lines-seeding.md) — 23,674 lines (115kV+ ERCOT/CAISO/PJM + 345kV+ national) in transmission_lines table; /api/transmission-lines endpoint; 34 MB response for full set — lazy-loaded only when user toggles layer on map.
 - [ERCOT Bundle Seeding](ercot-bundle-seeding.md) — dates are MM/DD/YYYY; node col is SettlementPointName; nested ZIP structure; needs unique constraint on (node,year,month) for upserts.
 - [PyPSA Engine setup](pypsa-engine-setup.md) — Python microservice on port 8083; venv via uv; /pypsa proxy via api-server artifact.toml; HiGHS LP solver; always add emergency peakers to prevent OPF infeasibility at high loads.
+- [ERCOT Hourly CDR Seeder](ercot-hourly-seeder.md) — DAM hours are "HH:MM" shared strings (not integers); Python multiprocessing XML parser is the only viable approach for 22MB files; 263,130 rows loaded.

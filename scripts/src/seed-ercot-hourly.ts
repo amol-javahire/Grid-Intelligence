@@ -15,8 +15,12 @@ import { db } from "@workspace/db";
 import { ercotHubHourlyTable } from "@workspace/db";
 import * as https from "node:https";
 import * as zlib from "node:zlib";
+import * as fs from "node:fs";
+import * as path from "node:path";
 import { sql } from "drizzle-orm";
 import * as XLSX from "xlsx";
+
+const CACHE_DIR = "/tmp/ercot-hourly-cache";
 
 const CDR = "https://www.ercot.com/misdownload/servlets/mirDownload?mimic_duns=000000000&doclookupId=";
 
@@ -149,20 +153,34 @@ function parseDamSheet(ws: XLSX.WorkSheet, map: Map<HourKey, HourAgg>) {
 
 function mean(a: number[]) { return a.length === 0 ? null : a.reduce((s, v) => s + v, 0) / a.length; }
 
+async function getXlsxPath(year: number, type: "RTM" | "DAM", ids: Record<number, string>): Promise<string> {
+  if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true });
+  const cachePath = path.join(CACHE_DIR, `${type.toLowerCase()}-${year}.xlsx`);
+  if (fs.existsSync(cachePath)) {
+    const sz = fs.statSync(cachePath).size;
+    console.log(`  [${year}] ${type} XLSX: ${(sz/1024/1024).toFixed(1)} MB (cached)`);
+    return cachePath;
+  }
+  const url = CDR + ids[year as keyof typeof ids];
+  console.log(`  [${year}] Downloading ${type}...`);
+  const buf = await downloadBuffer(url);
+  console.log(`  [${year}] ${type} zip: ${(buf.length/1024/1024).toFixed(1)} MB → extracting...`);
+  const xlBuf = extractXlsxFromZip(buf);
+  fs.writeFileSync(cachePath, xlBuf);
+  console.log(`  [${year}] ${type} XLSX: ${(xlBuf.length/1024/1024).toFixed(1)} MB → cached`);
+  return cachePath;
+}
+
 async function processYear(year: number, map: Map<HourKey, HourAgg>) {
   for (const [type, ids] of [["RTM", RTM_IDS], ["DAM", DAM_IDS]] as const) {
-    const url = CDR + ids[year as keyof typeof ids];
-    console.log(`  [${year}] Downloading ${type}...`);
-    const buf = await downloadBuffer(url);
-    console.log(`  [${year}] ${type} zip: ${(buf.length/1024/1024).toFixed(1)} MB → extracting...`);
-    const xlBuf = extractXlsxFromZip(buf);
-    console.log(`  [${year}] ${type} XLSX: ${(xlBuf.length/1024/1024).toFixed(1)} MB → parsing...`);
-    const wb = XLSX.read(xlBuf, { type: "buffer" });
-    for (const sn of wb.SheetNames) {
-      if (!MONTHS.includes(sn)) continue;
+    const cachePath = await getXlsxPath(year, type, ids);
+    console.log(`  [${year}] Parsing ${type} sheet by sheet...`);
+    for (const sn of MONTHS) {
+      const wb = XLSX.readFile(cachePath, { sheets: [sn] });
+      if (!wb.Sheets[sn]) continue;
       if (type === "RTM") parseRtmSheet(wb.Sheets[sn], map);
       else parseDamSheet(wb.Sheets[sn], map);
-      process.stdout.write(`\r    ${sn} `);
+      process.stdout.write(`    ${sn}`);
     }
     console.log();
   }
@@ -175,7 +193,11 @@ async function main() {
   const map = new Map<HourKey, HourAgg>();
   for (const year of [2024, 2025, 2026]) {
     console.log(`[Year ${year}]`);
-    await processYear(year, map);
+    try {
+      await processYear(year, map);
+    } catch (e) {
+      console.warn(`  ⚠ Skipping year ${year}: ${(e as Error).message}`);
+    }
   }
 
   console.log(`\nCollected ${map.size} node-hour combinations`);
@@ -199,14 +221,20 @@ async function main() {
 
   console.log(`Inserting ${rows.length} hourly rows (ON CONFLICT DO NOTHING)...`);
 
-  const BATCH = 500;
-  let inserted = 0;
-  for (let i = 0; i < rows.length; i += BATCH) {
-    await db.insert(ercotHubHourlyTable)
-      .values(rows.slice(i, i + BATCH))
-      .onConflictDoNothing();
-    inserted += Math.min(BATCH, rows.length - i);
-    process.stdout.write(`\r  ${inserted} / ${rows.length}`);
+  const BATCH = 1000;
+  const CONCURRENCY = 5;
+  const batches: (typeof ercotHubHourlyTable.$inferInsert)[][] = [];
+  for (let i = 0; i < rows.length; i += BATCH) batches.push(rows.slice(i, i + BATCH));
+
+  let done = 0;
+  for (let i = 0; i < batches.length; i += CONCURRENCY) {
+    await Promise.all(
+      batches.slice(i, i + CONCURRENCY).map(batch =>
+        db.insert(ercotHubHourlyTable).values(batch).onConflictDoNothing()
+      )
+    );
+    done += Math.min(CONCURRENCY, batches.length - i);
+    process.stdout.write(`\r  ${done * BATCH} / ${rows.length}`);
   }
 
   console.log(`\n✓ Inserted ${rows.length} hourly rows into ercot_hub_hourly.`);
