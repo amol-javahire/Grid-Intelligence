@@ -1,12 +1,18 @@
 import fs from "fs";
 import path from "path";
+import { fileURLToPath } from "url";
 import { db, candidatesTable } from "@workspace/db";
 import { sql } from "drizzle-orm";
 
+const __dirname = fileURLToPath(new URL(".", import.meta.url));
+
 const CSV_PATHS = [
+  // When pnpm runs this script, CWD = scripts/ package dir
+  path.join(process.cwd(), "data", "candidates-seed.csv"),
+  // Relative to this source file: scripts/src/ → scripts/data/
+  path.resolve(__dirname, "..", "data", "candidates-seed.csv"),
+  // When spawned from workspace root (production)
   path.join(process.cwd(), "scripts", "data", "candidates-seed.csv"),
-  path.resolve(__dirname, "../../../..", "scripts", "data", "candidates-seed.csv"),
-  path.resolve(__dirname, "../..", "data", "candidates-seed.csv"),
 ];
 
 function findCsv(): string {
