@@ -7,6 +7,7 @@ import queueProjectsRouter from "./queue_projects";
 import dashboardRouter from "./dashboard";
 import chatRouter from "./chat";
 import congestionIntelRouter from "./congestion_intel";
+import adminRouter from "./admin";
 
 const router: IRouter = Router();
 
@@ -18,5 +19,6 @@ router.use(queueProjectsRouter);
 router.use(dashboardRouter);
 router.use(chatRouter);
 router.use(congestionIntelRouter);
+router.use(adminRouter);
 
 export default router;

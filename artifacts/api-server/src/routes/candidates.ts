@@ -93,7 +93,7 @@ router.post("/candidates", async (req, res) => {
       return;
     }
     const data = parsed.data;
-    const overallScore = computeOverallScore(data as Record<string, number | null>);
+    const overallScore = computeOverallScore(data as unknown as Record<string, number | null>);
 
     const [row] = await db.insert(candidatesTable).values({
       ...data,
@@ -150,7 +150,7 @@ router.put("/candidates/:id", async (req, res) => {
       return;
     }
     const data = bodyParsed.data;
-    const overallScore = computeOverallScore(data as Record<string, number | null>);
+    const overallScore = computeOverallScore(data as unknown as Record<string, number | null>);
 
     const [row] = await db.update(candidatesTable)
       .set({

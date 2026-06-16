@@ -10,3 +10,4 @@
 - [PyPSA Engine setup](pypsa-engine-setup.md) — Python microservice on port 8083; venv via uv; /pypsa proxy via api-server artifact.toml; HiGHS LP solver; always add emergency peakers to prevent OPF infeasibility at high loads.
 - [ERCOT Hourly CDR Seeder](ercot-hourly-seeder.md) — DAM hours are "HH:MM" shared strings (not integers); Python multiprocessing XML parser is the only viable approach for 22MB files; 263,130 rows loaded.
 - [Scoring dimension remap v3](scoring-v3.md) — 8-dim system: price_score=CapturePrice, financial_score=MktRevenue, development_risk_score=InterconnectRisk, environmental_score=RECs/Yr, all sourced from real DB; run assign-and-score-nodal to refresh.
+- [PyPSA /pypsa path routing](pypsa-routing.md) — /pypsa reverse-proxy routing is defined in api-server's artifact.toml [[services]] block (port 8083); pypsa-engine has no own artifact.toml; never remove that block or /pypsa goes dark.

@@ -22,6 +22,8 @@
     "score-caiso-congestion": "tsx ./src/score-caiso-congestion.ts",
     "assign-and-score-nodal": "tsx ./src/assign-and-score-nodal.ts",
     "seed-ercot-hourly": "tsx ./src/seed-ercot-hourly.ts",
+    "seed-candidates": "tsx ./src/seed-candidates.ts",
+    "seed-transmission-lines": "tsx ./src/seed-transmission-lines.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
