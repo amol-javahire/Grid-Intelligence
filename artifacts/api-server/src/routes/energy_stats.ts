@@ -317,13 +317,21 @@ router.get("/transmission-lines", async (req, res) => {
         ORDER BY voltage_kv DESC NULLS LAST LIMIT 25000`);
     }
 
+    // Detect whether each row's coordinates are LineString (2-D) or MultiLineString (3-D).
+    // HIFLD source mixes both; hardcoding "LineString" for a 3-D array causes Leaflet to crash.
+    function detectGeomType(coords: unknown): "LineString" | "MultiLineString" {
+      if (!Array.isArray(coords) || coords.length === 0) return "LineString";
+      if (!Array.isArray(coords[0])) return "LineString";
+      return Array.isArray(coords[0][0]) ? "MultiLineString" : "LineString";
+    }
+
     // Return as GeoJSON FeatureCollection (properties keyed as VOLTAGE/TYPE to match frontend)
-    const features = rows.rows.map(r => ({
+    const features = rows.rows.map(r => {
+      const coords = Array.isArray(r.coordinates) ? r.coordinates : [];
+      const geomType = detectGeomType(coords);
+      return {
       type: "Feature" as const,
-      geometry: {
-        type: "LineString" as const,
-        coordinates: Array.isArray(r.coordinates) ? r.coordinates : [],
-      },
+      geometry: { type: geomType, coordinates: coords },
       properties: {
         VOLTAGE: r.voltage_kv,
         VOLT_CLASS: r.volt_class,
@@ -335,7 +343,8 @@ router.get("/transmission-lines", async (req, res) => {
         ISO: r.iso,
         LENGTH_KM: r.line_length_km,
       },
-    }));
+    };
+    });
 
     res.json({ type: "FeatureCollection", features });
   } catch (err) {

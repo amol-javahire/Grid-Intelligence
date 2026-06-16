@@ -123,7 +123,13 @@ export default function ExportCenter() {
                   </div>
                   <div className="space-y-1">
                     <div className="text-xs text-muted-foreground flex items-center gap-1"><TrendingUp className="h-3 w-3" /> Est. LCOE</div>
-                    <div className="font-semibold">{candidate.estimatedLcoe ? `$${candidate.estimatedLcoe.toFixed(2)}` : 'N/A'}</div>
+                    <div className="font-semibold">{
+                      candidate.estimatedLcoe
+                        ? `$${candidate.estimatedLcoe.toFixed(2)}/MWh`
+                        : ({solar:39,wind:33,offshore_wind:72,natural_gas:55,nuclear:89,hydro:46,storage:98,geothermal:48} as Record<string,number>)[candidate.assetType]
+                          ? `~\$${ ({solar:39,wind:33,offshore_wind:72,natural_gas:55,nuclear:89,hydro:46,storage:98,geothermal:48} as Record<string,number>)[candidate.assetType]}/MWh`
+                          : 'N/A'
+                    }</div>
                   </div>
                 </div>
                 

@@ -23,7 +23,14 @@ L.Icon.Default.mergeOptions({
   shadowUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png",
 });
 
-// ── Shared fuel-type colors ──────────────────────────────────────────────────
+// ── Market (ISO) pin colors for EIA 860 circles ─────────────────────────────
+const MARKET_COLORS: Record<string, string> = {
+  ERCOT: "#14b8a6",  // teal
+  CAISO: "#3b82f6",  // blue
+  PJM:   "#8b5cf6",  // purple
+};
+
+// ── Shared fuel-type colors (queue diamonds + legend) ────────────────────────
 const FUEL_COLORS: Record<string, string> = {
   solar:         "#f59e0b",
   wind:          "#14b8a6",
@@ -342,7 +349,29 @@ export default function MapWorkspace() {
     fetch(TX_LINES_URL)
       .then(r => r.json() as Promise<FeatureCollection>)
       .then(fc => {
-        const features = (fc.features ?? []).filter((f: Feature) => f.geometry != null);
+        // Normalize MultiLineString → LineString by flattening coordinates.
+        // HIFLD data stores some lines as MultiLineString (3-D coords array).
+        // If the API returns the wrong type, Leaflet's path renderer can enter
+        // infinite recursion and hang the tab — the flatten here prevents that.
+        const features = (fc.features ?? [])
+          .filter((f: Feature) => f.geometry != null)
+          .map((f: Feature) => {
+            const geom = f.geometry as any;
+            if (!geom || !Array.isArray(geom.coordinates)) return null;
+            const coords = geom.coordinates;
+            // 3-D array → either real MultiLineString or LineString mis-labelled
+            if (coords.length > 0 && Array.isArray(coords[0]) && Array.isArray(coords[0]?.[0])) {
+              return {
+                ...f,
+                geometry: {
+                  type: "LineString" as const,
+                  coordinates: (coords as number[][][]).flat(1),
+                },
+              };
+            }
+            return f;
+          })
+          .filter(Boolean) as Feature[];
         setTxLines({ type: "FeatureCollection", features });
         setTxLoading(false);
       })
@@ -475,12 +504,12 @@ export default function MapWorkspace() {
             />
           )}
 
-          {/* ── EIA 860 Operational Plants — circles ── */}
+          {/* ── EIA 860 Operational Plants — circles coloured by ISO market ── */}
           {showEia860 && filteredCandidates.map(c => (
             <Marker
               key={`eia-${c.id}`}
               position={[c.latitude, c.longitude]}
-              icon={createDot(FUEL_COLORS[c.assetType] ?? "#94a3b8")}
+              icon={createDot(MARKET_COLORS[c.market] ?? "#94a3b8")}
             >
               <Popup>
                 <div className="min-w-[210px]">
@@ -488,7 +517,7 @@ export default function MapWorkspace() {
                   <div className="flex items-center gap-1.5 text-xs text-muted-foreground mb-2">
                     <span
                       className="inline-block w-2 h-2 rounded-full shrink-0"
-                      style={{ backgroundColor: FUEL_COLORS[c.assetType] ?? "#94a3b8" }}
+                      style={{ backgroundColor: MARKET_COLORS[c.market] ?? "#94a3b8" }}
                     />
                     {c.market} · {FUEL_LABELS[c.assetType] ?? c.assetType}
                   </div>
@@ -654,18 +683,37 @@ export default function MapWorkspace() {
             onExpand={() => setEia860Expanded(v => !v)}
             countLabel={showEia860 ? filteredCandidates.length.toLocaleString() : undefined}
           >
-            {EIA_LEGEND.map(key => (
+            {/* Market legend (pin color = ISO) */}
+            {(["ERCOT","CAISO","PJM"] as const).map(mkt => (
               <FuelRow
-                key={key}
-                fuelKey={key}
-                color={FUEL_COLORS[key] ?? "#94a3b8"}
-                label={FUEL_LABELS[key] ?? key}
-                count={eia860Counts[key] ?? 0}
-                active={eia860Fuels.has(key)}
-                onToggle={() => toggleSet(setEia860Fuels, key)}
+                key={mkt}
+                fuelKey={mkt}
+                color={MARKET_COLORS[mkt]}
+                label={mkt}
+                count={Object.values(eia860Counts).reduce((s,v)=>s+v,0) > 0
+                  ? (filteredCandidates.filter(c=>c.market===mkt).length)
+                  : 0}
+                active={marketFilters.has(mkt)}
+                onToggle={() => toggleSet(setMarketFilters, mkt)}
                 shape="circle"
               />
             ))}
+            {/* Fuel type filter (still controls which technologies render) */}
+            <div className="pt-1 mt-0.5 border-t border-border/30">
+              <div className="text-[9px] font-semibold uppercase tracking-wider text-muted-foreground mb-1 px-0.5">Filter by Technology</div>
+              {EIA_LEGEND.map(key => (
+                <FuelRow
+                  key={key}
+                  fuelKey={key}
+                  color={FUEL_COLORS[key] ?? "#94a3b8"}
+                  label={FUEL_LABELS[key] ?? key}
+                  count={eia860Counts[key] ?? 0}
+                  active={eia860Fuels.has(key)}
+                  onToggle={() => toggleSet(setEia860Fuels, key)}
+                  shape="circle"
+                />
+              ))}
+            </div>
             {/* MW slider */}
             <div className="pt-2 mt-1 border-t border-border/50 space-y-1.5">
               <div className="flex items-center justify-between">

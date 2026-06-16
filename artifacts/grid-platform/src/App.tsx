@@ -1,4 +1,4 @@
-import { Switch, Route, Router as WouterRouter } from "wouter";
+import { Switch, Route, Router as WouterRouter, Redirect } from "wouter";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -68,6 +68,9 @@ function Router() {
         <Route path="/pypsa-tx-relief" component={PypsaTxRelief} />
         <Route path="/pypsa-scarcity" component={PypsaScarcity} />
         <Route path="/pypsa-battery" component={PypsaBattery} />
+        {/* Legacy / spec-documented aliases */}
+        <Route path="/rec"><Redirect to="/recs" /></Route>
+        <Route path="/ci/heatmap"><Redirect to="/ci-heatmap" /></Route>
         <Route component={NotFound} />
       </Switch>
     </Layout>

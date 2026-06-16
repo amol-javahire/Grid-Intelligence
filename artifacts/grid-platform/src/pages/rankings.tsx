@@ -217,7 +217,9 @@ export default function Rankings() {
   const [assetTypeFilter, setAssetTypeFilter] = useState<string | undefined>(searchParams.get("assetType") as any || undefined);
   const [sortField, setSortField] = useState<"overallScore" | "objectiveScore" | "curtailmentScore" | "interconnectionScore" | "locationScore" | "priceScore" | "demandProximityScore" | "financialScore" | "developmentRiskScore" | "environmentalScore" | "annualRecValueUsd">("overallScore");
   const [sortDir, setSortDir] = useState<"desc" | "asc">("desc");
-  const [objective, setObjective] = useState<ObjectiveId>("risk_adjusted");
+  const [objective, setObjective] = useState<ObjectiveId>(
+    (searchParams.get("objective") as ObjectiveId) || "risk_adjusted"
+  );
   const [addOpen, setAddOpen] = useState(false);
   const [newName, setNewName] = useState("");
   const [newMarket, setNewMarket] = useState("ERCOT");

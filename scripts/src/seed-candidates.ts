@@ -85,6 +85,7 @@ async function seed() {
       gridStabilityScore: nullish(r.grid_stability_score),
       demandProximityScore: nullish(r.demand_proximity_score),
       developmentRiskScore: nullish(r.development_risk_score),
+      commissioningYear: nullish(r.commissioning_year) ? Number(nullish(r.commissioning_year)) : null,
     }));
 
     await db.insert(candidatesTable).values(values);

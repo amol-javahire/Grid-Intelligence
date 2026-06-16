@@ -77,17 +77,19 @@ const SORT_OPTIONS: { value: SortMetric; label: string; icon: React.ReactNode; d
 ];
 
 const RANK_MONTHS: { value: string; label: string }[] = [
-  { value: "2026-4", label: "Apr 2026" },
-  { value: "2026-5", label: "May 2026" },
+  { value: "2024-12", label: "Dec 2024" },
+  { value: "2025-6",  label: "Jun 2025" },
+  { value: "2025-12", label: "Dec 2025" },
+  { value: "2026-4",  label: "Apr 2026" },
 ];
 
 export default function CongestionAnalysis() {
-  const [year, setYear] = useState(2025);
+  const [year, setYear] = useState(2024);
   const [selectedNode, setSelectedNode] = useState("WTG_ODESSA");
 
   // Resource node ranking state
   const [rankSort, setRankSort] = useState<SortMetric>("neg_price_percent");
-  const [rankPeriod, setRankPeriod] = useState("2026-4");
+  const [rankPeriod, setRankPeriod] = useState("2024-12");
   const [showTop, setShowTop] = useState(50);
 
   const [rankYear, rankMonth] = rankPeriod.split("-").map(Number);

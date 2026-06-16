@@ -51,7 +51,7 @@ interface HourlyResponse {
 
 export default function PypsaHourly() {
   const [node,  setNode]  = useState("HB_NORTH");
-  const [year,  setYear]  = useState("2025");
+  const [year,  setYear]  = useState("2024");
   const [month, setMonth] = useState("7");
 
   const hourlyQ = useQuery<HourlyResponse>({

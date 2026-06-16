@@ -1,0 +1,54 @@
+1. ERCOT Historical defaults to 2025 → "No data available"
+
+The page opens broken. Only 2022–2024 work. Change the default year to 2024. Same issue on Congestion Analysis — default 2025 shows "No data for 2025."
+2. Congestion Intelligence is running on 8 nodes, not 1,123
+
+Downstream consequences:
+
+Heat Map: 8 nodes displayed, all with 0% congestion and 0% Cong Freq
+Node Detail / Node Comparison: only the 8 hub/zone nodes selectable — all SUN_, WTG_ resource nodes missing
+HB_PAN completely absent from every congestion view (ranking, heatmap, node dropdown)
+DA-RT Spread Heatmap on Congestion Analysis shows all 0.0 values
+CI Overview stats: 0 Congestion Events, 0 Severe Events, 0 Neg-Price Months
+2026 Backtest: "No 2026 actuals found to backtest against"
+Hourly Price Data: "No data for 2025" (same coverage gap)
+
+3. Interconnection Queue has only 16 synthetic projects
+
+The spec expects 2,433 CAISO real queue projects. The real ISO queue data hasn't been loaded. The Dashboard "Queue Projects: 16" stat reflects this.
+4. Map → Transmission Lines toggle crashes to a black screen
+
+Clicking the toggle freezes the renderer entirely. Requires a full page reload. This is the most user-visible crash.
+5. Nodal Analysis (ERCOT tab) is completely empty
+
+Zone Comparison, Hub Comparison, and Node Comparison all show "No data for this period" for 2025. ERCOT Resource Node Browser shows "0 nodes." Switching to CAISO mostly works (zone comparison and DA-RT spread summary load), but CAISO Node Comparison and CAISO Pricing Node Browser also show 0 nodes.
+
+🟡 Medium Issues
+6. Wrong URL routes → 404 errors
+
+/rec → 404 (correct route is /recs)
+/ci/heatmap → 404 (correct route is /ci-heatmap)
+
+These will break any external links or bookmarks using the spec's documented paths.
+
+7. Rankings — Objective URL param not read on load
+
+Coming from Dashboard with "Lowest LCOE" selected, the URL becomes ?objective=lowest_lcoe but the Rankings page displays "Risk-Adjusted Value" as the selected objective. User must manually re-select. The key lowest_lcoe likely doesn't match the internal preset key.
+8. ERCOT Historical node dropdown: only 8 nodes
+
+Spec says 15 hub/zone nodes. Missing nodes include HB_PAN and others. Only HB_HOUSTON, HB_NORTH, HB_SOUTH, HB_WEST, LZ_HOUSTON, LZ_NORTH, LZ_SOUTH, LZ_WEST are present.
+9. REC Analysis stacked bar chart broken
+
+"Annual REC Value by Commissioning Year & Technology" says "No year data available." The summary stats and donut chart work fine; only the stacked-by-year chart is empty.
+10. Export Center — Est. LCOE is N/A for all cards
+
+Every candidate card shows N/A even when "Lowest LCOE" is the selected objective model.
+11. Rankings — COD column is "—" for all projects
+
+No Commercial Operation Date data is populated for any of the 3,875 plants.
+12. Map pin colors are by technology, not by market
+
+Spec says teal=ERCOT, blue=CAISO, purple=PJM. Actual behavior: colored by technology type (orange=Solar, teal=Wind, etc.). Market-based coloring isn't implemented.
+13. Screenings page missing from sidebar nav
+
+/screenings works and the page is functional, but there's no link to it in the sidebar.

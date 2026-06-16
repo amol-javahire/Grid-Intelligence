@@ -778,7 +778,7 @@ function CaisoNodeLocationsBrowser() {
 // ── Main Page ─────────────────────────────────────────────────────────────────
 export default function NodalAnalysis() {
   const [iso, setIso] = useState<"ERCOT"|"CAISO">("ERCOT");
-  const [year, setYear] = useState<number>(2025);
+  const [year, setYear] = useState<number>(2024);
   const [priceType, setPriceType] = useState<PriceType>("DA");
 
   return (

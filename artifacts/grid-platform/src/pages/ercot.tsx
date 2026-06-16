@@ -31,12 +31,15 @@ const TOOLTIP_STYLE = {
   color: C.tooltipFg,
 };
 
-const NODES = ["HB_HOUSTON", "HB_NORTH", "HB_SOUTH", "HB_WEST", "LZ_HOUSTON", "LZ_SOUTH", "LZ_NORTH", "LZ_WEST"];
+const NODES = [
+  "HB_HOUSTON","HB_NORTH","HB_SOUTH","HB_WEST","HB_PAN","HB_BUSAVG","HB_HUBAVG",
+  "LZ_HOUSTON","LZ_NORTH","LZ_SOUTH","LZ_WEST","LZ_AEN","LZ_CPS","LZ_LCRA","LZ_RAYBN",
+];
 
 export default function ErcotHistorical() {
   const [node, setNode] = useState<string>("HB_HOUSTON");
-  const [year, setYear] = useState<number>(2025);
-  const [compareYear, setCompareYear] = useState<number>(2022);
+  const [year, setYear] = useState<number>(2024);
+  const [compareYear, setCompareYear] = useState<number>(2023);
   const [showCompare, setShowCompare] = useState(false);
 
   const { data: stats, isLoading } = useListErcotNodeStats({ node, year });
