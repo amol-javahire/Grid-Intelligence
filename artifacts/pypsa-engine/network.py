@@ -124,25 +124,30 @@ _EIA_FLEET_RAW: list[tuple[str, str, float, int]] = [
 HEAT_RATE_CC  = 7500   # combined cycle
 HEAT_RATE_CT  = 10000  # combustion turbine / simple cycle
 
-# Typical capacity factors for p_max_pu defaults
+# p_max_pu by carrier:
+#   Thermal / nuclear / hydro → 1.0 (fully dispatchable up to nameplate; OPF decides)
+#   Wind / solar → overridden at runtime by wind_cf / solar_cf parameters
+#   Storage → 1.0 (OPF dispatches up to nameplate; round-trip losses not modeled in DC OPF)
 DEFAULT_CF: dict[str, float] = {
-    "gas_cc":  0.85,
-    "gas_ct":  0.75,
-    "nuclear": 0.92,
+    "gas_cc":  1.0,
+    "gas_ct":  1.0,
+    "nuclear": 0.92,   # slight derating for planned outage; nuclear runs near max always
     "wind":    0.35,   # overridden at runtime by wind_cf param
     "solar":   0.22,   # overridden at runtime by solar_cf param
-    "storage": 0.50,
-    "hydro":   0.45,
-    "biomass": 0.70,
+    "storage": 1.0,
+    "hydro":   1.0,
+    "biomass": 1.0,
 }
 
-# Typical ERCOT peak load fractions (% of ~70 GW system peak)
+# ERCOT zonal load fractions — calibrated to real ISO settlement data.
+# SOUTH aggregates LZ_SOUTH + LZ_CPS (San Antonio) + LZ_AEN + LZ_LCRA.
+# PAN (Panhandle) is generation-dominant — tiny residential load vs huge wind export.
 LOAD_FRACTIONS: dict[str, float] = {
-    "NORTH":   0.34,
-    "HOUSTON": 0.31,
-    "SOUTH":   0.16,
-    "WEST":    0.12,
-    "PAN":     0.07,
+    "HOUSTON": 0.38,   # LZ_HOUSTON: Gulf Coast industrial + residential core
+    "NORTH":   0.22,   # LZ_NORTH: Dallas / Fort Worth metro
+    "SOUTH":   0.27,   # LZ_SOUTH + CPS + AEN + LCRA: San Antonio + Hill Country
+    "WEST":    0.11,   # LZ_WEST: Permian Basin + West Texas industrial
+    "PAN":     0.02,   # Panhandle: sparse load, wind-export zone
 }
 
 # Carriers whose dispatch is hidden from the main generator table in the API
