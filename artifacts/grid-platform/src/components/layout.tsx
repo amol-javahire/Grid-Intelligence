@@ -45,7 +45,7 @@ const sidebarEntries: NavEntry[] = [
         { title: "Heat Map",          href: "/ci-heatmap",     icon: MapPin },
         { title: "Node Detail",       href: "/ci-node",        icon: Activity },
         { title: "Basis Analyzer",    href: "/ci-basis",       icon: GitBranch },
-        { title: "2026 Backtest",     href: "/ci-backtest",    icon: FlaskConical },
+        { title: "Backtest",          href: "/ci-backtest",    icon: FlaskConical },
         { title: "Data Quality",      href: "/ci-quality",     icon: ShieldCheck },
         { title: "Methodology",       href: "/ci-methodology", icon: BookMarked },
       ],

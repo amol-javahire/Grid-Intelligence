@@ -273,10 +273,18 @@ router.get("/congestion-intel/basis-compare", async (req, res) => {
   }
 });
 
-// ── 2026 Backtest ────────────────────────────────────────────────────────────
+// ── Backtest (dynamic year) ───────────────────────────────────────────────────
 router.get("/congestion-intel/backtest", async (req, res) => {
   try {
     const threshold = Number(req.query.threshold ?? 10);
+
+    // Find the most recent year with RT data — works regardless of what years are in the DB
+    const boundsRes = await db.execute<{ test_year: string }>(sql`
+      SELECT MAX(year) AS test_year FROM ercot_node_stats WHERE avg_rt_price IS NOT NULL
+    `);
+    const testYear = Number(boundsRes.rows[0]?.test_year ?? 2026);
+    const trainY1  = testYear - 2;
+    const trainY2  = testYear - 1;
 
     const rows = await db.execute<{
       node: string; node_type: string; month: number;
@@ -287,30 +295,29 @@ router.get("/congestion-intel/backtest", async (req, res) => {
         SELECT node, month,
           AVG(avg_rt_price::numeric - avg_da_price::numeric) AS predicted_basis
         FROM ercot_node_stats
-        WHERE year IN (2024, 2025) AND avg_rt_price IS NOT NULL
+        WHERE year IN (${trainY1}, ${trainY2}) AND avg_rt_price IS NOT NULL
         GROUP BY node, month
       ),
       actuals AS (
         SELECT e.node, e.month,
           (e.avg_rt_price::numeric - e.avg_da_price::numeric) AS actual_basis
         FROM ercot_node_stats e
-        WHERE e.year = 2026 AND e.avg_rt_price IS NOT NULL
+        WHERE e.year = ${testYear} AND e.avg_rt_price IS NOT NULL
       ),
       bt AS (
         SELECT
           a.node,
           n.node_type,
           a.month,
-          ROUND(t.predicted_basis::numeric, 2)                              AS predicted_basis,
-          ROUND(a.actual_basis::numeric, 2)                                 AS actual_basis,
-          ROUND(a.actual_basis::numeric - t.predicted_basis::numeric, 2)   AS error,
+          ROUND(t.predicted_basis::numeric, 2)                                AS predicted_basis,
+          ROUND(a.actual_basis::numeric, 2)                                   AS actual_basis,
+          ROUND(a.actual_basis::numeric - t.predicted_basis::numeric, 2)     AS error,
           ROUND(ABS(a.actual_basis::numeric - t.predicted_basis::numeric), 2) AS abs_error
         FROM actuals a
         JOIN training t ON a.node = t.node AND a.month = t.month
         JOIN (SELECT DISTINCT node, node_type FROM ercot_node_stats) n ON a.node = n.node
       )
-      SELECT * FROM bt
-      ORDER BY abs_error DESC
+      SELECT * FROM bt ORDER BY abs_error DESC
     `);
 
     const all = rows.rows.map(r => ({
@@ -324,7 +331,10 @@ router.get("/congestion-intel/backtest", async (req, res) => {
       predictedCongestion: Math.abs(Number(r.predicted_basis)) > threshold,
     }));
 
-    if (!all.length) { res.json({ n: 0, records: [] }); return; }
+    if (!all.length) {
+      res.json({ n: 0, testYear, trainingPeriod: `${trainY1}–${trainY2}`, testPeriod: `Year ${testYear}`, records: [] });
+      return;
+    }
 
     const mae  = all.reduce((s, r) => s + r.absError, 0) / all.length;
     const rmse = Math.sqrt(all.reduce((s, r) => s + r.error ** 2, 0) / all.length);
@@ -353,8 +363,9 @@ router.get("/congestion-intel/backtest", async (req, res) => {
 
     res.json({
       n: all.length,
-      trainingPeriod: "2024–2025",
-      testPeriod: "Jan–Apr 2026",
+      testYear,
+      trainingPeriod: `${trainY1}–${trainY2}`,
+      testPeriod: `Year ${testYear}`,
       mae:   Math.round(mae  * 100) / 100,
       rmse:  Math.round(rmse * 100) / 100,
       dirAcc: Math.round(dirAcc * 1000) / 10,

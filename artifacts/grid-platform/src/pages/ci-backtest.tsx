@@ -11,7 +11,7 @@ const MONTHS = ["","Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","
 const TS = { backgroundColor:"#0f172a", borderColor:"#1e293b", color:"#f8fafc", fontSize:11 };
 
 type BacktestResult = {
-  n: number; trainingPeriod: string; testPeriod: string;
+  n: number; testYear: number; trainingPeriod: string; testPeriod: string;
   mae: number; rmse: number; dirAcc: number;
   precision: number; recall: number; f1: number;
   tp: number; fp: number; fn: number;
@@ -36,7 +36,7 @@ export default function CIBacktest() {
     <div className="flex-1 flex items-center justify-center h-full">
       <div className="flex flex-col items-center gap-3">
         <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-        <p className="text-sm text-muted-foreground">Running backtest on {">"}4,000 node-month pairs…</p>
+        <p className="text-sm text-muted-foreground">Running backtest across all node-month pairs…</p>
       </div>
     </div>
   );
@@ -59,11 +59,11 @@ export default function CIBacktest() {
       <div className="shrink-0">
         <div className="flex items-center gap-3 mb-1">
           <FlaskConical className="h-5 w-5 text-amber-400" />
-          <h1 className="text-2xl font-bold">2026 Backtest — Seasonal Mean Model</h1>
+          <h1 className="text-2xl font-bold">{data.testYear} Backtest — Seasonal Mean Model</h1>
           <Badge variant="outline" className="text-xs border-amber-500/50 text-amber-400">Held-Out Test</Badge>
         </div>
         <p className="text-muted-foreground text-sm">
-          Seasonal mean model trained on 2024–2025 monthly basis data, evaluated against unseen Jan–Apr 2026 actuals
+          Seasonal mean model trained on {data.trainingPeriod} monthly basis data, evaluated against unseen {data.testPeriod} actuals
         </p>
       </div>
 
@@ -71,11 +71,11 @@ export default function CIBacktest() {
       <div className="shrink-0 flex items-start gap-2 text-xs text-muted-foreground bg-amber-950/20 border border-amber-800/30 rounded-md px-3 py-2.5">
         <Info className="h-3.5 w-3.5 mt-0.5 shrink-0 text-amber-400" />
         <div>
-          <span className="font-semibold text-amber-400">Model trained on 2024–2025 data and tested against unseen 2026 actuals. </span>
+          <span className="font-semibold text-amber-400">Model trained on {data.trainingPeriod} data and tested against unseen {data.testYear} actuals. </span>
           <span>
-            Prediction = mean monthly basis for each node × month combination from 2024–2025.
+            Prediction = mean monthly basis for each node × month combination from {data.trainingPeriod}.
             This is a seasonal mean baseline — the simplest credible benchmark before more complex ML.
-            {data.n.toLocaleString()} node-month test pairs across {data.byMonth.length} months of 2026.
+            {data.n.toLocaleString()} node-month test pairs across {data.byMonth.length} months of {data.testYear}.
           </span>
         </div>
       </div>
@@ -131,7 +131,7 @@ export default function CIBacktest() {
         {/* MAE by month */}
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm">MAE by Month (Jan–Apr 2026)</CardTitle>
+            <CardTitle className="text-sm">MAE by Month ({data.testPeriod})</CardTitle>
             <CardDescription className="text-xs">Average absolute prediction error across all nodes per test month</CardDescription>
           </CardHeader>
           <CardContent style={{ height: 180 }}>
