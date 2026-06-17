@@ -302,6 +302,73 @@ def battery(req: BatteryRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ---------------------------------------------------------------------------
+# Admin: Resource Node Seed
+# ---------------------------------------------------------------------------
+_seeding = False
+
+
+def _require_admin_key(key: str) -> None:
+    """Compare key against ERCOT_PASSWORD. Raise 401 on mismatch."""
+    expected = os.environ.get("ERCOT_PASSWORD", "")
+    if not expected or key != expected:
+        raise HTTPException(status_code=401, detail="Invalid admin key")
+
+
+@app.get("/admin/seed-status")
+def admin_seed_status():
+    """Return current seed job progress. Safe to poll repeatedly."""
+    from seeder import seed_status
+    return dict(seed_status)
+
+
+@app.post("/admin/seed")
+async def admin_seed(
+    background_tasks: BackgroundTasks,
+    mode: str = "quick",
+    key: str = "",
+):
+    """
+    Trigger a resource node seed run in the background.
+
+    mode=quick  CDR 12301 — public, no auth, recent 7-day window (~950 nodes, 1-2 months)
+    mode=full   ERCOT API — OAuth B2C ROPC, Jan 2024 → now (all nodes, all months)
+
+    Requires ?key=<ERCOT_PASSWORD> for auth.
+    Poll GET /pypsa/admin/seed-status for progress.
+    """
+    global _seeding
+    _require_admin_key(key)
+
+    from seeder import seed_status
+    if _seeding or seed_status.get("running"):
+        return {"status": "already_running", "seed_status": dict(seed_status)}
+
+    if mode not in ("quick", "full"):
+        raise HTTPException(status_code=400, detail="mode must be 'quick' or 'full'")
+
+    _seeding = True
+
+    def _run() -> None:
+        global _seeding
+        try:
+            if mode == "full":
+                from seeder import seed_ercot_api_full
+                seed_ercot_api_full()
+            else:
+                from seeder import seed_cdr_quick
+                seed_cdr_quick()
+        finally:
+            _seeding = False
+
+    background_tasks.add_task(_run)
+    return {
+        "status": "started",
+        "mode": mode,
+        "message": "Seed running in background — poll GET /pypsa/admin/seed-status for progress",
+    }
+
+
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", "8083"))
