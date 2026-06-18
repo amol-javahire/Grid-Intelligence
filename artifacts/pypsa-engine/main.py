@@ -51,6 +51,46 @@ def get_network():
     return get_topology()
 
 
+@app.post("/topology/seed")
+async def topology_seed(background_tasks: BackgroundTasks, key: str = ""):
+    """Reseed ercot_buses + ercot_lines from CDR 10008 + ercot_node_locations.
+    Runs in background — poll GET /pypsa/topology/seed/status.
+    Requires ?key=<ERCOT_PASSWORD>."""
+    _require_admin_key(key)
+    def _run():
+        try:
+            import seed_topology
+            seed_topology.seed()
+            logger.info("Topology seed complete")
+        except Exception as e:
+            logger.error("Topology seed failed: %s", e)
+    background_tasks.add_task(_run)
+    return {"status": "started", "message": "Seeding in background"}
+
+
+@app.get("/buses")
+def get_buses():
+    """Return all ercot_buses rows with lat/lon for map rendering."""
+    try:
+        import psycopg2
+        conn = psycopg2.connect(os.environ.get("DATABASE_URL", ""))
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT bus_name, load_zone, hub, lat, lon, location_source
+            FROM ercot_buses
+            WHERE lat IS NOT NULL ORDER BY id
+        """)
+        rows = cur.fetchall()
+        conn.close()
+        return {"buses": [
+            {"name": r[0], "zone": r[1], "hub": r[2],
+             "lat": float(r[3]), "lon": float(r[4]), "src": r[5]}
+            for r in rows
+        ], "count": len(rows)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 class OPFRequest(BaseModel):
     system_load_mw: float = 55000.0
     wind_cf: float        = 0.35
