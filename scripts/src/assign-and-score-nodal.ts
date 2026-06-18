@@ -1,18 +1,17 @@
 /**
- * assign-and-score-nodal.ts  (v4 — Resource Node Signal Scoring)
+ * assign-and-score-nodal.ts  (v5 — Real PJM Signals)
  *
- * What's new vs v3:
- *   - Loads ALL 1,100+ resource node stats from ercot_node_stats
- *   - Computes per-zone resource node averages by joining ercot_node_stats
- *     with ercot_node_locations (actual injection-point prices, not CDR zone
- *     settlement point proxies)
- *   - Each ERCOT candidate now gets resource-node-weighted zone signals for
- *     curtailment, congestion, basis risk, capture price, and market revenue
- *   - Hub/zone CDR stats kept as fallback when no resource node data available
- *   - CAISO: per-zone resource node averages from caiso_node_locations join
- *   - Queue risk (interconnect_risk) still uses hub/zone queue MW — unchanged
+ * What's new vs v4:
+ *   - PJM Haversine nearest-neighbour zone assignment against queue_projects
+ *     (same approach as ERCOT/CAISO — was previously all-WESTERN-HUB)
+ *   - Loads real PJM hub/zone DA prices, volatility, and neg_price_percent
+ *     from pjm_node_stats (12 zones: PSEG, BGE, PPL, DOM, Eastern Hub, etc.)
+ *   - PJM scoring now uses real DB signals instead of hardcoded placeholder values
+ *   - Queue zone names (AEP-DAYTON HUB, NI HUB, etc.) mapped to pjm_node_stats
+ *     node names (AEP-Dayton Hub, NI Hub, etc.)
+ *   - ERCOT/CAISO logic unchanged from v4
  *
- * Scoring dimension → DB column mapping (unchanged from v3):
+ * Scoring dimension → DB column mapping:
  *   price_score            → Capture Price   (hub/resource DA × tech timing ratio)
  *   curtailment_score      → Curtailment      (real neg_price_percent from resource nodes)
  *   interconnection_score  → Congestion       (real DA basis + volatility)
@@ -89,6 +88,27 @@ const CAISO_CONG_ADJ: Record<string, Record<string, number>> = {
   biomass:     { NP15: +6, SP15: +5, ZP26: +5 },
   nuclear:     { NP15:+12, SP15:+10, ZP26:+10 },
 };
+const PJM_CONG_ADJ: Record<string, number> = {
+  wind: -8, solar: -6, storage: +5, natural_gas: +8, nuclear: +8, hydro: +6, biomass: +4, coal: +2,
+};
+
+// Map PJM queue zone names → pjm_node_stats node names
+// Queue uses: AEP-DAYTON HUB, NI HUB, WESTERN HUB, EASTERN HUB (uppercase), JCPL, APS
+// pjm_node_stats uses: AEP-Dayton Hub, NI Hub, Western Hub, Eastern Hub, PSEG, PENELEC, PPL, BGE, DOM
+const PJM_QUEUE_ZONE_TO_NODE: Record<string, string> = {
+  "AEP-DAYTON HUB": "AEP-Dayton Hub",
+  "NI HUB":         "NI Hub",
+  "WESTERN HUB":    "Western Hub",
+  "EASTERN HUB":    "Eastern Hub",
+  "PSEG":           "PSEG",
+  "PENELEC":        "PENELEC",
+  "PPL":            "PPL",
+  "BGE":            "BGE",
+  "DOM":            "DOM",
+  // No direct pjm_node_stats equivalent — map to nearest hub
+  "JCPL":           "PSEG",   // Jersey Central Power & Light → PSEG zone
+  "APS":            "Western Hub", // Allegheny Power System → Western Hub area
+};
 
 function ercotGeoFallback(lat: number, lon: number): string {
   if (lon < -101.5) return "HB_PAN";
@@ -121,17 +141,25 @@ function curtailmentScore(
     const spreadPenalty = Math.min(3, Math.max(-3, (signalStats.avg_da - 33.25) * -0.5));
     return Math.round(Math.min(98, Math.max(5, 100 - penalty + spreadPenalty)) * 100) / 100;
   }
-  const pjmBase: Record<string, number> = {
-    natural_gas: 88, nuclear: 90, hydro: 85, storage: 80,
-    wind: 70, solar: 72, biomass: 76,
-  };
-  return pjmBase[assetType] ?? 72;
+  if (market === "PJM") {
+    // Real neg_price_percent from pjm_node_stats; PJM rarely goes negative (<2%)
+    // Asset-type multiplier applied (wind and solar have higher exposure)
+    const pjmCurtMult: Record<string, number> = {
+      wind: 1.20, solar: 1.15, storage: 0.60, natural_gas: 0.35,
+      nuclear: 0.30, hydro: 0.50, biomass: 0.45, coal: 0.40,
+    };
+    const mult = pjmCurtMult[assetType] ?? 0.70;
+    const negPct = signalStats.avg_neg_pct;
+    return Math.round(Math.min(98, Math.max(40, 100 - negPct * mult * 12)) * 100) / 100;
+  }
+  return 72;
 }
 
 function congestionScore(
   signalStats: NodeStats, assetType: string, market: string,
   queueZone: string,
   ercotBusAvg: number, ercotSysVol: number,
+  pjmBusAvg: number, pjmSysVol: number,
 ): number {
   if (market === "ERCOT") {
     const da = signalStats.avg_da;
@@ -151,15 +179,20 @@ function congestionScore(
     const assetAdj = adjMap?.[zone] ?? 0;
     return Math.round(Math.min(98, Math.max(5, 50 + basisPct * 100 - volPenalty + assetAdj)) * 100) / 100;
   }
-  const pjmBase: Record<string, number> = {
-    natural_gas: 70, nuclear: 72, hydro: 65, storage: 68, wind: 58, solar: 60, biomass: 62,
-  };
-  return pjmBase[assetType] ?? 62;
+  if (market === "PJM") {
+    // Real DA basis vs PJM weighted average + volatility penalty
+    const basisPct = (signalStats.avg_da - pjmBusAvg) / pjmBusAvg;
+    const volPenalty = ((signalStats.avg_vol - pjmSysVol) / pjmSysVol) * 6;
+    const assetAdj = PJM_CONG_ADJ[assetType] ?? 0;
+    return Math.round(Math.min(98, Math.max(15, 55 + basisPct * 120 - volPenalty + assetAdj)) * 100) / 100;
+  }
+  return 62;
 }
 
 function basisRiskScore(
   signalStats: NodeStats, market: string,
   ercotSysVol: number,
+  pjmSysVol: number,
 ): number {
   if (market === "ERCOT") {
     const vol = signalStats.avg_vol;
@@ -171,12 +204,18 @@ function basisRiskScore(
     const raw = 62 - ((signalStats.avg_vol - caRefVol) / caRefVol) * 20;
     return Math.round(Math.min(85, Math.max(15, raw)) * 100) / 100;
   }
+  if (market === "PJM") {
+    // PJM hub/zone volatility from pjm_node_stats (std dev of monthly DA)
+    const raw = 65 - ((signalStats.avg_vol - pjmSysVol) / pjmSysVol) * 18;
+    return Math.round(Math.min(88, Math.max(30, raw)) * 100) / 100;
+  }
   return 58;
 }
 
 function capturePriceScore(
   signalStats: NodeStats, assetType: string, market: string,
   ercotBusAvg: number,
+  pjmBusAvg: number,
 ): number {
   let da: number;
   let sysAvg: number;
@@ -187,12 +226,9 @@ function capturePriceScore(
     da = signalStats.avg_da;
     sysAvg = 33.25;
   } else {
-    const pjmDA: Record<string, number> = {
-      "WESTERN HUB": 38, "EASTERN HUB": 36, "NI HUB": 35, "AEP-DAYTON HUB": 35,
-      "BGE": 37, "PSEG": 38, "PPL": 36, "DOM": 35, "APS": 34, "PENELEC": 35, "JCPL": 37,
-    };
-    da = pjmDA[assetType] ?? 36;
-    sysAvg = 36;
+    // PJM: real DA from pjm_node_stats; basis vs real PJM weighted avg
+    da = signalStats.avg_da;
+    sysAvg = pjmBusAvg;
   }
   const ratio = CAPTURE_RATIO[assetType] ?? 0.90;
   const captureDA = da * ratio;
@@ -204,14 +240,8 @@ function marketRevenueScore(
   capacityMw: number, assetType: string, market: string,
   signalStats: NodeStats, ercotBusAvg: number,
 ): number {
-  let da: number;
-  if (market === "ERCOT") {
-    da = signalStats.avg_da;
-  } else if (market === "CAISO") {
-    da = signalStats.avg_da;
-  } else {
-    da = 36;
-  }
+  // Use real DA from signalStats for all markets (PJM now uses real pjm_node_stats)
+  const da = signalStats.avg_da;
   const cf = CF[assetType]?.[market] ?? 0.30;
   const captureRatio = CAPTURE_RATIO[assetType] ?? 0.90;
   const annualRevM = (capacityMw * cf * 8760 * da * captureRatio) / 1_000_000;
@@ -222,8 +252,8 @@ function marketRevenueScore(
 
 function interconnectRiskScore(
   queueZone: string, market: string,
-  ercotQueueMap: Map<string, number>, caisoQueueMap: Map<string, number>,
-  ercotMaxMw: number, caisoMaxMw: number,
+  ercotQueueMap: Map<string, number>, caisoQueueMap: Map<string, number>, pjmQueueMap: Map<string, number>,
+  ercotMaxMw: number, caisoMaxMw: number, pjmMaxMw: number,
 ): number {
   if (market === "ERCOT") {
     const queueMw = ercotQueueMap.get(queueZone) ?? 0;
@@ -235,11 +265,13 @@ function interconnectRiskScore(
     const raw = 85 - (queueMw / caisoMaxMw) * 60;
     return Math.round(Math.min(85, Math.max(22, raw)) * 100) / 100;
   }
-  const pjmBase: Record<string, number> = {
-    "WESTERN HUB": 42, "EASTERN HUB": 45, "NI HUB": 48, "AEP-DAYTON HUB": 50,
-    "BGE": 44, "PSEG": 40, "PPL": 46, "DOM": 52, "APS": 50, "PENELEC": 54, "JCPL": 42,
-  };
-  return pjmBase[queueZone] ?? 48;
+  if (market === "PJM") {
+    // Real queue MW from queue_projects by zone; same formula as ERCOT/CAISO
+    const queueMw = pjmQueueMap.get(queueZone) ?? 0;
+    const raw = 85 - (queueMw / pjmMaxMw) * 60;
+    return Math.round(Math.min(85, Math.max(22, raw)) * 100) / 100;
+  }
+  return 48;
 }
 
 function recScore(assetType: string, market: string, capacityMw: number): number {
@@ -262,7 +294,7 @@ function capacityScore(capacityMw: number): number {
 
 async function main() {
   console.log("═══════════════════════════════════════════════════════════");
-  console.log(" Nodal scoring v4 — Resource Node Signal Scoring");
+  console.log(" Nodal scoring v5 — Real PJM Signals + Resource Node LMPs");
   console.log("═══════════════════════════════════════════════════════════\n");
 
   // ── Step 0a: Load hub/zone CDR stats (fallback reference) ─────────────────
@@ -388,6 +420,57 @@ async function main() {
   const ercotMaxMw = Math.max(...ercotQueueMap.values(), 1);
   const caisoMaxMw = Math.max(...caisoQueueMap.values(), 1);
 
+  // ── Step 0e: PJM hub/zone stats from pjm_node_stats ─────────────────────
+  console.log("📡 Loading PJM hub/zone stats from pjm_node_stats (real DA/vol/neg-pct)...");
+  const _PJM_HUB_ZONES = ["Western Hub", "Eastern Hub", "NI Hub", "AEP-Dayton Hub",
+    "PSEG", "PPL", "DOM", "BGE", "PECO", "PENELEC", "ATSI", "COMED"];
+  void _PJM_HUB_ZONES; // used in SQL literal below
+
+  const pjmHubRaw = await db.execute<{
+    node: string; avg_da: string; avg_rt: string; avg_vol: string; avg_neg_pct: string;
+  }>(sql`
+    SELECT node,
+      AVG(avg_da_price)::float      AS avg_da,
+      AVG(avg_rt_price)::float      AS avg_rt,
+      AVG(volatility)::float        AS avg_vol,
+      AVG(neg_price_percent)::float AS avg_neg_pct
+    FROM pjm_node_stats
+    WHERE node IN (
+      'Western Hub', 'Eastern Hub', 'NI Hub', 'AEP-Dayton Hub',
+      'PSEG', 'PPL', 'DOM', 'BGE', 'PECO', 'PENELEC', 'ATSI', 'COMED'
+    )
+    GROUP BY node
+  `);
+
+  const pjmHubNodes = new Map<string, NodeStats>(
+    pjmHubRaw.rows.map(r => [r.node, {
+      avg_da: Number(r.avg_da), avg_rt: Number(r.avg_rt),
+      avg_vol: Number(r.avg_vol), avg_neg_pct: Number(r.avg_neg_pct),
+      source: "hub_zone" as const,
+    }])
+  );
+
+  // PJM queue depth by zone (raw queue zone names, e.g. "WESTERN HUB")
+  const pjmQueueRaw = await db.execute<{ zone: string; total_mw: string }>(sql`
+    SELECT interconnection_node AS zone, SUM(capacity_mw::float) AS total_mw
+    FROM queue_projects
+    WHERE market = 'PJM' AND interconnection_node IS NOT NULL AND capacity_mw IS NOT NULL
+    GROUP BY interconnection_node
+  `);
+  const pjmQueueMap = new Map<string, number>(pjmQueueRaw.rows.map(r => [r.zone, Number(r.total_mw)]));
+  const pjmMaxMw = Math.max(...pjmQueueMap.values(), 1);
+
+  // PJM reference values from hub/zone data
+  const pjmHubVals = [...pjmHubNodes.values()];
+  // Weighted average: use major liquid hubs (Western Hub, Eastern Hub, NI Hub, AEP-Dayton Hub) + zones
+  const pjmBusAvg = pjmHubVals.reduce((s, r) => s + r.avg_da, 0) / pjmHubVals.length;
+  const pjmSysVol = pjmHubVals.reduce((s, r) => s + r.avg_vol, 0) / pjmHubVals.length;
+
+  console.log(`   PJM hub/zones loaded: ${pjmHubNodes.size}  |  PJM BusAvg DA: $${pjmBusAvg.toFixed(2)}  |  sys vol: ${pjmSysVol.toFixed(2)}`);
+  for (const [node, s] of [...pjmHubNodes.entries()].sort((a, b) => b[1].avg_da - a[1].avg_da)) {
+    console.log(`     ${node.padEnd(18)} DA $${s.avg_da.toFixed(2)}  vol ${s.avg_vol.toFixed(2)}  neg% ${s.avg_neg_pct.toFixed(2)}%`);
+  }
+
   // Reference values from hub/zone data
   const ercotBusAvg = hubZoneNodes.get("HB_BUSAVG")?.avg_da ?? 29.11;
   const hubVals = [...hubZoneNodes.values()];
@@ -422,6 +505,15 @@ async function main() {
   function caisoSignalStats(zone: string): NodeStats {
     return caisoZoneResource.get(zone) ?? caisoZoneFallback.get(zone) ?? caisoZoneFallback.get("SP15") ?? {
       avg_da: 33.25, avg_rt: 0, avg_vol: 13.6, avg_neg_pct: 2.0, source: "hub_zone",
+    };
+  }
+
+  function pjmSignalStats(queueZone: string): NodeStats {
+    // Map queue zone name (e.g. "WESTERN HUB") → pjm_node_stats node name ("Western Hub")
+    const nodeName = PJM_QUEUE_ZONE_TO_NODE[queueZone] ?? "Western Hub";
+    return pjmHubNodes.get(nodeName) ?? {
+      avg_da: pjmBusAvg, avg_rt: pjmBusAvg, avg_vol: pjmSysVol,
+      avg_neg_pct: 0.35, source: "hub_zone",
     };
   }
 
@@ -519,19 +611,63 @@ async function main() {
   }
   console.log(`   Queue match (≤${RADIUS_KM}km): ${caisoHit}  |  geo fallback: ${caisoFall}`);
 
-  // ── Step 3: PJM ────────────────────────────────────────────────────────────
-  console.log("\n📍 PJM: using existing interconnection_node assignments...");
+  // ── Step 3: PJM Haversine nearest-neighbour (queue zone assignment) ────────
+  console.log("\n📍 PJM: Haversine nearest-neighbour (queue zone assignment)...");
+
   const pjmCandidates = await db.execute<{
-    id: number; asset_type: string; capacity_mw: string; interconnection_node: string;
+    id: number; asset_type: string; capacity_mw: string; latitude: string; longitude: string;
   }>(sql`
-    SELECT id, asset_type, capacity_mw::text,
-      COALESCE(interconnection_node, 'WESTERN HUB') AS interconnection_node
+    SELECT id, asset_type, capacity_mw::text, latitude::float::text, longitude::float::text
     FROM candidates WHERE market = 'PJM' ORDER BY id
   `);
-  console.log(`   ${pjmCandidates.rows.length} PJM candidates`);
+
+  const pjmMatches = await db.execute<{
+    candidate_id: number; queue_node: string; distance_km: string;
+  }>(sql`
+    SELECT DISTINCT ON (c.id)
+      c.id AS candidate_id,
+      q.interconnection_node AS queue_node,
+      (6371.0 * ACOS(LEAST(1.0,
+        COS(RADIANS(c.latitude::float)) * COS(RADIANS(q.latitude::float)) *
+        COS(RADIANS(q.longitude::float) - RADIANS(c.longitude::float)) +
+        SIN(RADIANS(c.latitude::float)) * SIN(RADIANS(q.latitude::float))
+      ))) AS distance_km
+    FROM candidates c
+    JOIN queue_projects q
+      ON q.market = 'PJM'
+      AND q.latitude IS NOT NULL
+      AND q.interconnection_node IS NOT NULL
+    WHERE c.market = 'PJM'
+    ORDER BY c.id, distance_km
+  `);
+
+  const pjmQueueZoneMap = new Map<number, string>();
+  let pjmHit = 0, pjmFall = 0;
+  for (const m of pjmMatches.rows) {
+    if (Number(m.distance_km) <= RADIUS_KM) {
+      pjmQueueZoneMap.set(m.candidate_id, m.queue_node);
+      pjmHit++;
+    }
+  }
+  // Geo fallback: PJM east → EASTERN HUB; mid-atlantic → PSEG/BGE; midwest → NI HUB
+  for (const c of pjmCandidates.rows) {
+    if (!pjmQueueZoneMap.has(c.id)) {
+      const lat = Number(c.latitude), lon = Number(c.longitude);
+      let zone: string;
+      if (lon >= -75.0) zone = "EASTERN HUB";  // NJ/NY coastal
+      else if (lon >= -77.5 && lat >= 38.0) zone = "BGE"; // DC/MD
+      else if (lon >= -79.5 && lat >= 39.0) zone = "PPL"; // PA east
+      else if (lat >= 41.0) zone = "NI HUB";  // Illinois/Indiana
+      else if (lon <= -82.0) zone = "AEP-DAYTON HUB"; // Ohio/WV
+      else zone = "WESTERN HUB";
+      pjmQueueZoneMap.set(c.id, zone);
+      pjmFall++;
+    }
+  }
+  console.log(`   Queue match (≤${RADIUS_KM}km): ${pjmHit}  |  geo fallback: ${pjmFall}`);
 
   // ── Step 4: Compute all 8 scores per candidate ────────────────────────────
-  console.log("\n📊 Computing all 8 dimensions per candidate (v4 resource node signals)...");
+  console.log("\n📊 Computing all 8 dimensions per candidate (v5 real PJM signals)...");
 
   interface Update {
     id: number; node: string;
@@ -550,21 +686,18 @@ async function main() {
     } else if (market === "CAISO") {
       signal = caisoSignalStats(queueZone);
     } else {
-      const pjmDA: Record<string, number> = {
-        "WESTERN HUB": 38, "EASTERN HUB": 36, "NI HUB": 35, "AEP-DAYTON HUB": 35,
-        "BGE": 37, "PSEG": 38, "PPL": 36, "DOM": 35, "APS": 34, "PENELEC": 35, "JCPL": 37,
-      };
-      signal = { avg_da: pjmDA[queueZone] ?? 36, avg_rt: 34, avg_vol: 8, avg_neg_pct: 0.5, source: "hub_zone" };
+      // PJM: real hub/zone stats from pjm_node_stats via pjmSignalStats()
+      signal = pjmSignalStats(queueZone);
     }
 
     return {
       id, node: queueZone,
       curtailment:      curtailmentScore(signal, assetType, market, ercotFleetAvgNegPct).toFixed(2),
-      congestion:       congestionScore(signal, assetType, market, queueZone, ercotBusAvg, ercotSysVol).toFixed(2),
-      basis:            basisRiskScore(signal, market, ercotSysVol).toFixed(2),
-      capturePrice:     capturePriceScore(signal, assetType, market, ercotBusAvg).toFixed(2),
+      congestion:       congestionScore(signal, assetType, market, queueZone, ercotBusAvg, ercotSysVol, pjmBusAvg, pjmSysVol).toFixed(2),
+      basis:            basisRiskScore(signal, market, ercotSysVol, pjmSysVol).toFixed(2),
+      capturePrice:     capturePriceScore(signal, assetType, market, ercotBusAvg, pjmBusAvg).toFixed(2),
       mktRevenue:       marketRevenueScore(capacityMw, assetType, market, signal, ercotBusAvg).toFixed(2),
-      interconnectRisk: interconnectRiskScore(queueZone, market, ercotQueueMap, caisoQueueMap, ercotMaxMw, caisoMaxMw).toFixed(2),
+      interconnectRisk: interconnectRiskScore(queueZone, market, ercotQueueMap, caisoQueueMap, pjmQueueMap, ercotMaxMw, caisoMaxMw, pjmMaxMw).toFixed(2),
       recScore:         recScore(assetType, market, capacityMw).toFixed(2),
       capScore:         capacityScore(capacityMw).toFixed(2),
     };
@@ -575,7 +708,7 @@ async function main() {
   for (const c of caisoCandidates.rows)
     updates.push(computeAll(c.id, caisoQueueZoneMap.get(c.id)!, c.asset_type, "CAISO", Number(c.capacity_mw)));
   for (const c of pjmCandidates.rows)
-    updates.push(computeAll(c.id, c.interconnection_node, c.asset_type, "PJM", Number(c.capacity_mw)));
+    updates.push(computeAll(c.id, pjmQueueZoneMap.get(c.id)!, c.asset_type, "PJM", Number(c.capacity_mw)));
 
   // Score preview by zone
   console.log("\n   ERCOT score preview by zone (signal source):");
@@ -589,6 +722,20 @@ async function main() {
   for (const [zone, d] of Object.entries(ercotByZone).sort((a, b) => b[1].cong.length - a[1].cong.length)) {
     const s = ercotSignalStats(zone);
     console.log(`     ${zone.padEnd(14)} [${d.source.padEnd(9)}] curt ${avg(d.curt)}  cong ${avg(d.cong)}  DA $${s.avg_da.toFixed(2)}  neg% ${s.avg_neg_pct.toFixed(1)}%  n=${d.curt.length}`);
+  }
+
+  // PJM score preview by zone
+  console.log("\n   PJM score preview by zone (real pjm_node_stats signals):");
+  const pjmByZone: Record<string, { curt: number[]; cong: number[]; capturePrice: number[] }> = {};
+  for (const u of updates.filter(u => pjmQueueZoneMap.has(u.id))) {
+    const d = (pjmByZone[u.node] ??= { curt: [], cong: [], capturePrice: [] });
+    d.curt.push(Number(u.curtailment));
+    d.cong.push(Number(u.congestion));
+    d.capturePrice.push(Number(u.capturePrice));
+  }
+  for (const [zone, d] of Object.entries(pjmByZone).sort((a, b) => b[1].cong.length - a[1].cong.length)) {
+    const s = pjmSignalStats(zone);
+    console.log(`     ${zone.padEnd(18)} curt ${avg(d.curt)}  cong ${avg(d.cong)}  cap$ ${avg(d.capturePrice)}  DA $${s.avg_da.toFixed(2)}  neg% ${s.avg_neg_pct.toFixed(2)}%  n=${d.curt.length}`);
   }
 
   // ── Step 5: Batch-update DB ────────────────────────────────────────────────
@@ -651,7 +798,8 @@ async function main() {
     console.log(`   ${r.market.padEnd(7)}  n=${r.cnt.padStart(5)}  avg=${r.avg_score}  range [${r.min_score} – ${r.max_score}]`);
 
   const resourceZones = ercotZoneResource.size;
-  console.log(`\n   Signal source: ${resourceZones > 0 ? `${resourceZones} ERCOT zones used resource node LMPs (v4)` : "hub/zone CDR fallback (v3, seed pending)"}`);
+  console.log(`\n   Signal source: ${resourceZones > 0 ? `${resourceZones} ERCOT zones used resource node LMPs` : "hub/zone CDR fallback (seed pending)"}`);
+  console.log(`   PJM: ${pjmHubNodes.size} hub/zone nodes from pjm_node_stats (DA $${pjmBusAvg.toFixed(2)} avg, range $${Math.min(...pjmHubVals.map(v=>v.avg_da)).toFixed(2)}–$${Math.max(...pjmHubVals.map(v=>v.avg_da)).toFixed(2)})`);
   console.log("\n   Dimension mapping:");
   console.log("   price_score            → Capture Price   (DA × tech timing ratio)");
   console.log("   curtailment_score      → Curtailment      (resource node neg_price_percent)");
