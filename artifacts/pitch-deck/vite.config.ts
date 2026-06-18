@@ -26,9 +26,24 @@ if (!basePath) {
   );
 }
 
+const healthCheckPlugin = {
+  name: "replit-health-check",
+  configureServer(server: import("vite").ViteDevServer) {
+    server.middlewares.use((req, res, next) => {
+      if (req.url === "/" || req.url === "") {
+        res.writeHead(200, { "Content-Type": "text/plain" });
+        res.end("OK");
+        return;
+      }
+      next();
+    });
+  },
+};
+
 export default defineConfig({
   base: basePath,
   plugins: [
+    healthCheckPlugin,
     react(),
     runtimeErrorOverlay(),
     tailwindcss(),

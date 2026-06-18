@@ -1,3 +1,5 @@
+const BASE = import.meta.env.BASE_URL;
+
 export default function Slide7LiveDemo() {
   return (
     <div className="relative w-screen h-screen overflow-hidden bg-[#0f172a]">
@@ -13,7 +15,7 @@ export default function Slide7LiveDemo() {
 
       {/* Teal glow from bottom-left */}
       <div
-        className="absolute bottom-0 left-0 w-[60vw] h-[50vh] opacity-[0.12]"
+        className="absolute bottom-0 left-0 w-[50vw] h-[50vh] opacity-[0.10]"
         style={{
           background: "radial-gradient(ellipse at 0% 100%, #14b8a6, transparent 70%)",
         }}
@@ -35,39 +37,87 @@ export default function Slide7LiveDemo() {
         </p>
       </div>
 
-      {/* Main centered content */}
-      <div className="absolute inset-0 flex flex-col items-center justify-center px-[10vw]">
-        <h2
-          className="font-display font-black tracking-tight text-center leading-[1.0]"
-          style={{ fontSize: "6.5vw", color: "#f1f5f9", textWrap: "balance" }}
-        >
-          The platform is live.
-        </h2>
+      {/* Split layout */}
+      <div className="absolute left-[8vw] right-[3vw] top-[22vh] bottom-[10vh] flex gap-[4vw] items-stretch">
 
-        <div className="mt-[3vh] h-[0.4vh] w-[12vw] bg-[#14b8a6] rounded-full" />
+        {/* Left: text content */}
+        <div className="w-[36vw] flex flex-col justify-between shrink-0">
+          <div>
+            <h2
+              className="font-display font-black tracking-tight leading-[1.0]"
+              style={{ fontSize: "5.5vw", color: "#f1f5f9", textWrap: "balance" }}
+            >
+              The platform is live.
+            </h2>
 
-        <p
-          className="font-body font-medium text-center mt-[3.5vh] max-w-[60vw] leading-relaxed"
-          style={{ fontSize: "3vw", color: "#94a3b8" }}
-        >
-          Screen all 3,875 generators, explore the ERCOT congestion heatmap, run queue depth analysis, and export ranked candidates — in a single session.
-        </p>
+            <div className="mt-[2vh] h-[0.4vh] w-[10vw] bg-[#14b8a6] rounded-full" />
 
-        {/* Three workflow callouts */}
-        <div className="flex gap-[4vw] mt-[6vh]">
-          <div className="text-center">
-            <p className="font-display font-black" style={{ fontSize: "4vw", color: "#14b8a6" }}>PPA Origination</p>
-            <p className="font-body mt-[0.5vh]" style={{ fontSize: "2.6vw", color: "#94a3b8" }}>Screen → Score → Export</p>
+            <p
+              className="font-body font-medium mt-[2.5vh] leading-relaxed"
+              style={{ fontSize: "2.4vw", color: "#94a3b8" }}
+            >
+              Screen all 3,875 generators, explore the ERCOT congestion heatmap, run queue depth analysis, and export ranked candidates — in a single session.
+            </p>
           </div>
-          <div className="w-[1px] bg-[#94a3b8]/20 self-stretch" />
-          <div className="text-center">
-            <p className="font-display font-black" style={{ fontSize: "4vw", color: "#f59e0b" }}>Queue Siting</p>
-            <p className="font-body mt-[0.5vh]" style={{ fontSize: "2.6vw", color: "#94a3b8" }}>Queue Depth → Congestion → Rank</p>
+
+          {/* Three workflow callouts */}
+          <div className="flex flex-col gap-[2vh]">
+            <div className="h-[1px] w-full bg-gradient-to-r from-[#14b8a6]/40 to-transparent" />
+
+            <div className="flex flex-col gap-[1.6vh]">
+              <div>
+                <p className="font-display font-black" style={{ fontSize: "2.8vw", color: "#14b8a6" }}>
+                  PPA Origination
+                </p>
+                <p className="font-body" style={{ fontSize: "2vw", color: "#94a3b8" }}>
+                  Screen → Score → Export
+                </p>
+              </div>
+              <div>
+                <p className="font-display font-black" style={{ fontSize: "2.8vw", color: "#f59e0b" }}>
+                  Queue Siting
+                </p>
+                <p className="font-body" style={{ fontSize: "2vw", color: "#94a3b8" }}>
+                  Queue Depth → Congestion → Rank
+                </p>
+              </div>
+              <div>
+                <p className="font-display font-black" style={{ fontSize: "2.8vw", color: "#8b5cf6" }}>
+                  Nodal Analysis
+                </p>
+                <p className="font-body" style={{ fontSize: "2vw", color: "#94a3b8" }}>
+                  DA/RT Spread → Basis Risk
+                </p>
+              </div>
+            </div>
           </div>
-          <div className="w-[1px] bg-[#94a3b8]/20 self-stretch" />
-          <div className="text-center">
-            <p className="font-display font-black" style={{ fontSize: "4vw", color: "#8b5cf6" }}>Nodal Analysis</p>
-            <p className="font-body mt-[0.5vh]" style={{ fontSize: "2.6vw", color: "#94a3b8" }}>DA/RT Spread → Basis Risk</p>
+        </div>
+
+        {/* Right: live screenshot stack */}
+        <div className="flex-1 flex flex-col gap-[1.5vh] min-w-0">
+          <p
+            className="font-body font-medium tracking-widest uppercase shrink-0"
+            style={{ fontSize: "1.6vw", color: "#14b8a6" }}
+          >
+            Live Platform · June 2026
+          </p>
+
+          {/* Main screenshot */}
+          <div className="flex-1 rounded-[0.8vw] overflow-hidden border border-[#14b8a6]/25 shadow-[0_0_48px_rgba(20,184,166,0.14)] min-h-0">
+            <img
+              src={`${BASE}screenshot-dashboard.jpg`}
+              alt="Grid Origination Platform — Dashboard overview"
+              className="w-full h-full object-cover object-top"
+            />
+          </div>
+
+          {/* Secondary screenshot strip */}
+          <div className="h-[22%] shrink-0 rounded-[0.8vw] overflow-hidden border border-[#f59e0b]/20 shadow-[0_0_32px_rgba(245,158,11,0.10)]">
+            <img
+              src={`${BASE}screenshot-queue.jpg`}
+              alt="Interconnection Queue — 3,493 projects tracked"
+              className="w-full h-full object-cover object-top"
+            />
           </div>
         </div>
       </div>

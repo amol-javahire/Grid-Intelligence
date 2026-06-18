@@ -1,3 +1,5 @@
+const BASE = import.meta.env.BASE_URL;
+
 export default function Slide4Scoring() {
   return (
     <div className="relative w-screen h-screen overflow-hidden bg-[#0f172a]">
@@ -17,83 +19,90 @@ export default function Slide4Scoring() {
         </p>
       </div>
 
-      {/* Left column: headline + hero stat */}
-      <div className="absolute left-[8vw] top-[20vh] bottom-[10vh] w-[36vw] flex flex-col justify-between">
+      {/* Left column: headline + dimensions */}
+      <div className="absolute left-[8vw] top-[20vh] bottom-[10vh] w-[38vw] flex flex-col justify-between">
         <div>
           <h2
             className="font-display font-black tracking-tight leading-[1.0]"
-            style={{ fontSize: "5vw", color: "#f1f5f9", textWrap: "balance" }}
+            style={{ fontSize: "4.6vw", color: "#f1f5f9", textWrap: "balance" }}
           >
             Eight dimensions. Every project. Fully ranked.
           </h2>
           <p
-            className="font-body font-medium mt-[3vh] leading-relaxed"
-            style={{ fontSize: "2.8vw", color: "#94a3b8" }}
+            className="font-body font-medium mt-[2.5vh] leading-relaxed"
+            style={{ fontSize: "2.4vw", color: "#94a3b8" }}
           >
-            Each EIA 860 generator receives scores sourced from real nodal and queue data — no manual analysis.
+            Each EIA 860 generator is scored from real nodal and queue data — no manual analysis.
           </p>
         </div>
 
+        {/* Dimension pills */}
+        <div className="grid grid-cols-2 gap-[0.8vw] mt-[2vh]">
+          {[
+            { label: "Congestion Risk", color: "#14b8a6" },
+            { label: "Curtailment Risk", color: "#14b8a6" },
+            { label: "Basis Risk", color: "#f59e0b" },
+            { label: "Tax Credit Eligibility", color: "#f59e0b" },
+            { label: "Sponsor Quality", color: "#8b5cf6" },
+            { label: "Interconnect Risk", color: "#8b5cf6" },
+            { label: "Capture Price", color: "#94a3b8" },
+            { label: "Market Revenue", color: "#94a3b8" },
+          ].map(({ label, color }) => (
+            <div
+              key={label}
+              className="bg-[#1e293b] rounded-[0.5vw] px-[1.2vw] py-[1vh] flex items-center gap-[1vw]"
+            >
+              <div
+                className="w-[0.5vw] h-[3vh] rounded-full shrink-0"
+                style={{ backgroundColor: color }}
+              />
+              <p
+                className="font-display font-bold leading-tight"
+                style={{ fontSize: "2vw", color: "#f1f5f9" }}
+              >
+                {label}
+              </p>
+            </div>
+          ))}
+        </div>
+
         {/* Hero stat */}
-        <div>
-          <div className="h-[1px] w-full bg-gradient-to-r from-[#14b8a6]/50 to-transparent mb-[3vh]" />
-          <p
-            className="font-display font-black tracking-tighter leading-none"
-            style={{ fontSize: "11vw", color: "#14b8a6" }}
-          >
-            3,875
-          </p>
-          <p
-            className="font-body font-medium mt-[1vh]"
-            style={{ fontSize: "2.8vw", color: "#94a3b8" }}
-          >
-            projects ranked across 3 ISO markets
-          </p>
+        <div className="mt-[2vh]">
+          <div className="h-[1px] w-full bg-gradient-to-r from-[#14b8a6]/50 to-transparent mb-[1.5vh]" />
+          <div className="flex items-baseline gap-[1vw]">
+            <p
+              className="font-display font-black tracking-tighter leading-none"
+              style={{ fontSize: "7vw", color: "#14b8a6" }}
+            >
+              3,875
+            </p>
+            <p
+              className="font-body font-medium"
+              style={{ fontSize: "2.2vw", color: "#94a3b8" }}
+            >
+              projects ranked across 3 ISO markets
+            </p>
+          </div>
         </div>
       </div>
 
       {/* Vertical divider */}
-      <div className="absolute left-[49vw] top-[20vh] bottom-[10vh] w-[1px] bg-gradient-to-b from-transparent via-[#14b8a6]/30 to-transparent" />
+      <div className="absolute left-[50vw] top-[20vh] bottom-[10vh] w-[1px] bg-gradient-to-b from-transparent via-[#14b8a6]/30 to-transparent" />
 
-      {/* Right column: dimension grid */}
-      <div className="absolute right-[6vw] top-[20vh] bottom-[10vh] w-[44vw]">
-        <div className="grid grid-cols-2 gap-[1.5vw] h-full content-start">
-          {/* Row 1 */}
-          <div className="bg-[#1e293b] rounded-[0.6vw] px-[2vw] py-[1.6vh] flex items-center gap-[1.5vw]">
-            <div className="w-[0.6vw] h-[4vh] rounded-full bg-[#14b8a6] shrink-0" />
-            <p className="font-display font-bold" style={{ fontSize: "2.8vw", color: "#f1f5f9" }}>Congestion Risk</p>
-          </div>
-          <div className="bg-[#1e293b] rounded-[0.6vw] px-[2vw] py-[1.6vh] flex items-center gap-[1.5vw]">
-            <div className="w-[0.6vw] h-[4vh] rounded-full bg-[#14b8a6] shrink-0" />
-            <p className="font-display font-bold" style={{ fontSize: "2.8vw", color: "#f1f5f9" }}>Curtailment Risk</p>
-          </div>
-          {/* Row 2 */}
-          <div className="bg-[#1e293b] rounded-[0.6vw] px-[2vw] py-[1.6vh] flex items-center gap-[1.5vw]">
-            <div className="w-[0.6vw] h-[4vh] rounded-full bg-[#f59e0b] shrink-0" />
-            <p className="font-display font-bold" style={{ fontSize: "2.8vw", color: "#f1f5f9" }}>Basis Risk</p>
-          </div>
-          <div className="bg-[#1e293b] rounded-[0.6vw] px-[2vw] py-[1.6vh] flex items-center gap-[1.5vw]">
-            <div className="w-[0.6vw] h-[4vh] rounded-full bg-[#f59e0b] shrink-0" />
-            <p className="font-display font-bold" style={{ fontSize: "2.8vw", color: "#f1f5f9" }}>Tax Credit Eligibility</p>
-          </div>
-          {/* Row 3 */}
-          <div className="bg-[#1e293b] rounded-[0.6vw] px-[2vw] py-[1.6vh] flex items-center gap-[1.5vw]">
-            <div className="w-[0.6vw] h-[4vh] rounded-full bg-[#8b5cf6] shrink-0" />
-            <p className="font-display font-bold" style={{ fontSize: "2.8vw", color: "#f1f5f9" }}>Sponsor Quality</p>
-          </div>
-          <div className="bg-[#1e293b] rounded-[0.6vw] px-[2vw] py-[1.6vh] flex items-center gap-[1.5vw]">
-            <div className="w-[0.6vw] h-[4vh] rounded-full bg-[#8b5cf6] shrink-0" />
-            <p className="font-display font-bold" style={{ fontSize: "2.8vw", color: "#f1f5f9" }}>Interconnect Risk</p>
-          </div>
-          {/* Row 4 */}
-          <div className="bg-[#1e293b] rounded-[0.6vw] px-[2vw] py-[1.6vh] flex items-center gap-[1.5vw]">
-            <div className="w-[0.6vw] h-[4vh] rounded-full bg-[#94a3b8] shrink-0" />
-            <p className="font-display font-bold" style={{ fontSize: "2.8vw", color: "#f1f5f9" }}>Capture Price</p>
-          </div>
-          <div className="bg-[#1e293b] rounded-[0.6vw] px-[2vw] py-[1.6vh] flex items-center gap-[1.5vw]">
-            <div className="w-[0.6vw] h-[4vh] rounded-full bg-[#94a3b8] shrink-0" />
-            <p className="font-display font-bold" style={{ fontSize: "2.8vw", color: "#f1f5f9" }}>Market Revenue</p>
-          </div>
+      {/* Right column: live screenshot */}
+      <div className="absolute right-[3vw] top-[20vh] bottom-[10vh] w-[44vw] flex flex-col">
+        <p
+          className="font-body font-medium mb-[1.2vh] tracking-widest uppercase"
+          style={{ fontSize: "1.6vw", color: "#14b8a6" }}
+        >
+          Live — ERCOT Congestion Analysis
+        </p>
+        <div className="flex-1 rounded-[0.8vw] overflow-hidden border border-[#14b8a6]/20 shadow-[0_0_40px_rgba(20,184,166,0.12)]">
+          <img
+            src={`${BASE}screenshot-congestion.jpg`}
+            alt="ERCOT Congestion Analysis — DA-RT spread ranking"
+            className="w-full h-full object-cover object-top"
+          />
         </div>
       </div>
 
