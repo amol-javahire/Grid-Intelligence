@@ -19,10 +19,17 @@ async function runSafeQuery(query: string): Promise<{ columns: string[]; rows: R
 }
 
 router.post("/chat", async (req, res) => {
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+
+  const sendEvent = (data: Record<string, unknown>) => res.write(`data: ${JSON.stringify(data)}\n\n`);
+
   try {
     const { messages } = req.body;
     if (!messages || !Array.isArray(messages)) {
-      res.status(400).json({ error: "messages array required" });
+      sendEvent({ error: "messages array required" });
+      res.end();
       return;
     }
 
@@ -90,9 +97,9 @@ router.post("/chat", async (req, res) => {
         `  ${r.node.padEnd(16)}${r.node_type ? r.node_type.padEnd(12) : ""}DA=$${String(r.avg_da).padStart(6)}  ${r.avg_rt !== undefined ? `RT=$${String(r.avg_rt).padStart(6)}  ` : ""}vol=${String(r.avg_vol).padStart(6)}  neg%=${String(r.neg_pct).padStart(5)}%  (${r.months}mo)`
       ).join("\n");
 
-    const systemPrompt = `You are the Grid Origination Copilot — an expert AI assistant for power market siting, PPA origination, and energy procurement across ERCOT, CAISO, and PJM.
+    const systemPrompt = `You are the Grid Origination Copilot — an expert AI assistant for power market siting, PPA origination, and energy procurement across ERCOT, CAISO, and PJM. You are advising Walmart's energy procurement team.
 
-You have a live PostgreSQL database with real market data. Use the run_sql tool when you need specific data not already shown below.
+You have a live PostgreSQL database with real market data. Use the run_sql tool when you need specific data not already shown below. Always be quantitative and cite data sources.
 
 ━━━ DATABASE SCHEMA ━━━
 TABLE candidates  (3,875 rows — EIA 860 operable generators >1 MW)
@@ -145,7 +152,8 @@ ${pipelineSummary.rows.map(r => `  ${r.market.padEnd(7)} ${r.asset_type.padEnd(1
 - Congestion risk ↑ when volatility is high and DA-RT spreads are wide.
 - Curtailment risk ↑ when neg_price_percent is high (ERCOT wind LZ_WEST ~7-22%, solar worse).
 - Basis risk = DA-RT settlement spread + volatility at the project's delivery node.
-- Be quantitative and cite the data source (CDR 13060/13061 for ERCOT, OASIS for CAISO).`;
+- Be quantitative and cite the data source (CDR 13060/13061 for ERCOT, OASIS for CAISO).
+- Format responses with clear headers, bullet points, and tables where appropriate.`;
 
     const tools: Parameters<typeof openai.chat.completions.create>[0]["tools"] = [
       {
@@ -164,7 +172,7 @@ ${pipelineSummary.rows.map(r => `  ${r.market.padEnd(7)} ${r.asset_type.padEnd(1
               },
               rationale: {
                 type: "string",
-                description: "One-line reason for the query",
+                description: "One-line reason for the query (shown to user as loading indicator)",
               },
             },
             required: ["query", "rationale"],
@@ -178,13 +186,13 @@ ${pipelineSummary.rows.map(r => `  ${r.market.padEnd(7)} ${r.asset_type.padEnd(1
       ...(messages as Parameters<typeof openai.chat.completions.create>[0]["messages"]),
     ];
 
-    const MAX_TOOL_ROUNDS = 3;
+    const MAX_TOOL_ROUNDS = 4;
     let toolRounds = 0;
 
     while (toolRounds < MAX_TOOL_ROUNDS) {
       const response = await openai.chat.completions.create({
-        model: "gpt-4o",
-        max_tokens: 2048,
+        model: "gpt-5.4",
+        max_completion_tokens: 8192,
         messages: apiMessages,
         tools,
         tool_choice: "auto",
@@ -197,13 +205,18 @@ ${pipelineSummary.rows.map(r => `  ${r.market.padEnd(7)} ${r.asset_type.padEnd(1
         for (const toolCall of choice.message.tool_calls) {
           if (toolCall.function.name === "run_sql") {
             let toolResult: string;
+            let rationale = "Querying database...";
             try {
               const args = JSON.parse(toolCall.function.arguments) as { query: string; rationale: string };
+              rationale = args.rationale ?? rationale;
               req.log.info({ query: args.query }, "copilot sql query");
+              sendEvent({ type: "sql_query", rationale });
               const result = await runSafeQuery(args.query);
+              sendEvent({ type: "sql_done", rows: result.rows.length });
               toolResult = JSON.stringify({ rows: result.rows, count: result.rows.length });
             } catch (err) {
               toolResult = JSON.stringify({ error: String(err) });
+              sendEvent({ type: "sql_error", error: String(err) });
             }
             apiMessages.push({ role: "tool", tool_call_id: toolCall.id, content: toolResult });
           }
@@ -214,28 +227,23 @@ ${pipelineSummary.rows.map(r => `  ${r.market.padEnd(7)} ${r.asset_type.padEnd(1
       }
     }
 
-    res.setHeader("Content-Type", "text/event-stream");
-    res.setHeader("Cache-Control", "no-cache");
-    res.setHeader("Connection", "keep-alive");
-
     const stream = await openai.chat.completions.create({
-      model: "gpt-4o",
-      max_tokens: 2048,
+      model: "gpt-5.4",
+      max_completion_tokens: 8192,
       messages: apiMessages,
       stream: true,
     });
 
     for await (const chunk of stream) {
       const content = chunk.choices[0]?.delta?.content;
-      if (content) res.write(`data: ${JSON.stringify({ content })}\n\n`);
+      if (content) sendEvent({ content });
     }
 
-    res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
+    sendEvent({ done: true });
     res.end();
   } catch (err) {
     req.log.error({ err }, "chat error");
-    res.setHeader("Content-Type", "text/event-stream");
-    res.write(`data: ${JSON.stringify({ error: "Failed to generate response" })}\n\n`);
+    sendEvent({ error: "Failed to generate response. Please try again." });
     res.end();
   }
 });
