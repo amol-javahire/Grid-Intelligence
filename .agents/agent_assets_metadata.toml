@@ -6,3 +6,15 @@ id = "l3cu-mSXV-oqstn2STiJ3"
 uri = "file://modelling-aeso-prompt.md"
 type = "text"
 title = "Modelling AESO — Full Build Specification"
+
+[[outputs]]
+id = "sZ0uOqmgJKmy5lGZXA3SR"
+uri = "file://.local/outputs/Grid-Origination-Intelligence-Platform.pptx"
+type = "slides"
+title = "Grid Origination Intelligence Platform (PPTX)"
+
+[[outputs]]
+id = "ySum3mjirCvt501vsNOv4"
+uri = "file://.local/outputs/Grid-Origination-Intelligence-Platform.pdf"
+type = "pdf"
+title = "Grid Origination Intelligence Platform (PDF)"
