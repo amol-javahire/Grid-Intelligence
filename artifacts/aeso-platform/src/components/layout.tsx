@@ -8,7 +8,8 @@ import {
   AlertTriangle, 
   CalendarDays, 
   ListOrdered, 
-  Route 
+  Route,
+  BrainCircuit,
 } from "lucide-react";
 
 const navItems = [
@@ -20,6 +21,7 @@ const navItems = [
   { href: "/7day-capacity", label: "7-Day Capacity", icon: CalendarDays },
   { href: "/queue", label: "Queue", icon: ListOrdered },
   { href: "/congestion", label: "Congestion", icon: Route },
+  { href: "/qa", label: "Market Copilot", icon: BrainCircuit },
 ];
 
 export function Layout({ children }: { children: ReactNode }) {

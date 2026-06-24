@@ -273,4 +273,267 @@ ${pipelineSummary.rows.map(r => `  ${r.market.padEnd(7)} ${r.asset_type.padEnd(1
   }
 });
 
+// ─── AESO Copilot ─────────────────────────────────────────────────────────────
+
+router.post("/aeso/chat", async (req, res) => {
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+
+  const sendEvent = (data: Record<string, unknown>) => res.write(`data: ${JSON.stringify(data)}\n\n`);
+
+  try {
+    const { messages } = req.body;
+    if (!messages || !Array.isArray(messages)) {
+      sendEvent({ error: "messages array required" });
+      res.end();
+      return;
+    }
+
+    const [poolPriceStats, genMix, smpStats, supplyDemand, queueStats, assetList] = await Promise.all([
+      db.execute<{ year: number; month: number; avg_price: string; max_price: string; spikes: string }>(sql`
+        SELECT EXTRACT(YEAR FROM date)::int AS year, EXTRACT(MONTH FROM date)::int AS month,
+               ROUND(AVG(pool_price)::numeric, 2)::text AS avg_price,
+               ROUND(MAX(pool_price)::numeric, 2)::text AS max_price,
+               COUNT(CASE WHEN pool_price >= 999 THEN 1 END)::text AS spikes
+        FROM aeso_pool_price
+        WHERE date >= NOW() - INTERVAL '12 months'
+        GROUP BY year, month ORDER BY year, month
+        LIMIT 24
+      `),
+      db.execute<{ fuel_type: string; avg_mw: string; pct: string }>(sql`
+        SELECT fuel_type,
+               ROUND(AVG(generation_mw)::numeric, 1)::text AS avg_mw,
+               ROUND(100.0 * AVG(generation_mw) / NULLIF(SUM(AVG(generation_mw)) OVER (), 0), 1)::text AS pct
+        FROM aeso_generation_mix
+        WHERE date >= NOW() - INTERVAL '6 months'
+        GROUP BY fuel_type ORDER BY AVG(generation_mw) DESC
+      `),
+      db.execute<{ year: number; month: number; avg_constrained: string; avg_unconstrained: string; avg_spread: string }>(sql`
+        SELECT EXTRACT(YEAR FROM date)::int AS year, EXTRACT(MONTH FROM date)::int AS month,
+               ROUND(AVG(constrained_price)::numeric, 2)::text AS avg_constrained,
+               ROUND(AVG(unconstrained_price)::numeric, 2)::text AS avg_unconstrained,
+               ROUND(AVG(spread)::numeric, 2)::text AS avg_spread
+        FROM aeso_smp
+        WHERE date >= NOW() - INTERVAL '6 months'
+        GROUP BY year, month ORDER BY year, month LIMIT 12
+      `),
+      db.execute<{ avg_ail: string; min_ail: string; max_ail: string; avg_reserve: string }>(sql`
+        SELECT ROUND(AVG(ail_mw)::numeric, 0)::text AS avg_ail,
+               ROUND(MIN(ail_mw)::numeric, 0)::text AS min_ail,
+               ROUND(MAX(ail_mw)::numeric, 0)::text AS max_ail,
+               ROUND(AVG(reserve_margin_pct)::numeric, 1)::text AS avg_reserve
+        FROM aeso_supply_demand
+        WHERE date >= NOW() - INTERVAL '3 months'
+      `),
+      db.execute<{ fuel_type: string; projects: string; total_mw: string }>(sql`
+        SELECT fuel_type, COUNT(*)::text AS projects,
+               ROUND(SUM(capacity_mw::float)::numeric, 0)::text AS total_mw
+        FROM aeso_queue_projects WHERE capacity_mw IS NOT NULL
+        GROUP BY fuel_type ORDER BY SUM(capacity_mw::float) DESC LIMIT 10
+      `),
+      db.execute<{ asset_type: string; count: string; total_mw: string }>(sql`
+        SELECT asset_type, COUNT(*)::text AS count,
+               ROUND(SUM(max_capability_mw::float)::numeric, 0)::text AS total_mw
+        FROM aeso_asset_registry
+        GROUP BY asset_type ORDER BY SUM(max_capability_mw::float) DESC LIMIT 10
+      `),
+    ]);
+
+    const systemPrompt = `You are the AESO Market Copilot — an expert AI assistant for Alberta's electricity market. You help analysts, traders, and energy professionals understand Alberta's power system, pool prices, generation mix, transmission constraints, and market dynamics.
+
+You have a live PostgreSQL database with real AESO data. Use the run_sql tool to retrieve specific data when needed.
+
+━━━ ALBERTA MARKET CONTEXT ━━━
+Alberta runs an energy-only deregulated electricity market. The pool price is set hourly by the system marginal unit (merit order). Prices can spike to $999.99/MWh (price cap) during scarcity. There are no capacity payments. 
+Key players: AltaLink (transmission), ATCO Electric (transmission), ENMAX, Capital Power, TransAlta, Heartland Generation, Cenovus, Shell, EDF, etc.
+BC intertie: ~1,200 MW import / 1,800 MW export rated capacity.
+SK intertie: ~153 MW each way.
+SMP (System Marginal Price) = unconstrained market clearing price. Pool Price > SMP = congestion rent.
+
+━━━ DATABASE SCHEMA ━━━
+TABLE aeso_pool_price  — hourly Alberta pool price
+  date DATE, hour_ending INT, pool_price NUMERIC,
+  rolling_30d_avg NUMERIC, day_ahead_forecast_price NUMERIC
+
+TABLE aeso_actual_forecast  — AIL + price forecasts vs actuals
+  date DATE, hour_ending INT, actual_pool_price NUMERIC, forecast_pool_price NUMERIC,
+  actual_ail_mw NUMERIC, forecast_ail_mw NUMERIC,
+  actual_wind_mw NUMERIC, forecast_wind_mw NUMERIC,
+  actual_solar_mw NUMERIC, forecast_solar_mw NUMERIC
+
+TABLE aeso_generation_mix  — hourly gen by fuel type
+  date DATE, hour_ending INT, fuel_type TEXT, generation_mw NUMERIC, capacity_mw NUMERIC
+
+TABLE aeso_supply_demand  — system-wide supply/demand snapshot
+  date DATE, hour_ending INT, ail_mw NUMERIC, total_capability_mw NUMERIC,
+  net_to_grid_mw NUMERIC, reserve_margin_pct NUMERIC, net_interchange_mw NUMERIC,
+  bc_interchange_mw NUMERIC, sk_interchange_mw NUMERIC, load_outage_mw NUMERIC
+
+TABLE aeso_smp  — system marginal price (congestion indicator)
+  date DATE, hour_ending INT, constrained_price NUMERIC, unconstrained_price NUMERIC,
+  spread NUMERIC, volume_mw NUMERIC
+  -- spread > 0 means congestion rent; negative spread is unusual/rare
+
+TABLE aeso_merit_order  — hourly supply stack (offer blocks per generator)
+  date DATE, hour_ending INT, merit_order_rank INT,
+  asset_id TEXT, asset_name TEXT, pool_participant_id TEXT, fuel_type TEXT,
+  block_mw NUMERIC, offer_price NUMERIC, dispatched_mw NUMERIC,
+  cumulative_mw NUMERIC, is_marginal BOOLEAN
+
+TABLE aeso_interchange  — BC/SK actual + scheduled flows
+  date DATE, hour_ending INT, intertie_or_flowgate TEXT,
+  transfer_type TEXT, data_type TEXT,
+  scheduled_mw NUMERIC, actual_mw NUMERIC, net_mw NUMERIC
+
+TABLE aeso_intertie_outage  — BC/SK flowgate outages
+  date DATE, hour_ending INT, intertie_or_flowgate TEXT,
+  outage_mw NUMERIC, available_transfer_mw NUMERIC, outage_type TEXT
+
+TABLE aeso_unit_commitment  — generator commitment schedules
+  date DATE, hour_ending INT, asset_id TEXT, fuel_type TEXT,
+  committed_mw NUMERIC, dispatched_mw NUMERIC, available_mw NUMERIC, must_run BOOLEAN
+
+TABLE aeso_operating_reserve  — FFR, spinning, contingency reserve offers
+  date DATE, hour_ending INT, reserve_type TEXT, offered_mw NUMERIC,
+  clearing_price NUMERIC, required_mw NUMERIC, shortfall_mw NUMERIC
+
+TABLE aeso_metered_volume  — actual generator output (metered)
+  date DATE, hour_ending INT, asset_id TEXT, pool_participant_id TEXT,
+  fuel_type TEXT, metered_volume_mwh NUMERIC
+
+TABLE aeso_asset_registry  — AIES registered generation assets
+  asset_id TEXT, asset_name TEXT, pool_participant_id TEXT, asset_type TEXT,
+  operating_status TEXT, max_capability_mw NUMERIC, min_capability_mw NUMERIC
+
+TABLE aeso_pool_participants  — registered market participants
+  pool_participant_id TEXT, pool_participant_name TEXT
+
+TABLE aeso_queue_projects  — Alberta interconnection queue
+  project_name TEXT, fuel_type TEXT, capacity_mw NUMERIC, status TEXT,
+  region TEXT, queue_date DATE
+
+TABLE aeso_generation_outage  — AIES unit outage tracking
+  date DATE, hour_ending INT, asset_type TEXT, outage_mw NUMERIC,
+  available_mw NUMERIC, planned_outage_mw NUMERIC, forced_outage_mw NUMERIC
+
+TABLE aeso_7day_capability  — 7-day ahead generation capability forecast
+  date DATE, hour_ending INT, fuel_type TEXT, capability_mw NUMERIC
+
+TABLE aeso_transmission_corridors  — key AB transmission corridors
+  corridor_name TEXT, from_region TEXT, to_region TEXT, rating_mw NUMERIC,
+  congestion_frequency_pct NUMERIC
+
+━━━ LIVE POOL PRICE (last 12 months, monthly) ━━━
+${poolPriceStats.rows.map(r => `  ${r.year}-${String(r.month).padStart(2, "0")}  avg=$${r.avg_price}  max=$${r.max_price}  spikes=${r.spikes}`).join("\n")}
+
+━━━ GENERATION MIX (last 6 months avg) ━━━
+${genMix.rows.map(r => `  ${r.fuel_type.padEnd(16)} ${r.avg_mw.padStart(7)} MW  ${r.pct}%`).join("\n")}
+
+━━━ SMP CONGESTION RENT (last 6 months) ━━━
+${smpStats.rows.map(r => `  ${r.year}-${String(r.month).padStart(2, "0")}  constrained=$${r.avg_constrained}  SMP=$${r.avg_unconstrained}  spread=$${r.avg_spread}`).join("\n")}
+
+━━━ SUPPLY/DEMAND (last 90 days) ━━━
+  Avg AIL: ${supplyDemand.rows[0]?.avg_ail ?? "—"} MW  |  Range: ${supplyDemand.rows[0]?.min_ail ?? "—"}–${supplyDemand.rows[0]?.max_ail ?? "—"} MW  |  Avg Reserve Margin: ${supplyDemand.rows[0]?.avg_reserve ?? "—"}%
+
+━━━ INTERCONNECTION QUEUE (by fuel type) ━━━
+${queueStats.rows.map(r => `  ${r.fuel_type.padEnd(14)} ${r.projects.padStart(4)} projects  ${r.total_mw.padStart(8)} MW`).join("\n")}
+
+━━━ AIES ASSET REGISTRY ━━━
+${assetList.rows.map(r => `  ${r.asset_type.padEnd(16)} ${r.count.padStart(4)} assets  ${r.total_mw.padStart(8)} MW`).join("\n")}
+
+━━━ GUIDANCE ━━━
+- run_sql for: pool price time-series, merit order stack at a specific hour, SMP spread trends, operating reserve shortfalls, generator commitment patterns, intertie utilization, specific asset performance
+- Prices in $/MWh. Pool price is hourly. $999.99 = price cap (scarcity event).
+- When asked about congestion: check aeso_smp.spread and aeso_intertie_outage
+- For supply stack analysis: use aeso_merit_order (offer_price, cumulative_mw, is_marginal)
+- Format responses with clear headers and bullet points. Always cite the data source (AESO API endpoint or table name).`;
+
+    const tools: Parameters<typeof openai.chat.completions.create>[0]["tools"] = [
+      {
+        type: "function",
+        function: {
+          name: "run_sql",
+          description: "Execute a read-only SELECT query against the AESO PostgreSQL database.",
+          parameters: {
+            type: "object",
+            properties: {
+              query: { type: "string", description: "A valid PostgreSQL SELECT statement with LIMIT ≤300." },
+              rationale: { type: "string", description: "One-line reason shown to the user while querying." },
+            },
+            required: ["query", "rationale"],
+          },
+        },
+      },
+    ];
+
+    const apiMessages: Parameters<typeof openai.chat.completions.create>[0]["messages"] = [
+      { role: "system", content: systemPrompt },
+      ...(messages as Parameters<typeof openai.chat.completions.create>[0]["messages"]),
+    ];
+
+    const MAX_TOOL_ROUNDS = 4;
+    let toolRounds = 0;
+
+    while (toolRounds < MAX_TOOL_ROUNDS) {
+      const response = await openai.chat.completions.create({
+        model: "gpt-5.4",
+        max_completion_tokens: 8192,
+        messages: apiMessages,
+        tools,
+        tool_choice: "auto",
+      });
+
+      const choice = response.choices[0];
+      if (choice.finish_reason === "tool_calls" && choice.message.tool_calls?.length) {
+        apiMessages.push(choice.message);
+        for (const toolCall of choice.message.tool_calls) {
+          if (toolCall.function.name === "run_sql") {
+            let toolResult: string;
+            try {
+              const args = JSON.parse(toolCall.function.arguments) as { query: string; rationale: string };
+              req.log.info({ query: args.query }, "aeso copilot sql");
+              sendEvent({ type: "sql_query", rationale: args.rationale ?? "Querying AESO data..." });
+              const result = await runSafeQuery(args.query);
+              sendEvent({ type: "sql_done", rows: result.rows.length });
+              const displayRows = result.rows.slice(0, TABLE_DISPLAY_LIMIT);
+              sendEvent({ type: "table", columns: result.columns, rows: displayRows, totalRows: result.rows.length });
+              if (result.columns.length >= 2 && isTimeSeries(result.columns)) {
+                sendEvent({ type: "chart", chartType: "timeseries", columns: result.columns, rows: displayRows });
+              }
+              toolResult = JSON.stringify({ rows: result.rows, count: result.rows.length });
+            } catch (err) {
+              toolResult = JSON.stringify({ error: String(err) });
+              sendEvent({ type: "sql_error", error: String(err) });
+            }
+            apiMessages.push({ role: "tool", tool_call_id: toolCall.id, content: toolResult });
+          }
+        }
+        toolRounds++;
+      } else {
+        break;
+      }
+    }
+
+    const stream = await openai.chat.completions.create({
+      model: "gpt-5.4",
+      max_completion_tokens: 8192,
+      messages: apiMessages,
+      stream: true,
+    });
+
+    for await (const chunk of stream) {
+      const content = chunk.choices[0]?.delta?.content;
+      if (content) sendEvent({ content });
+    }
+
+    sendEvent({ done: true });
+    res.end();
+  } catch (err) {
+    req.log.error({ err }, "aeso chat error");
+    sendEvent({ error: "Failed to generate response. Please try again." });
+    res.end();
+  }
+});
+
 export default router;
