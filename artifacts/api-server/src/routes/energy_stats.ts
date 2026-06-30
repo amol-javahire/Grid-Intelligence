@@ -682,7 +682,10 @@ router.get("/ercot/bus-load", async (req, res) => {
     const bus   = String(req.query.bus   ?? "");
     const year  = Number(req.query.year  ?? 2024);
     const month = Number(req.query.month ?? 1);
-    if (!bus) return res.status(400).json({ error: "bus parameter required" });
+    if (!bus) {
+      res.status(400).json({ error: "bus parameter required" });
+      return;
+    }
 
     const rows = await db.execute<{
       day: number; hour: number;
@@ -705,10 +708,11 @@ router.get("/ercot/bus-load", async (req, res) => {
       ORDER  BY lbz.day, lbz.hour
     `);
     if (!rows.rows.length) {
-      return res.status(404).json({
+      res.status(404).json({
         error: "not_found",
         message: `No data for bus=${bus}. Ensure shift factors are seeded and ercot_load_by_zone covers year=${year} month=${month}.`,
       });
+      return;
     }
     res.json(rows.rows.map(r => ({
       day:           Number(r.day),
@@ -735,7 +739,8 @@ router.get("/temperature", async (req, res) => {
     const year  = Number(req.query.year  || 2025);
     const month = Number(req.query.month || 7);
     if (!["ERCOT", "CAISO"].includes(iso)) {
-      return res.status(400).json({ error: "bad_request", message: "iso must be ERCOT or CAISO" });
+      res.status(400).json({ error: "bad_request", message: "iso must be ERCOT or CAISO" });
+      return;
     }
     const rows = await db.execute<{
       zone: string; day: number; hour: number; temp_f: number; temp_c: number;
