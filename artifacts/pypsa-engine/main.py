@@ -98,10 +98,11 @@ def get_buses():
 
 
 class OPFRequest(BaseModel):
-    system_load_mw: float = 55000.0
-    wind_cf: float        = 0.35
-    solar_cf: float       = 0.22
-    gas_price_mmbtu: float = 3.50
+    system_load_mw: float       = 55000.0
+    wind_cf: float              = 0.35
+    solar_cf: float             = 0.22
+    gas_price_mmbtu: float      = 3.50
+    simulation_datetime: str | None = None   # ISO8601 e.g. "2024-08-20T15:00:00"
 
 
 @app.post("/opf")
@@ -113,6 +114,7 @@ def run_opf(req: OPFRequest):
             wind_cf=req.wind_cf,
             solar_cf=req.solar_cf,
             gas_price_mmbtu=req.gas_price_mmbtu,
+            simulation_datetime=req.simulation_datetime,
         )
         if "error" in result:
             raise HTTPException(status_code=422, detail=result["error"])

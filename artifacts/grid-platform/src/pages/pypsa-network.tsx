@@ -3,7 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
-import { Loader2, Zap, Network, TrendingUp, Info } from "lucide-react";
+import { Loader2, Zap, Network, TrendingUp, Info, Calendar, Settings2 } from "lucide-react";
 import { useState, useMemo, useEffect } from "react";
 import { MapContainer, TileLayer, CircleMarker, Polyline, Tooltip, useMap } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
@@ -68,6 +68,7 @@ interface OPFResult {
   bus_count: number;
   line_count: number;
   model_version: string;
+  data_source: string;
   system_load_mw: number;
   avg_lmp: number; max_lmp: number; min_lmp: number; lmp_spread: number;
   wind_mw: number; solar_mw: number; nuclear_mw: number; gas_mw: number;
@@ -78,6 +79,18 @@ interface OPFResult {
   lines: OPFLine[];
   generators: OPFGen[];
 }
+
+const FUEL_COLORS: Record<string, string> = {
+  natural_gas: "#f59e0b", wind: "#14b8a6", solar: "#fbbf24",
+  nuclear: "#8b5cf6", coal: "#78716c", hydro: "#06b6d4",
+  storage: "#94a3b8", other: "#6b7280",
+};
+
+const HOURS = Array.from({ length: 24 }, (_, i) => {
+  const h = i % 12 || 12;
+  const ampm = i < 12 ? "AM" : "PM";
+  return { value: i, label: `${String(h).padStart(2, "0")}:00 ${ampm}` };
+});
 
 // ── Map bounds fitter ─────────────────────────────────────────────────────────
 function BoundsFitter({ buses }: { buses: OPFBus[] }) {
@@ -117,6 +130,11 @@ export default function PypsaNetwork() {
   const [loadMw,   setLoadMw]   = useState(55000);
   const [dirty,    setDirty]    = useState(false);
   const [selectedBus, setSelectedBus] = useState<OPFBus | null>(null);
+
+  // Historical mode
+  const [historicalMode, setHistoricalMode] = useState(false);
+  const [selectedDate, setSelectedDate] = useState("2024-08-20");
+  const [selectedHour, setSelectedHour] = useState(15);
 
   // ── Load default OPF (cached on engine startup) ───────────────────────────
   const defaultQ = useQuery<OPFResult>({
@@ -213,66 +231,149 @@ export default function PypsaNetwork() {
         </div>
       </div>
 
-      {/* Scenario controls */}
+      {/* Mode toggle + controls */}
       <Card className="bg-card border-border">
         <CardHeader className="pb-3">
-          <CardTitle className="text-sm font-medium text-muted-foreground uppercase tracking-wide">
-            Scenario Parameters
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
-            <div>
-              <div className="flex justify-between text-xs mb-1">
-                <span className="text-muted-foreground">System Load</span>
-                <span className="font-mono text-teal-400">{(loadMw/1000).toFixed(0)} GW</span>
-              </div>
-              <Slider min={30000} max={75000} step={1000} value={[loadMw]}
-                onValueChange={([v]) => { setLoadMw(v); setDirty(true); }} />
-            </div>
-            <div>
-              <div className="flex justify-between text-xs mb-1">
-                <span className="text-muted-foreground">Wind CF</span>
-                <span className="font-mono text-teal-400">{windCf}%</span>
-              </div>
-              <Slider min={5} max={65} step={1} value={[windCf]}
-                onValueChange={([v]) => { setWindCf(v); setDirty(true); }} />
-            </div>
-            <div>
-              <div className="flex justify-between text-xs mb-1">
-                <span className="text-muted-foreground">Solar CF</span>
-                <span className="font-mono text-amber-400">{solarCf}%</span>
-              </div>
-              <Slider min={0} max={35} step={1} value={[solarCf]}
-                onValueChange={([v]) => { setSolarCf(v); setDirty(true); }} />
-            </div>
-            <div>
-              <div className="flex justify-between text-xs mb-1">
-                <span className="text-muted-foreground">Gas Price</span>
-                <span className="font-mono text-orange-400">${(gasPrice/100).toFixed(2)}/MMBtu</span>
-              </div>
-              <Slider min={200} max={800} step={10} value={[gasPrice]}
-                onValueChange={([v]) => { setGasPrice(v); setDirty(true); }} />
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-sm font-medium text-muted-foreground uppercase tracking-wide">
+              {historicalMode ? "Historical ERCOT Conditions" : "Scenario Parameters"}
+            </CardTitle>
+            <div className="flex rounded-md overflow-hidden border border-border text-xs">
+              <button
+                onClick={() => { setHistoricalMode(false); setDirty(true); }}
+                className={`flex items-center gap-1 px-3 py-1.5 transition-colors ${
+                  !historicalMode
+                    ? "bg-teal-600 text-white"
+                    : "text-muted-foreground hover:bg-muted/50"
+                }`}>
+                <Settings2 className="h-3 w-3" />
+                Scenario
+              </button>
+              <button
+                onClick={() => { setHistoricalMode(true); setDirty(true); }}
+                className={`flex items-center gap-1 px-3 py-1.5 transition-colors ${
+                  historicalMode
+                    ? "bg-teal-600 text-white"
+                    : "text-muted-foreground hover:bg-muted/50"
+                }`}>
+                <Calendar className="h-3 w-3" />
+                Historical
+              </button>
             </div>
           </div>
+          {historicalMode && (
+            <p className="text-xs text-muted-foreground mt-1">
+              Pulls real hourly load by zone and fuel mix from the ERCOT database (Jan 2024 – Jun 2026) to set OPF conditions.
+            </p>
+          )}
+        </CardHeader>
+        <CardContent>
+          {historicalMode ? (
+            /* Historical mode: date + hour pickers */
+            <div className="flex flex-wrap items-end gap-5">
+              <div>
+                <div className="text-xs text-muted-foreground mb-1">Date</div>
+                <input
+                  type="date"
+                  min="2024-01-01"
+                  max="2026-06-30"
+                  value={selectedDate}
+                  onChange={e => { setSelectedDate(e.target.value); setDirty(true); }}
+                  className="bg-background border border-border rounded px-2 py-1.5 text-sm text-foreground font-mono focus:outline-none focus:ring-1 focus:ring-teal-500"
+                />
+              </div>
+              <div>
+                <div className="text-xs text-muted-foreground mb-1">Hour</div>
+                <select
+                  value={selectedHour}
+                  onChange={e => { setSelectedHour(Number(e.target.value)); setDirty(true); }}
+                  className="bg-background border border-border rounded px-2 py-1.5 text-sm text-foreground font-mono focus:outline-none focus:ring-1 focus:ring-teal-500">
+                  {HOURS.map(h => (
+                    <option key={h.value} value={h.value}>{h.label}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <div className="text-xs text-muted-foreground mb-1">Gas Price</div>
+                <div className="flex items-center gap-2">
+                  <Slider min={200} max={800} step={10} value={[gasPrice]}
+                    onValueChange={([v]) => { setGasPrice(v); setDirty(true); }}
+                    className="w-28" />
+                  <span className="font-mono text-xs text-orange-400 w-16">
+                    ${(gasPrice/100).toFixed(2)}/MMBtu
+                  </span>
+                </div>
+              </div>
+              <div className="ml-auto flex items-center gap-2 text-xs text-muted-foreground bg-teal-950/50 border border-teal-800/40 rounded px-3 py-1.5">
+                <Calendar className="h-3.5 w-3.5 text-teal-400" />
+                <span>
+                  {selectedDate} · {HOURS[selectedHour]?.label} CST
+                </span>
+              </div>
+            </div>
+          ) : (
+            /* Scenario mode: 4 sliders */
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
+              <div>
+                <div className="flex justify-between text-xs mb-1">
+                  <span className="text-muted-foreground">System Load</span>
+                  <span className="font-mono text-teal-400">{(loadMw/1000).toFixed(0)} GW</span>
+                </div>
+                <Slider min={30000} max={75000} step={1000} value={[loadMw]}
+                  onValueChange={([v]) => { setLoadMw(v); setDirty(true); }} />
+              </div>
+              <div>
+                <div className="flex justify-between text-xs mb-1">
+                  <span className="text-muted-foreground">Wind CF</span>
+                  <span className="font-mono text-teal-400">{windCf}%</span>
+                </div>
+                <Slider min={5} max={65} step={1} value={[windCf]}
+                  onValueChange={([v]) => { setWindCf(v); setDirty(true); }} />
+              </div>
+              <div>
+                <div className="flex justify-between text-xs mb-1">
+                  <span className="text-muted-foreground">Solar CF</span>
+                  <span className="font-mono text-amber-400">{solarCf}%</span>
+                </div>
+                <Slider min={0} max={35} step={1} value={[solarCf]}
+                  onValueChange={([v]) => { setSolarCf(v); setDirty(true); }} />
+              </div>
+              <div>
+                <div className="flex justify-between text-xs mb-1">
+                  <span className="text-muted-foreground">Gas Price</span>
+                  <span className="font-mono text-orange-400">${(gasPrice/100).toFixed(2)}/MMBtu</span>
+                </div>
+                <Slider min={200} max={800} step={10} value={[gasPrice]}
+                  onValueChange={([v]) => { setGasPrice(v); setDirty(true); }} />
+              </div>
+            </div>
+          )}
+
           <div className="mt-4 flex items-center gap-3">
             <Button size="sm"
               variant={dirty ? "default" : "outline"}
               className={dirty ? "bg-teal-600 hover:bg-teal-700" : ""}
               disabled={opfMut.isPending}
-              onClick={() => opfMut.mutate({
-                system_load_mw: loadMw,
-                wind_cf:         windCf  / 100,
-                solar_cf:        solarCf / 100,
-                gas_price_mmbtu: gasPrice / 100,
-              })}>
+              onClick={() => {
+                const params: Record<string, unknown> = {
+                  gas_price_mmbtu: gasPrice / 100,
+                };
+                if (historicalMode) {
+                  params.simulation_datetime = `${selectedDate}T${String(selectedHour).padStart(2,"0")}:00:00`;
+                } else {
+                  params.system_load_mw = loadMw;
+                  params.wind_cf        = windCf  / 100;
+                  params.solar_cf       = solarCf / 100;
+                }
+                opfMut.mutate(params);
+              }}>
               {opfMut.isPending
                 ? <><Loader2 className="h-3 w-3 animate-spin mr-1" />Running OPF…</>
-                : "Run OPF"}
+                : historicalMode ? "Run Historical OPF" : "Run OPF"}
             </Button>
             {dirty && (
               <span className="text-xs text-muted-foreground">
-                Parameters changed — click Run OPF to update
+                {historicalMode ? "Click to model real ERCOT conditions for this hour" : "Parameters changed — click Run OPF to update"}
               </span>
             )}
             {result && (
@@ -294,13 +395,28 @@ export default function PypsaNetwork() {
 
       {result && !loading && (
         <>
+          {/* Data source badge */}
+          {result.data_source && result.data_source !== "synthetic" && (
+            <div className="flex items-center gap-2 px-3 py-2 bg-teal-950/60 border border-teal-700/40 rounded-lg text-xs">
+              <Calendar className="h-3.5 w-3.5 text-teal-400 shrink-0" />
+              <span className="text-teal-300 font-medium">Historical ERCOT conditions</span>
+              <span className="text-muted-foreground">·</span>
+              <span className="text-teal-200 font-mono">
+                {result.data_source.replace("historical:", "")}
+              </span>
+              <Badge className="ml-auto bg-teal-700/40 text-teal-300 border-teal-600/40 text-[10px] py-0">
+                Real load + fuel mix
+              </Badge>
+            </div>
+          )}
+
           {/* KPI strip */}
           <div className="grid grid-cols-3 md:grid-cols-6 gap-3">
             {[
+              { label: "System Load", value: `${(result.system_load_mw/1000).toFixed(1)} GW`, sub: "total demand", color: "text-sky-400" },
               { label: "Avg LMP",    value: `$${result.avg_lmp.toFixed(2)}`,           sub: "/MWh",   color: "text-teal-400" },
               { label: "LMP Spread", value: `$${result.lmp_spread.toFixed(2)}`,         sub: "/MWh",   color: result.lmp_spread > 5 ? "text-amber-400" : "text-teal-400" },
               { label: "Renewable",  value: `${result.renewable_pct.toFixed(1)}%`,      sub: "of gen", color: "text-emerald-400" },
-              { label: "Wind",       value: `${(result.wind_mw/1000).toFixed(1)} GW`,   sub: "dispatch", color: "text-teal-400" },
               { label: "Total Cost", value: `$${(result.total_cost_per_hour/1000).toFixed(0)}k`, sub: "/hour", color: "text-amber-400" },
               { label: "Congested",  value: String(result.congested_lines),             sub: "lines",  color: result.congested_lines > 0 ? "text-red-400" : "text-emerald-400" },
             ].map(kpi => (

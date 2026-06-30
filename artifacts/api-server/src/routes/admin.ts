@@ -124,6 +124,12 @@ router.get("/admin/jobs/:id", requireAdminKey, (req, res) => {
   res.json(job);
 });
 
+// ── POST /api/admin/seed-ercot-load-fuelmix ──────────────────────────────────
+router.post("/admin/seed-ercot-load-fuelmix", requireAdminKey, (req, res) => {
+  const jobId = spawnScript("seed-ercot-load-fuelmix");
+  res.json({ jobId, status: "started", message: "Seeding ercot_load_by_zone + ercot_fuel_mix" });
+});
+
 // ── POST /api/admin/fix-mock-scores ──────────────────────────────────────────
 // Updates the 12 pre-seeded mock candidates with correct scores based on
 // real ERCOT neg-price rates and CAISO curtailment data.

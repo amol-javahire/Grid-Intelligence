@@ -107,6 +107,62 @@ def _load_topology_from_db() -> tuple[list[dict], list[dict]]:
         return [], []
 
 
+def _load_zone_data_from_db(year: int, month: int, day: int, hour: int) -> dict[str, float] | None:
+    """Load actual zone loads from ercot_load_by_zone for a specific hour.
+    Returns {zone: load_mw} dict, or None if data not available."""
+    try:
+        import psycopg2
+        conn = psycopg2.connect(os.environ["DATABASE_URL"])
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT zone, CAST(load_mw AS float)
+            FROM ercot_load_by_zone
+            WHERE year = %s AND month = %s AND day = %s AND hour = %s
+        """, (year, month, day, hour))
+        rows = cur.fetchall()
+        conn.close()
+        if not rows:
+            return None
+        return {r[0]: r[1] for r in rows}
+    except Exception as e:
+        logger.warning("Could not load zone data from DB: %s", e)
+        return None
+
+
+def _load_fuel_mix_from_db(year: int, month: int, day: int, hour: int) -> dict[str, float] | None:
+    """Load actual fuel mix from ercot_fuel_mix for a specific hour.
+    Returns {fuel_type: gen_mw} dict, or None if data not available."""
+    try:
+        import psycopg2
+        conn = psycopg2.connect(os.environ["DATABASE_URL"])
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT fuel_type, CAST(gen_mw AS float)
+            FROM ercot_fuel_mix
+            WHERE year = %s AND month = %s AND day = %s AND hour = %s
+        """, (year, month, day, hour))
+        rows = cur.fetchall()
+        conn.close()
+        if not rows:
+            return None
+        return {r[0]: r[1] for r in rows}
+    except Exception as e:
+        logger.warning("Could not load fuel mix from DB: %s", e)
+        return None
+
+
+def _derive_cfs_from_fuel_mix(fuel_mix: dict[str, float], year: int) -> dict[str, float]:
+    """Convert fuel mix (actual generation MW) to capacity factors for OPF.
+    Uses known installed capacity figures calibrated to ERCOT CDR data."""
+    wind_cap  = 40_000 if year <= 2024 else (45_000 if year == 2025 else 49_000)
+    solar_cap = 24_000 if year <= 2024 else (33_000 if year == 2025 else 42_000)
+    wind_mw  = fuel_mix.get("wind",  0.0)
+    solar_mw = fuel_mix.get("solar", 0.0)
+    wind_cf  = max(0.03, min(0.95, wind_mw  / max(wind_cap,  1)))
+    solar_cf = max(0.00, min(0.95, solar_mw / max(solar_cap, 1)))
+    return {"wind_cf": wind_cf, "solar_cf": solar_cf}
+
+
 def _load_eia860_generators() -> list[dict]:
     """Load EIA 860 ERCOT generators from candidates table."""
     try:
@@ -343,7 +399,37 @@ def run_opf(
     wind_cf: float = 0.35,
     solar_cf: float = 0.22,
     gas_price_mmbtu: float = 3.50,
+    simulation_datetime: str | None = None,
 ) -> dict[str, Any]:
+    """Run DC OPF. If simulation_datetime (ISO8601) is provided, real hourly
+    ERCOT zone loads and fuel-mix-derived CFs override the synthetic parameters."""
+
+    data_source = "synthetic"
+    actual_zone_loads: dict[str, float] | None = None
+
+    if simulation_datetime:
+        try:
+            from datetime import datetime as _dt
+            dt = _dt.fromisoformat(simulation_datetime.replace("Z", "+00:00"))
+            yr, mo, dy, hr = dt.year, dt.month, dt.day, dt.hour
+            actual_zone_loads = _load_zone_data_from_db(yr, mo, dy, hr)
+            fuel_mix = _load_fuel_mix_from_db(yr, mo, dy, hr)
+            if actual_zone_loads and fuel_mix:
+                total_load = sum(actual_zone_loads.values())
+                system_load_mw = total_load
+                cfs = _derive_cfs_from_fuel_mix(fuel_mix, yr)
+                wind_cf  = cfs["wind_cf"]
+                solar_cf = cfs["solar_cf"]
+                data_source = f"historical:{simulation_datetime}"
+                logger.info(
+                    "Historical mode %s: load=%.0f MW wind_cf=%.3f solar_cf=%.3f",
+                    simulation_datetime, system_load_mw, wind_cf, solar_cf
+                )
+            else:
+                logger.warning("No DB data for %s — using synthetic params", simulation_datetime)
+        except Exception as e:
+            logger.warning("Could not parse simulation_datetime '%s': %s", simulation_datetime, e)
+
     buses_db, lines_db = _load_topology_from_db()
     tier = 2 if buses_db else 1
     n = build_network(system_load_mw, wind_cf, solar_cf, gas_price_mmbtu)
@@ -475,6 +561,7 @@ def run_opf(
         "status": "optimal",
         "model_version": f"tier{tier}_{'db' if tier==2 else 'eia860'}",
         "tier": tier,
+        "data_source": data_source,
         "bus_count": len(buses_result),
         "line_count": len(lines_result),
         "system_load_mw": system_load_mw,

@@ -237,7 +237,7 @@ function SimulationResultBlock({ block }: { block: SimulationBlock }) {
       <div className="flex items-center gap-2 px-3 py-2 border-b" style={{ borderColor: "rgba(20,184,166,0.2)", background: "rgba(20,184,166,0.08)" }}>
         <Cpu className="h-3.5 w-3.5 text-primary" />
         <span className="text-xs font-semibold text-primary">PyPSA {label}</span>
-        {result.status && (
+        {!!result.status && (
           <Badge variant="outline" className="ml-auto text-xs" style={{ color: "#22c55e", borderColor: "rgba(34,197,94,0.3)" }}>
             {String(result.status)}
           </Badge>

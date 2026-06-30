@@ -20,3 +20,5 @@ export * from "./aeso_outages";
 export * from "./aeso_7day_capability";
 export * from "./aeso_actual_forecast";
 export * from "./aeso_transmission_corridors";
+export * from "./ercot_load_by_zone";
+export * from "./ercot_fuel_mix";

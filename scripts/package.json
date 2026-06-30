@@ -27,6 +27,7 @@
     "seed-transmission-lines": "tsx ./src/seed-transmission-lines.ts",
     "seed-aeso-data": "tsx ./src/seed-aeso-data.ts",
     "seed-aeso-real": "tsx ./src/seed-aeso-real.ts",
+    "seed-ercot-load-fuelmix": "tsx ./src/seed-ercot-load-fuelmix.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
