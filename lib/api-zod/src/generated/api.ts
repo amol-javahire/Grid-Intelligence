@@ -1144,3 +1144,62 @@ export const GetAesoInterchangeResponseItem = zod.object({
 export const GetAesoInterchangeResponse = zod.array(
   GetAesoInterchangeResponseItem,
 );
+
+/**
+ * @summary Raw hourly load time-series for one ERCOT EIA sub-BA zone
+ */
+export const GetErcotZoneLoadHourlyQueryParams = zod.object({
+  zone: zod.coerce.string(),
+  year: zod.coerce.number().optional(),
+  month: zod.coerce.number().optional(),
+});
+
+export const GetErcotZoneLoadHourlyResponseItem = zod.object({
+  day: zod.number(),
+  hour: zod.number(),
+  loadMw: zod.number(),
+});
+export const GetErcotZoneLoadHourlyResponse = zod.array(
+  GetErcotZoneLoadHourlyResponseItem,
+);
+
+/**
+ * @summary PTDF-derived shift factors mapping each 345 kV bus to its EIA sub-BA zone
+ */
+export const GetErcotBusShiftFactorsQueryParams = zod.object({
+  eiaZone: zod.coerce.string().optional(),
+});
+
+export const GetErcotBusShiftFactorsResponseItem = zod.object({
+  busName: zod.string(),
+  ercotZone: zod.string().nullish(),
+  eiaZone: zod.string(),
+  shiftFactor: zod.number(),
+  electricalParticipation: zod.number().optional(),
+  lat: zod.number().optional(),
+  lon: zod.number().optional(),
+  method: zod.string(),
+});
+export const GetErcotBusShiftFactorsResponse = zod.array(
+  GetErcotBusShiftFactorsResponseItem,
+);
+
+/**
+ * @summary Hourly bus-level load approximation (shift_factor × zone_load)
+ */
+export const GetErcotBusLoadQueryParams = zod.object({
+  bus: zod.coerce.string(),
+  year: zod.coerce.number().optional(),
+  month: zod.coerce.number().optional(),
+});
+
+export const GetErcotBusLoadResponseItem = zod.object({
+  day: zod.number(),
+  hour: zod.number(),
+  loadMwApprox: zod.number(),
+  zoneLoadMw: zod.number(),
+  shiftFactor: zod.number(),
+  eiaZone: zod.string(),
+  method: zod.string(),
+});
+export const GetErcotBusLoadResponse = zod.array(GetErcotBusLoadResponseItem);

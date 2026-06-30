@@ -2,11 +2,14 @@ import { useState, useMemo, useEffect, useRef } from "react";
 import {
   useListErcotNodeStats,
   useListCaisoNodeStats,
+  useGetErcotBusShiftFactors,
+  useGetErcotBusLoad,
 } from "@workspace/api-client-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
-  LineChart, Line, XAxis, YAxis, CartesianGrid,
+  LineChart, Line, AreaChart, Area,
+  XAxis, YAxis, CartesianGrid,
   Tooltip as RechartsTooltip, Legend, ResponsiveContainer, ReferenceLine,
 } from "recharts";
 import { Loader2, Search, MapPin, Database } from "lucide-react";
@@ -775,6 +778,204 @@ function CaisoNodeLocationsBrowser() {
   );
 }
 
+// ── ERCOT Bus Load Explorer (PTDF-derived hourly approximation) ───────────────
+const EIA_ZONE_COLORS: Record<string,string> = {
+  NCEN:"#14b8a6", COAS:"#3b82f6", NRTH:"#8b5cf6",
+  EAST:"#22c55e", SCEN:"#f59e0b", SOUT:"#ef4444",
+  FWES:"#06b6d4", WEST:"#a855f7",
+};
+
+function BusLoadExplorer({ year }: { year: number }) {
+  const [search, setSearch]         = useState("");
+  const [selectedBus, setSelectedBus] = useState<string | null>(null);
+  const [month, setMonth]           = useState(8);
+
+  const { data: allBuses = [], isLoading: bLoading } = useGetErcotBusShiftFactors({});
+
+  const { data: busLoad = [], isLoading: lLoading } = useGetErcotBusLoad(
+    { bus: selectedBus ?? "", year, month },
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    { query: { enabled: !!selectedBus } as any },
+  );
+
+  const filtered = useMemo(() => {
+    if (!allBuses.length) return [];
+    if (!search) return allBuses.slice(0, 40);
+    const q = search.toLowerCase();
+    return allBuses.filter(b =>
+      b.busName.toLowerCase().includes(q) ||
+      (b.eiaZone ?? "").toLowerCase().includes(q) ||
+      (b.ercotZone ?? "").toLowerCase().includes(q),
+    ).slice(0, 50);
+  }, [allBuses, search]);
+
+  const selectedMeta = selectedBus ? allBuses.find(b => b.busName === selectedBus) : null;
+
+  // Average daily 24-hour load curve across all days in month
+  const chartData = useMemo(() => {
+    if (!busLoad.length) return [];
+    const byHour: Record<number, number[]> = {};
+    for (const row of busLoad) {
+      if (!byHour[row.hour]) byHour[row.hour] = [];
+      byHour[row.hour].push(row.loadMwApprox);
+    }
+    return Array.from({ length: 24 }, (_, h) => ({
+      hour: `H${String(h).padStart(2,"0")}`,
+      avgMw: byHour[h] ? +(busLoad.filter(r=>r.hour===h).reduce((s,r)=>s+r.loadMwApprox,0)/busLoad.filter(r=>r.hour===h).length).toFixed(2) : null,
+      peakMw: byHour[h] ? +Math.max(...busLoad.filter(r=>r.hour===h).map(r=>r.loadMwApprox)).toFixed(2) : null,
+    }));
+  }, [busLoad]);
+
+  const zoneColor = selectedMeta ? (EIA_ZONE_COLORS[selectedMeta.eiaZone] ?? C.teal) : C.teal;
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <div className="flex items-center justify-between gap-4 flex-wrap">
+          <div>
+            <CardTitle className="text-sm font-semibold">Bus-Level Load Explorer</CardTitle>
+            <CardDescription className="text-xs">
+              Hourly load estimated via DC PTDF shift factors · 340 ERCOT 345 kV buses · EIA-930 zone baseline
+            </CardDescription>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-muted-foreground">Month:</span>
+            <Select value={String(month)} onValueChange={v => setMonth(Number(v))}>
+              <SelectTrigger className="w-[90px] h-7 text-xs"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {MONTHS.map((m, i) => (
+                  <SelectItem key={i + 1} value={String(i + 1)}>{m}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+      </CardHeader>
+
+      <CardContent>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+
+          {/* ── Bus selector panel ───────────────────────────────────────── */}
+          <div className="space-y-2">
+            <div className="flex items-center gap-1.5 bg-muted/30 border border-border rounded-md px-2.5 py-1.5">
+              <Search className="h-3 w-3 text-muted-foreground shrink-0" />
+              <input
+                className="flex-1 bg-transparent text-xs outline-none placeholder:text-muted-foreground"
+                placeholder="Search bus or zone…"
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+              />
+              {search && (
+                <button onClick={() => setSearch("")} className="text-muted-foreground hover:text-foreground text-xs">✕</button>
+              )}
+            </div>
+
+            {bLoading ? (
+              <div className="h-16 flex items-center justify-center">
+                <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+              </div>
+            ) : (
+              <div className="max-h-72 overflow-y-auto rounded-md border border-border">
+                {filtered.map(b => (
+                  <button
+                    key={b.busName}
+                    onClick={() => setSelectedBus(b.busName)}
+                    className={`w-full text-left px-2.5 py-2 text-xs transition-colors border-b border-border/30 last:border-0
+                      ${selectedBus === b.busName
+                        ? "bg-primary/15 text-primary"
+                        : "hover:bg-muted/30"}`}
+                  >
+                    <div className="font-mono font-medium truncate">{b.busName}</div>
+                    <div className="flex items-center gap-1 mt-0.5">
+                      <span className="px-1 py-0 rounded text-[9px] font-semibold"
+                        style={{ backgroundColor:`${EIA_ZONE_COLORS[b.eiaZone]??C.teal}22`, color: EIA_ZONE_COLORS[b.eiaZone]??C.teal }}>
+                        {b.eiaZone}
+                      </span>
+                      <span className="text-muted-foreground text-[10px]">SF={b.shiftFactor.toFixed(4)}</span>
+                    </div>
+                  </button>
+                ))}
+                {!search && allBuses.length > 40 && (
+                  <div className="px-2.5 py-2 text-xs text-muted-foreground text-center border-t border-border">
+                    +{allBuses.length - 40} more · search to filter
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* ── Chart panel ──────────────────────────────────────────────── */}
+          <div className="md:col-span-2">
+            {!selectedBus ? (
+              <div className="h-full min-h-[220px] flex flex-col items-center justify-center text-muted-foreground gap-2">
+                <Database className="h-8 w-8 opacity-30" />
+                <div className="text-sm">Select a bus to view its hourly load profile</div>
+                <div className="text-xs opacity-60">340 ERCOT 345 kV buses · PTDF-weighted shift factors</div>
+              </div>
+            ) : lLoading ? (
+              <div className="h-52 flex items-center justify-center">
+                <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {selectedMeta && (
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                    {[
+                      { label: "Bus",          val: selectedMeta.busName },
+                      { label: "EIA Zone",     val: selectedMeta.eiaZone },
+                      { label: "ERCOT Zone",   val: selectedMeta.ercotZone ?? "—" },
+                      { label: "Shift Factor", val: selectedMeta.shiftFactor.toFixed(5) },
+                    ].map(({ label, val }) => (
+                      <div key={label} className="rounded border border-border p-2 bg-background">
+                        <div className="text-[10px] text-muted-foreground">{label}</div>
+                        <div className="text-xs font-mono font-semibold truncate">{val}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <div>
+                  <div className="text-xs text-muted-foreground mb-1.5">
+                    Avg daily 24h load curve · {MONTHS[month - 1]} {year}
+                    {" · "}
+                    <span style={{ color: zoneColor }}>{selectedMeta?.eiaZone} zone baseline</span>
+                    {" · "}
+                    <span className="opacity-60">method: {busLoad[0]?.method ?? "ptdf"}</span>
+                  </div>
+                  {chartData.length ? (
+                    <ResponsiveContainer width="100%" height={200}>
+                      <AreaChart data={chartData} margin={{ top: 4, right: 12, left: 0, bottom: 4 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
+                        <XAxis dataKey="hour" stroke={C.mutedFg}
+                          tick={{ fill: C.mutedFg, fontSize: 9 }} interval={3} />
+                        <YAxis stroke={C.mutedFg} tick={{ fill: C.mutedFg, fontSize: 9 }} width={48}
+                          tickFormatter={v => v >= 1000 ? `${(v/1000).toFixed(1)}GW` : `${Math.round(v)}MW`} />
+                        <RechartsTooltip contentStyle={TS}
+                          formatter={(v: unknown, name: string) => {
+                            const n = Number(v);
+                            return [n >= 1000 ? `${(n/1000).toFixed(2)} GW` : `${n.toFixed(1)} MW`, name];
+                          }} />
+                        <Area type="monotone" dataKey="peakMw" stroke={C.amber} strokeWidth={1}
+                          fill={`${C.amber}18`} name="Peak MW" dot={false} />
+                        <Area type="monotone" dataKey="avgMw" stroke={zoneColor} strokeWidth={2}
+                          fill={`${zoneColor}25`} name="Avg MW" dot={false} />
+                      </AreaChart>
+                    </ResponsiveContainer>
+                  ) : (
+                    <div className="h-36 flex items-center justify-center text-xs text-muted-foreground">
+                      No load data for this bus / period
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 // ── Main Page ─────────────────────────────────────────────────────────────────
 export default function NodalAnalysis() {
   const [iso, setIso] = useState<"ERCOT"|"CAISO">("ERCOT");
@@ -836,6 +1037,9 @@ export default function NodalAnalysis() {
 
           {/* Spread summary table */}
           <SpreadSummary year={year} />
+
+          {/* Bus-Level Load Explorer — PTDF shift factors × EIA-930 hourly zone load */}
+          <BusLoadExplorer year={year} />
 
           {/* Resource Node Browser — 804 nodes with zones from ERCOT bus mapping */}
           <NodeLocationsBrowser />

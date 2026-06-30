@@ -869,6 +869,61 @@ paths:
                 items:
                   $ref: "#/components/schemas/AesoInterchangeStat"
 
+  /ercot/zone-load-hourly:
+    get:
+      operationId: getErcotZoneLoadHourly
+      tags: [ercot-load]
+      summary: Raw hourly load time-series for one ERCOT EIA sub-BA zone
+      parameters:
+        - { name: zone,  in: query, required: true,  schema: { type: string } }
+        - { name: year,  in: query, required: false, schema: { type: integer } }
+        - { name: month, in: query, required: false, schema: { type: integer } }
+      responses:
+        "200":
+          description: Hourly load rows for the requested zone/year/month
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ErcotZoneLoadHour"
+
+  /ercot/bus-shift-factors:
+    get:
+      operationId: getErcotBusShiftFactors
+      tags: [ercot-load]
+      summary: PTDF-derived shift factors mapping each 345 kV bus to its EIA sub-BA zone
+      parameters:
+        - { name: eiaZone, in: query, required: false, schema: { type: string } }
+      responses:
+        "200":
+          description: List of buses with PTDF-derived shift factors
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ErcotBusShiftFactor"
+
+  /ercot/bus-load:
+    get:
+      operationId: getErcotBusLoad
+      tags: [ercot-load]
+      summary: Hourly bus-level load approximation (shift_factor × zone_load)
+      parameters:
+        - { name: bus,   in: query, required: true,  schema: { type: string } }
+        - { name: year,  in: query, required: false, schema: { type: integer } }
+        - { name: month, in: query, required: false, schema: { type: integer } }
+      responses:
+        "200":
+          description: Hourly load estimate for the requested bus
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ErcotBusLoadHour"
+
 components:
   schemas:
     HealthStatus:
@@ -1567,6 +1622,39 @@ components:
         maxActualMw:        { type: ["number", "null"] }
         minActualMw:        { type: ["number", "null"] }
       required: [month, intertieOrFlowgate]
+
+    ErcotZoneLoadHour:
+      type: object
+      properties:
+        day:    { type: integer }
+        hour:   { type: integer }
+        loadMw: { type: number }
+      required: [day, hour, loadMw]
+
+    ErcotBusShiftFactor:
+      type: object
+      properties:
+        busName:                 { type: string }
+        ercotZone:               { type: ["string", "null"] }
+        eiaZone:                 { type: string }
+        shiftFactor:             { type: number }
+        electricalParticipation: { type: number }
+        lat:                     { type: number }
+        lon:                     { type: number }
+        method:                  { type: string }
+      required: [busName, eiaZone, shiftFactor, method]
+
+    ErcotBusLoadHour:
+      type: object
+      properties:
+        day:          { type: integer }
+        hour:         { type: integer }
+        loadMwApprox: { type: number }
+        zoneLoadMw:   { type: number }
+        shiftFactor:  { type: number }
+        eiaZone:      { type: string }
+        method:       { type: string }
+      required: [day, hour, loadMwApprox, zoneLoadMw, shiftFactor, eiaZone, method]
 
     AesoTransmissionCorridor:
       type: object

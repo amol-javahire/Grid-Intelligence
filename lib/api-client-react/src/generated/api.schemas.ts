@@ -606,6 +606,34 @@ export interface AesoInterchangeStat {
   minActualMw?: number | null;
 }
 
+export interface ErcotZoneLoadHour {
+  day: number;
+  hour: number;
+  loadMw: number;
+}
+
+export interface ErcotBusShiftFactor {
+  busName: string;
+  /** @nullable */
+  ercotZone?: string | null;
+  eiaZone: string;
+  shiftFactor: number;
+  electricalParticipation?: number;
+  lat?: number;
+  lon?: number;
+  method: string;
+}
+
+export interface ErcotBusLoadHour {
+  day: number;
+  hour: number;
+  loadMwApprox: number;
+  zoneLoadMw: number;
+  shiftFactor: number;
+  eiaZone: string;
+  method: string;
+}
+
 export interface AesoTransmissionCorridor {
   id: number;
   corridorName: string;
@@ -840,4 +868,20 @@ export type GetAesoSmpParams = {
 export type GetAesoInterchangeParams = {
   from?: string;
   to?: string;
+};
+
+export type GetErcotZoneLoadHourlyParams = {
+  zone: string;
+  year?: number;
+  month?: number;
+};
+
+export type GetErcotBusShiftFactorsParams = {
+  eiaZone?: string;
+};
+
+export type GetErcotBusLoadParams = {
+  bus: string;
+  year?: number;
+  month?: number;
 };

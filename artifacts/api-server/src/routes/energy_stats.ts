@@ -610,4 +610,119 @@ router.get("/ercot/fuel-mix", async (req, res) => {
   }
 });
 
+// ── ERCOT Zone Load — Raw Hourly ──────────────────────────────────────────────
+// GET /api/ercot/zone-load-hourly?zone=NCEN&year=2024&month=1
+router.get("/ercot/zone-load-hourly", async (req, res) => {
+  try {
+    const zone  = String(req.query.zone  ?? "NCEN");
+    const year  = Number(req.query.year  ?? 2024);
+    const month = Number(req.query.month ?? 1);
+    const rows = await db.execute<{
+      day: number; hour: number; load_mw: string;
+    }>(sql`
+      SELECT day, hour, ROUND(load_mw, 2) AS load_mw
+      FROM   ercot_load_by_zone
+      WHERE  zone = ${zone}
+        AND  year = ${year}
+        AND  month = ${month}
+      ORDER  BY day, hour
+    `);
+    res.json(rows.rows.map(r => ({
+      day:    Number(r.day),
+      hour:   Number(r.hour),
+      loadMw: Number(r.load_mw),
+    })));
+  } catch (err) {
+    req.log.error({ err }, "ercot/zone-load-hourly error");
+    res.status(500).json({ error: "internal_error" });
+  }
+});
+
+// ── ERCOT Bus Shift Factors ───────────────────────────────────────────────────
+// GET /api/ercot/bus-shift-factors?eiaZone=NCEN
+router.get("/ercot/bus-shift-factors", async (req, res) => {
+  try {
+    const eiaZone = req.query.eiaZone ? String(req.query.eiaZone) : null;
+    const rows = await db.execute<{
+      bus_name: string; ercot_zone: string | null; eia_zone: string;
+      shift_factor: string; electrical_participation: string;
+      bus_lat: string; bus_lon: string; method: string;
+    }>(sql`
+      SELECT bus_name, ercot_zone, eia_zone,
+             shift_factor::float AS shift_factor,
+             electrical_participation::float AS electrical_participation,
+             bus_lat::float AS bus_lat,
+             bus_lon::float AS bus_lon,
+             method
+      FROM   ercot_bus_shift_factors
+      ${eiaZone ? sql`WHERE eia_zone = ${eiaZone}` : sql``}
+      ORDER  BY eia_zone, shift_factor DESC
+    `);
+    res.json(rows.rows.map(r => ({
+      busName:                r.bus_name,
+      ercotZone:              r.ercot_zone,
+      eiaZone:                r.eia_zone,
+      shiftFactor:            Number(r.shift_factor),
+      electricalParticipation: Number(r.electrical_participation),
+      lat:                    Number(r.bus_lat),
+      lon:                    Number(r.bus_lon),
+      method:                 r.method,
+    })));
+  } catch (err) {
+    req.log.error({ err }, "ercot/bus-shift-factors error");
+    res.status(500).json({ error: "internal_error" });
+  }
+});
+
+// ── ERCOT Bus-Level Hourly Load (PTDF-derived approximation) ─────────────────
+// GET /api/ercot/bus-load?bus=ALIBATES_39&year=2024&month=1
+// Computes on-the-fly: bus_load = shift_factor × zone_load
+router.get("/ercot/bus-load", async (req, res) => {
+  try {
+    const bus   = String(req.query.bus   ?? "");
+    const year  = Number(req.query.year  ?? 2024);
+    const month = Number(req.query.month ?? 1);
+    if (!bus) return res.status(400).json({ error: "bus parameter required" });
+
+    const rows = await db.execute<{
+      day: number; hour: number;
+      load_mw_approx: string; zone_load_mw: string;
+      shift_factor: string; eia_zone: string; method: string;
+    }>(sql`
+      SELECT
+        lbz.day,
+        lbz.hour,
+        ROUND((lbz.load_mw * sf.shift_factor::float)::numeric, 2) AS load_mw_approx,
+        ROUND(lbz.load_mw, 2)                                       AS zone_load_mw,
+        sf.shift_factor::float                                       AS shift_factor,
+        sf.eia_zone,
+        sf.method
+      FROM   ercot_bus_shift_factors sf
+      JOIN   ercot_load_by_zone lbz ON lbz.zone = sf.eia_zone
+      WHERE  sf.bus_name = ${bus}
+        AND  lbz.year    = ${year}
+        AND  lbz.month   = ${month}
+      ORDER  BY lbz.day, lbz.hour
+    `);
+    if (!rows.rows.length) {
+      return res.status(404).json({
+        error: "not_found",
+        message: `No data for bus=${bus}. Ensure shift factors are seeded and ercot_load_by_zone covers year=${year} month=${month}.`,
+      });
+    }
+    res.json(rows.rows.map(r => ({
+      day:           Number(r.day),
+      hour:          Number(r.hour),
+      loadMwApprox:  Number(r.load_mw_approx),
+      zoneLoadMw:    Number(r.zone_load_mw),
+      shiftFactor:   Number(r.shift_factor),
+      eiaZone:       r.eia_zone,
+      method:        r.method,
+    })));
+  } catch (err) {
+    req.log.error({ err }, "ercot/bus-load error");
+    res.status(500).json({ error: "internal_error" });
+  }
+});
+
 export default router;

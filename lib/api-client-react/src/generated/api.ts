@@ -37,8 +37,11 @@ import type {
   Candidate,
   CandidateInput,
   DashboardSummary,
+  ErcotBusLoadHour,
+  ErcotBusShiftFactor,
   ErcotNodalStats,
   ErcotNodeStats,
+  ErcotZoneLoadHour,
   ErrorResponse,
   GetAesoActualForecastParams,
   GetAesoConstraintsParams,
@@ -50,6 +53,9 @@ import type {
   GetAesoQueueParams,
   GetAesoSmpParams,
   GetAesoSupplyDemandParams,
+  GetErcotBusLoadParams,
+  GetErcotBusShiftFactorsParams,
+  GetErcotZoneLoadHourlyParams,
   GetTopCandidatesParams,
   HealthStatus,
   ListCaisoNodeStatsParams,
@@ -3568,6 +3574,306 @@ export function useGetAesoInterchange<
   },
 ): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
   const queryOptions = getGetAesoInterchangeQueryOptions(params, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Raw hourly load time-series for one ERCOT EIA sub-BA zone
+ */
+export const getGetErcotZoneLoadHourlyUrl = (
+  params: GetErcotZoneLoadHourlyParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/ercot/zone-load-hourly?${stringifiedParams}`
+    : `/api/ercot/zone-load-hourly`;
+};
+
+export const getErcotZoneLoadHourly = async (
+  params: GetErcotZoneLoadHourlyParams,
+  options?: RequestInit,
+): Promise<ErcotZoneLoadHour[]> => {
+  return customFetch<ErcotZoneLoadHour[]>(
+    getGetErcotZoneLoadHourlyUrl(params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetErcotZoneLoadHourlyQueryKey = (
+  params?: GetErcotZoneLoadHourlyParams,
+) => {
+  return [`/api/ercot/zone-load-hourly`, ...(params ? [params] : [])] as const;
+};
+
+export const getGetErcotZoneLoadHourlyQueryOptions = <
+  TData = Awaited<ReturnType<typeof getErcotZoneLoadHourly>>,
+  TError = ErrorType<unknown>,
+>(
+  params: GetErcotZoneLoadHourlyParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getErcotZoneLoadHourly>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetErcotZoneLoadHourlyQueryKey(params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getErcotZoneLoadHourly>>
+  > = ({ signal }) =>
+    getErcotZoneLoadHourly(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getErcotZoneLoadHourly>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetErcotZoneLoadHourlyQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getErcotZoneLoadHourly>>
+>;
+export type GetErcotZoneLoadHourlyQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Raw hourly load time-series for one ERCOT EIA sub-BA zone
+ */
+
+export function useGetErcotZoneLoadHourly<
+  TData = Awaited<ReturnType<typeof getErcotZoneLoadHourly>>,
+  TError = ErrorType<unknown>,
+>(
+  params: GetErcotZoneLoadHourlyParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getErcotZoneLoadHourly>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetErcotZoneLoadHourlyQueryOptions(params, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary PTDF-derived shift factors mapping each 345 kV bus to its EIA sub-BA zone
+ */
+export const getGetErcotBusShiftFactorsUrl = (
+  params?: GetErcotBusShiftFactorsParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/ercot/bus-shift-factors?${stringifiedParams}`
+    : `/api/ercot/bus-shift-factors`;
+};
+
+export const getErcotBusShiftFactors = async (
+  params?: GetErcotBusShiftFactorsParams,
+  options?: RequestInit,
+): Promise<ErcotBusShiftFactor[]> => {
+  return customFetch<ErcotBusShiftFactor[]>(
+    getGetErcotBusShiftFactorsUrl(params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetErcotBusShiftFactorsQueryKey = (
+  params?: GetErcotBusShiftFactorsParams,
+) => {
+  return [`/api/ercot/bus-shift-factors`, ...(params ? [params] : [])] as const;
+};
+
+export const getGetErcotBusShiftFactorsQueryOptions = <
+  TData = Awaited<ReturnType<typeof getErcotBusShiftFactors>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: GetErcotBusShiftFactorsParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getErcotBusShiftFactors>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetErcotBusShiftFactorsQueryKey(params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getErcotBusShiftFactors>>
+  > = ({ signal }) =>
+    getErcotBusShiftFactors(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getErcotBusShiftFactors>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetErcotBusShiftFactorsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getErcotBusShiftFactors>>
+>;
+export type GetErcotBusShiftFactorsQueryError = ErrorType<unknown>;
+
+/**
+ * @summary PTDF-derived shift factors mapping each 345 kV bus to its EIA sub-BA zone
+ */
+
+export function useGetErcotBusShiftFactors<
+  TData = Awaited<ReturnType<typeof getErcotBusShiftFactors>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: GetErcotBusShiftFactorsParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getErcotBusShiftFactors>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetErcotBusShiftFactorsQueryOptions(params, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Hourly bus-level load approximation (shift_factor × zone_load)
+ */
+export const getGetErcotBusLoadUrl = (params: GetErcotBusLoadParams) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/ercot/bus-load?${stringifiedParams}`
+    : `/api/ercot/bus-load`;
+};
+
+export const getErcotBusLoad = async (
+  params: GetErcotBusLoadParams,
+  options?: RequestInit,
+): Promise<ErcotBusLoadHour[]> => {
+  return customFetch<ErcotBusLoadHour[]>(getGetErcotBusLoadUrl(params), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetErcotBusLoadQueryKey = (params?: GetErcotBusLoadParams) => {
+  return [`/api/ercot/bus-load`, ...(params ? [params] : [])] as const;
+};
+
+export const getGetErcotBusLoadQueryOptions = <
+  TData = Awaited<ReturnType<typeof getErcotBusLoad>>,
+  TError = ErrorType<unknown>,
+>(
+  params: GetErcotBusLoadParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getErcotBusLoad>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetErcotBusLoadQueryKey(params);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getErcotBusLoad>>> = ({
+    signal,
+  }) => getErcotBusLoad(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getErcotBusLoad>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetErcotBusLoadQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getErcotBusLoad>>
+>;
+export type GetErcotBusLoadQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Hourly bus-level load approximation (shift_factor × zone_load)
+ */
+
+export function useGetErcotBusLoad<
+  TData = Awaited<ReturnType<typeof getErcotBusLoad>>,
+  TError = ErrorType<unknown>,
+>(
+  params: GetErcotBusLoadParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getErcotBusLoad>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetErcotBusLoadQueryOptions(params, options);
 
   const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
     queryKey: QueryKey;
