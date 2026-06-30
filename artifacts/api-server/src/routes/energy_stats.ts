@@ -554,4 +554,60 @@ router.get("/caiso/hub-hourly/coverage", async (req, res) => {
   }
 });
 
+// ── ERCOT Load by Zone (monthly aggregated) ───────────────────────────────────
+// GET /api/ercot/load-by-zone?year=2024
+router.get("/ercot/load-by-zone", async (req, res) => {
+  try {
+    const year = req.query.year !== undefined ? Number(req.query.year) : 2024;
+    const rows = await db.execute<{
+      month: number; zone: string; avg_mw: string; peak_mw: string;
+    }>(sql`
+      SELECT month, zone,
+             ROUND(AVG(load_mw), 1)  AS avg_mw,
+             ROUND(MAX(load_mw), 1)  AS peak_mw
+      FROM   ercot_load_by_zone
+      WHERE  year = ${year}
+      GROUP  BY month, zone
+      ORDER  BY month, zone
+    `);
+    res.json(rows.rows.map(r => ({
+      month: Number(r.month),
+      zone:  r.zone,
+      avgMw: Number(r.avg_mw),
+      peakMw: Number(r.peak_mw),
+    })));
+  } catch (err) {
+    req.log.error({ err }, "ercot/load-by-zone error");
+    res.status(500).json({ error: "internal_error" });
+  }
+});
+
+// ── ERCOT Fuel Mix (monthly aggregated) ──────────────────────────────────────
+// GET /api/ercot/fuel-mix?year=2024
+router.get("/ercot/fuel-mix", async (req, res) => {
+  try {
+    const year = req.query.year !== undefined ? Number(req.query.year) : 2024;
+    const rows = await db.execute<{
+      month: number; fuel_type: string; avg_mw: string; peak_mw: string;
+    }>(sql`
+      SELECT month, fuel_type,
+             ROUND(AVG(gen_mw), 1)  AS avg_mw,
+             ROUND(MAX(gen_mw), 1)  AS peak_mw
+      FROM   ercot_fuel_mix
+      WHERE  year = ${year}
+      GROUP  BY month, fuel_type
+      ORDER  BY month, fuel_type
+    `);
+    res.json(rows.rows.map(r => ({
+      month:    Number(r.month),
+      fuelType: r.fuel_type,
+      avgMw:    Number(r.avg_mw),
+      peakMw:   Number(r.peak_mw),
+    })));
+  } catch (err) {
+    req.log.error({ err }, "ercot/fuel-mix error");
+    res.status(500).json({ error: "internal_error" });
+  }
+});
+
 export default router;

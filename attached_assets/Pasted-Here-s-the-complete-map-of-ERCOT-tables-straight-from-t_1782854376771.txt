@@ -1,0 +1,44 @@
+Here's the complete map of ERCOT tables, straight from the official Public Data API:
+
+Hourly Load / Demand Data
+By zone (easiest, available now via API):
+ReportNameGranularityNP6-345-CDActual System Load by Weather ZoneHourly, 8 zonesNP6-346-CDActual System Load by Forecast ZoneHourly, 4 zones (North/South/West/Houston)
+These are the cleanest — published next-day, go back 7+ years, directly queryable from api.ercot.com.
+By electrical bus (harder — ERCOT doesn't publish bus-level load directly):
+The proxy is to combine two reports:
+
+NP4-159-CD — "Load Distribution Factors" (each bus's participation factor in its load zone)
+× NP6-346-CD zone totals → gives estimated bus-level load
+
+If you want prices at each bus (which is the signal more useful for siting anyway): NP6-787-CD — "LMPs by Electrical Bus" — SCED 5-minute prices at every bus on the ERCOT network. This is what most production cost models use as the locational demand signal.
+Historical archive (CSV bulk download, no API auth needed):
+
+ercot.com/gridinfo/load/load_hist — hourly load by weather zone going back to 2002. Easy starting point.
+
+Hourly Generation by Generator / Unit
+ReportNameLagGranularityNP3-965-ER60-Day SCED Disclosure60 daysPer resource, every 5 min — base points, telemetered actual MW, offer curvesNP3-910-ER2-Day Real Time Gen & Load2 daysAggregated by disclosure area (not unit-level)NP4-732-CDWind Power Production — Hourly Actual & ForecastNear-realtimeSystem-wideNP4-742-CDWind Power Production by Geographical RegionNear-realtimeRegion-levelNP4-737-CDSolar Power Production — Hourly Actual & ForecastNear-realtimeSystem-wideNP4-745-CDSolar Power Production by RegionNear-realtimeRegion-level
+NP3-965-ER is the key one for your use case — it's what Grid Status uses and what academic researchers use for unit-level dispatch analysis. The tradeoff is the 60-day delay (changed to RTC+B schema after Dec 5, 2025). It contains:
+
+Resource name + fuel type
+telemetered_net_output (actual MW) every 5 minutes
+base_point (what ERCOT instructed)
+High/Low sustainable limits
+Offer curve segments
+
+For near-real-time generation by fuel type (no delay), the EIA-930 Hourly Electric Grid Monitor publishes ERCOT data with ~1 hour lag, broken down by fuel — though that's aggregated, not unit-level.
+
+What ERCOT Doesn't Publish Publicly
+
+Bus-level load directly (inferred via distribution factors)
+Unit-level output with <60-day delay (competitive market data)
+Plant-level fuel burn or heat rate actuals
+
+For the app, NP3-965-ER + NP6-787-CD together would give you generation dispatch by unit (historical) + bus-level LMP prices — enough to build a congestion/curtailment attribution model by node.
+Sources:
+
+ERCOT Public Data API Release Notes
+NP6-905-CD Settlement Point Prices
+NP3-965-ER 60-Day SCED Disclosure
+Hourly Load Data Archives
+ERCOT SCED Gen Resource 60 Day — Grid Status
+ERCOT API Explorer
