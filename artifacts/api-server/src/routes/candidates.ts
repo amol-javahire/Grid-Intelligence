@@ -11,6 +11,58 @@ import {
 } from "@workspace/api-zod";
 import { computeRec } from "../lib/rec";
 
+// ── ITC / PTC / LCOE Computed Financials ─────────────────────────────────────
+// Standard CapEx benchmarks (2024, utility scale, $/kW)
+const CAPEX_PER_KW: Record<string, number> = {
+  solar: 1050, wind: 1450, storage: 1200, natural_gas: 1000,
+  nuclear: 7500, hydro: 2500, biomass: 1200, geothermal: 3000, coal: 2800,
+};
+const FOM_PER_KW: Record<string, number> = {
+  solar: 17, wind: 48, storage: 18, natural_gas: 38,
+  nuclear: 140, hydro: 55, biomass: 60, geothermal: 40, coal: 80,
+};
+const VOM_PER_MWH: Record<string, number> = {
+  solar: 0, wind: 3, storage: 2, natural_gas: 5,
+  nuclear: 3, hydro: 4, biomass: 8, geothermal: 2, coal: 7,
+};
+const CF_TABLE: Record<string, Record<string, number>> = {
+  solar:       { ERCOT: 0.27, CAISO: 0.29, PJM: 0.22 },
+  wind:        { ERCOT: 0.40, CAISO: 0.32, PJM: 0.35 },
+  storage:     { ERCOT: 0.18, CAISO: 0.18, PJM: 0.18 },
+  natural_gas: { ERCOT: 0.60, CAISO: 0.55, PJM: 0.58 },
+  nuclear:     { ERCOT: 0.92, CAISO: 0.92, PJM: 0.92 },
+  hydro:       { ERCOT: 0.40, CAISO: 0.42, PJM: 0.38 },
+  biomass:     { ERCOT: 0.65, CAISO: 0.65, PJM: 0.65 },
+  geothermal:  { ERCOT: 0.88, CAISO: 0.88, PJM: 0.88 },
+  coal:        { ERCOT: 0.55, CAISO: 0.55, PJM: 0.55 },
+};
+const ITC_ELIGIBLE = new Set(["solar", "storage"]);
+const PTC_ELIGIBLE = new Set(["wind", "geothermal", "biomass", "hydro"]);
+const WACC_FIN   = 0.08;
+const LIFE_YR    = 25;
+const CRF        = WACC_FIN * Math.pow(1 + WACC_FIN, LIFE_YR) / (Math.pow(1 + WACC_FIN, LIFE_YR) - 1);
+const PV_10YR    = (1 - 1 / Math.pow(1 + WACC_FIN, 10)) / WACC_FIN;
+const PV_LIFE    = (1 - 1 / Math.pow(1 + WACC_FIN, LIFE_YR)) / WACC_FIN;
+const PTC_MWH    = 27.5; // $0.0275/kWh × 1000
+
+function computeFinancials(assetType: string, capacityMw: number, market: string) {
+  const capex = CAPEX_PER_KW[assetType] ?? 1500;
+  const fom   = FOM_PER_KW[assetType] ?? 40;
+  const vom   = VOM_PER_MWH[assetType] ?? 5;
+  const cf    = CF_TABLE[assetType]?.[market] ?? 0.30;
+  const capexAfterItc = ITC_ELIGIBLE.has(assetType) ? capex * 0.70 : capex;
+  const lcoeBase      = 1000 * (capexAfterItc * CRF + fom) / (cf * 8760) + vom;
+  const ptcAdj        = PTC_ELIGIBLE.has(assetType) ? PTC_MWH * (PV_10YR / PV_LIFE) : 0;
+  const lcoeMwh       = Math.round((lcoeBase - ptcAdj) * 100) / 100;
+  const totalCapexM   = Math.round(capacityMw * 1000 * capex / 1e6 * 10) / 10;
+  const itcValueM     = ITC_ELIGIBLE.has(assetType) ? Math.round(totalCapexM * 0.30 * 10) / 10 : 0;
+  const ptcAnnualM    = PTC_ELIGIBLE.has(assetType)
+    ? Math.round(capacityMw * cf * 8760 * PTC_MWH / 1e6 * 10) / 10 : 0;
+  const ptcNpvM       = Math.round(ptcAnnualM * PV_10YR * 10) / 10;
+  const taxCreditType = ITC_ELIGIBLE.has(assetType) ? "ITC 30%" : PTC_ELIGIBLE.has(assetType) ? "PTC $0.0275/kWh" : null;
+  return { lcoeMwh, totalCapexM, itcValueM, ptcAnnualM, ptcNpvM, taxCreditType };
+}
+
 const router = Router();
 
 // Scoring weights per objective
@@ -56,6 +108,7 @@ router.get("/candidates", async (req, res) => {
     const result = rows.map(r => {
       const capacityMw = Number(r.capacityMw);
       const rec = computeRec(r.assetType, r.market, capacityMw);
+      const fin = computeFinancials(r.assetType, capacityMw, r.market);
       return {
         ...r,
         capacityMw,
@@ -75,6 +128,7 @@ router.get("/candidates", async (req, res) => {
         demandProximityScore: r.demandProximityScore ? Number(r.demandProximityScore) : null,
         developmentRiskScore: r.developmentRiskScore ? Number(r.developmentRiskScore) : null,
         ...rec,
+        ...fin,
       };
     });
 
@@ -134,7 +188,9 @@ router.get("/candidates/:id", async (req, res) => {
       res.status(404).json({ error: "not_found", message: "Candidate not found" });
       return;
     }
-    res.json({ ...row, capacityMw: Number(row.capacityMw), overallScore: Number(row.overallScore), latitude: Number(row.latitude), longitude: Number(row.longitude) });
+    const fin = computeFinancials(row.assetType, Number(row.capacityMw), row.market);
+    const rec = computeRec(row.assetType, row.market, Number(row.capacityMw));
+    res.json({ ...row, capacityMw: Number(row.capacityMw), overallScore: Number(row.overallScore), latitude: Number(row.latitude), longitude: Number(row.longitude), ...rec, ...fin });
   } catch (err) {
     req.log.error({ err }, "getCandidate error");
     res.status(500).json({ error: "internal_error", message: "Failed to get candidate" });

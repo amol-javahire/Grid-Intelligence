@@ -5,7 +5,7 @@ import {
   MessageSquare, Download, Bookmark, ChevronRight, Menu,
   TerminalSquare, GitBranch, BookOpen, Leaf, Cpu, Flame,
   MapPin, FlaskConical, ShieldCheck, BookMarked, ChevronDown,
-  Brain, Clock, Network, Wind, Battery, Thermometer,
+  Brain, Clock, Network, Wind, Battery, Thermometer, Calculator,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -79,6 +79,7 @@ const sidebarEntries: NavEntry[] = [
   },
   { title: "Interconnection Queue", href: "/queue",      icon: Database },
   { title: "Temperature Data",      href: "/weather",    icon: Thermometer },
+  { title: "PPA Calculator",        href: "/ppa",        icon: Calculator },
   { title: "REC Analysis",          href: "/recs",       icon: Leaf },
   { title: "Q&A Copilot",           href: "/qa",         icon: MessageSquare },
   { title: "Export Center",         href: "/export",     icon: Download },

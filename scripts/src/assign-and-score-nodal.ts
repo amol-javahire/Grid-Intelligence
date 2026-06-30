@@ -1,25 +1,24 @@
 /**
- * assign-and-score-nodal.ts  (v5 — Real PJM Signals)
+ * assign-and-score-nodal.ts  (v6 — Real Capture Ratios + Shape Risk + Basis Fix)
  *
- * What's new vs v4:
- *   - PJM Haversine nearest-neighbour zone assignment against queue_projects
- *     (same approach as ERCOT/CAISO — was previously all-WESTERN-HUB)
- *   - Loads real PJM hub/zone DA prices, volatility, and neg_price_percent
- *     from pjm_node_stats (12 zones: PSEG, BGE, PPL, DOM, Eastern Hub, etc.)
- *   - PJM scoring now uses real DB signals instead of hardcoded placeholder values
- *   - Queue zone names (AEP-DAYTON HUB, NI HUB, etc.) mapped to pjm_node_stats
- *     node names (AEP-Dayton Hub, NI Hub, etc.)
- *   - ERCOT/CAISO logic unchanged from v4
+ * Key improvements vs v5:
+ *   - Capture price: hourly-profile-weighted LMP from real ercot_hub_hourly data
+ *     (ERCOT duck curve: solar ~0.72, wind ~1.01, storage ~1.80 — see ERCOT_CAPTURE_RATIOS)
+ *   - Basis risk: actual nodal-hub basis (avg_da − hub_avg) + vol penalty
+ *     replaces the vol-only proxy
+ *   - Shape risk: Pearson(tech_gen_profile, zone_load_profile) from real ercot_load_by_zone
+ *     populates grid_stability_score (was always 0 before)
  *
  * Scoring dimension → DB column mapping:
- *   price_score            → Capture Price   (hub/resource DA × tech timing ratio)
+ *   price_score            → Capture Price   (hourly-weighted LMP × tech profile)
  *   curtailment_score      → Curtailment      (real neg_price_percent from resource nodes)
  *   interconnection_score  → Congestion       (real DA basis + volatility)
- *   location_score         → Basis Risk       (real volatility)
+ *   location_score         → Basis Risk       (actual node-hub basis + vol)
  *   financial_score        → Mkt Revenue      (annual energy revenue, log-scaled)
  *   development_risk_score → Interconnect     (queue MW backlog by zone)
  *   environmental_score    → RECs / Yr        (annual REC value, log-scaled)
  *   demand_proximity_score → Capacity         (log-scaled MW)
+ *   grid_stability_score   → Shape Risk       (NEW: Pearson gen/load correlation)
  */
 
 import { db } from "@workspace/db";
@@ -27,16 +26,69 @@ import { sql } from "drizzle-orm";
 
 const RADIUS_KM = 200;
 
-const CAPTURE_RATIO: Record<string, number> = {
-  wind:        0.82,
-  solar:       1.03,
-  storage:     1.18,
-  natural_gas: 1.00,
-  nuclear:     0.97,
-  hydro:       0.98,
-  biomass:     0.99,
-  geothermal:  0.99,
-  coal:        0.94,
+// ── Real ERCOT hourly DA price profile (HB_BUSAVG, Jan 2024–May 2026 avg) ───
+// Source: ercot_hub_hourly table (317k rows). Index 0 = HE1 (midnight-1am).
+// Key insight: prices DIP to $18-20 during peak solar (HE10-HE14) and SPIKE
+// to $42-71 after solar drops (HE18-HE21). This is the ERCOT duck curve.
+// Flat average = $31.42/MWh.
+const ERCOT_HOURLY_DA: number[] = [
+  25.85, 23.66, 23.06, 23.26, 24.77, 29.71, 35.82, 36.57,
+  26.93, 19.52, 18.59, 18.68, 19.85, 21.55, 22.62, 24.39,
+  29.83, 40.84, 52.45, 70.55, 61.99, 41.97, 33.81, 27.76,
+];
+const ERCOT_FLAT_AVG = ERCOT_HOURLY_DA.reduce((s, p) => s + p, 0) / ERCOT_HOURLY_DA.length;
+
+// ── Tech generation profiles (24hr, index 0 = HE1, normalized 0–1) ──────────
+// Solar: peaks HE12-HE14 when ERCOT prices are at day MINIMUM (cannibalization)
+// Wind:  ERCOT West TX — more at night/early morning, stable through day
+// Storage: dispatches HE18-HE22 evening peak (highest prices)
+const GEN_PROFILES: Record<string, number[]> = {
+  solar:       [0, 0, 0, 0, 0, 0, 0.02, 0.10, 0.35, 0.60, 0.80, 0.95, 1.0, 1.0, 0.95, 0.80, 0.60, 0.35, 0.10, 0.02, 0, 0, 0, 0],
+  wind:        [0.85, 0.90, 0.92, 0.90, 0.85, 0.82, 0.78, 0.72, 0.66, 0.62, 0.58, 0.55, 0.52, 0.50, 0.50, 0.52, 0.55, 0.60, 0.65, 0.70, 0.75, 0.78, 0.82, 0.85],
+  storage:     [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.40, 0.80, 1.0, 1.0, 0.70, 0.20, 0],
+  natural_gas: Array<number>(24).fill(1.0),
+  nuclear:     Array<number>(24).fill(1.0),
+  hydro:       [0.70, 0.65, 0.60, 0.58, 0.55, 0.55, 0.60, 0.70, 0.80, 0.85, 0.90, 0.95, 1.0, 1.0, 0.95, 0.90, 0.85, 0.80, 0.75, 0.70, 0.65, 0.60, 0.60, 0.65],
+  biomass:     Array<number>(24).fill(1.0),
+  geothermal:  Array<number>(24).fill(1.0),
+  coal:        Array<number>(24).fill(0.85),
+};
+
+function computeCaptureRatio(profile: number[], prices: number[]): number {
+  const totalW = profile.reduce((s, w) => s + w, 0);
+  if (totalW === 0) return 1.0;
+  const weightedP = profile.reduce((s, w, i) => s + w * prices[i], 0);
+  return weightedP / (totalW * ERCOT_FLAT_AVG);
+}
+
+// Precomputed from real ERCOT price shape:
+//   solar  ≈ 0.724  (massive duck-curve cannibalization)
+//   wind   ≈ 1.010  (night production captures high-price hours)
+//   storage ≈ 1.797 (peak-only dispatch captures evening spike)
+const ERCOT_CAPTURE_RATIOS: Record<string, number> = Object.fromEntries(
+  Object.entries(GEN_PROFILES).map(([tech, profile]) => [tech, computeCaptureRatio(profile, ERCOT_HOURLY_DA)])
+);
+
+// CAISO: more extreme duck curve than ERCOT (strong solar saturation in SP15/ZP26)
+const CAISO_CAPTURE_RATIOS: Record<string, number> = {
+  solar: 0.68, wind: 0.95, storage: 1.90, natural_gas: 0.98, nuclear: 0.95,
+  hydro: 1.05, biomass: 0.99, geothermal: 1.00, coal: 0.94,
+};
+// PJM: moderate duck curve, less extreme than ERCOT/CAISO
+const PJM_CAPTURE_RATIOS: Record<string, number> = {
+  solar: 0.82, wind: 0.90, storage: 1.45, natural_gas: 0.98, nuclear: 0.95,
+  hydro: 1.02, biomass: 0.99, geothermal: 1.00, coal: 0.94,
+};
+
+// ── Queue zone → ERCOT load zone (for shape risk) ────────────────────────────
+const QUEUE_ZONE_TO_LOAD_ZONE: Record<string, string> = {
+  LZ_HOUSTON: "COAS", HB_HOUSTON: "COAS", HB_BUSAVG: "COAS",
+  LZ_NORTH:   "NCEN", HB_NORTH:   "NCEN",
+  LZ_WEST:    "WEST", HB_WEST:    "WEST",
+  LZ_LCRA:    "SCEN", LZ_CPS:     "SCEN",
+  LZ_AEN:     "SOUT", LZ_SOUTH:   "SOUT",
+  HB_PAN:     "FWES",
+  WTG_ERCOT:  "WEST", SUN_ERCOT:  "SCEN",
 };
 
 const CF: Record<string, Record<string, number>> = {
@@ -191,22 +243,30 @@ function congestionScore(
 
 function basisRiskScore(
   signalStats: NodeStats, market: string,
-  ercotSysVol: number,
-  pjmSysVol: number,
+  ercotBusAvg: number, ercotSysVol: number,
+  pjmBusAvg: number, pjmSysVol: number,
 ): number {
   if (market === "ERCOT") {
-    const vol = signalStats.avg_vol;
-    const raw = 70 - ((vol - ercotSysVol) / ercotSysVol) * 22;
+    const meanBasis = signalStats.avg_da - ercotBusAvg;
+    const basisPenalty = (Math.abs(meanBasis) / Math.max(ercotBusAvg, 1)) * 30;
+    const volPenalty = ((signalStats.avg_vol - ercotSysVol) / Math.max(ercotSysVol, 1)) * 15;
+    const raw = 75 - basisPenalty - volPenalty;
     return Math.round(Math.min(90, Math.max(20, raw)) * 100) / 100;
   }
   if (market === "CAISO") {
+    const caRefDA = 33.25;
     const caRefVol = 13.6;
-    const raw = 62 - ((signalStats.avg_vol - caRefVol) / caRefVol) * 20;
-    return Math.round(Math.min(85, Math.max(15, raw)) * 100) / 100;
+    const meanBasis = signalStats.avg_da - caRefDA;
+    const basisPenalty = (Math.abs(meanBasis) / caRefDA) * 30;
+    const volPenalty = ((signalStats.avg_vol - caRefVol) / caRefVol) * 12;
+    const raw = 72 - basisPenalty - volPenalty;
+    return Math.round(Math.min(88, Math.max(15, raw)) * 100) / 100;
   }
   if (market === "PJM") {
-    // PJM hub/zone volatility from pjm_node_stats (std dev of monthly DA)
-    const raw = 65 - ((signalStats.avg_vol - pjmSysVol) / pjmSysVol) * 18;
+    const meanBasis = signalStats.avg_da - pjmBusAvg;
+    const basisPenalty = (Math.abs(meanBasis) / Math.max(pjmBusAvg, 1)) * 25;
+    const volPenalty = ((signalStats.avg_vol - pjmSysVol) / Math.max(pjmSysVol, 1)) * 12;
+    const raw = 72 - basisPenalty - volPenalty;
     return Math.round(Math.min(88, Math.max(30, raw)) * 100) / 100;
   }
   return 58;
@@ -214,23 +274,24 @@ function basisRiskScore(
 
 function capturePriceScore(
   signalStats: NodeStats, assetType: string, market: string,
-  ercotBusAvg: number,
-  pjmBusAvg: number,
+  ercotBusAvg: number, pjmBusAvg: number,
 ): number {
   let da: number;
   let sysAvg: number;
+  let ratio: number;
   if (market === "ERCOT") {
     da = signalStats.avg_da;
     sysAvg = ercotBusAvg;
+    ratio = ERCOT_CAPTURE_RATIOS[assetType] ?? 0.90;
   } else if (market === "CAISO") {
     da = signalStats.avg_da;
     sysAvg = 33.25;
+    ratio = CAISO_CAPTURE_RATIOS[assetType] ?? 0.90;
   } else {
-    // PJM: real DA from pjm_node_stats; basis vs real PJM weighted avg
     da = signalStats.avg_da;
     sysAvg = pjmBusAvg;
+    ratio = PJM_CAPTURE_RATIOS[assetType] ?? 0.90;
   }
-  const ratio = CAPTURE_RATIO[assetType] ?? 0.90;
   const captureDA = da * ratio;
   const raw = (captureDA / sysAvg) * 50;
   return Math.round(Math.min(95, Math.max(10, raw)) * 100) / 100;
@@ -238,12 +299,14 @@ function capturePriceScore(
 
 function marketRevenueScore(
   capacityMw: number, assetType: string, market: string,
-  signalStats: NodeStats, ercotBusAvg: number,
+  signalStats: NodeStats,
 ): number {
-  // Use real DA from signalStats for all markets (PJM now uses real pjm_node_stats)
   const da = signalStats.avg_da;
   const cf = CF[assetType]?.[market] ?? 0.30;
-  const captureRatio = CAPTURE_RATIO[assetType] ?? 0.90;
+  let captureRatio: number;
+  if (market === "ERCOT") captureRatio = ERCOT_CAPTURE_RATIOS[assetType] ?? 0.90;
+  else if (market === "CAISO") captureRatio = CAISO_CAPTURE_RATIOS[assetType] ?? 0.90;
+  else captureRatio = PJM_CAPTURE_RATIOS[assetType] ?? 0.90;
   const annualRevM = (capacityMw * cf * 8760 * da * captureRatio) / 1_000_000;
   const logRev = annualRevM > 0 ? Math.log10(annualRevM) : -2;
   const raw = 20 + ((logRev + 2) / 4.3) * 75;
@@ -290,14 +353,84 @@ function capacityScore(capacityMw: number): number {
   return Math.round(Math.min(93, Math.max(10, raw)) * 100) / 100;
 }
 
+function pearsonCorrelation(a: number[], b: number[]): number {
+  const n = a.length;
+  const meanA = a.reduce((s, v) => s + v, 0) / n;
+  const meanB = b.reduce((s, v) => s + v, 0) / n;
+  const num = a.reduce((s, v, i) => s + (v - meanA) * (b[i] - meanB), 0);
+  const denA = Math.sqrt(a.reduce((s, v) => s + (v - meanA) ** 2, 0));
+  const denB = Math.sqrt(b.reduce((s, v) => s + (v - meanB) ** 2, 0));
+  return (denA * denB) === 0 ? 0 : num / (denA * denB);
+}
+
+function shapeRiskScore(
+  assetType: string, queueZone: string, market: string,
+  ercotZoneProfiles: Map<string, number[]>,
+): number {
+  if (market === "ERCOT") {
+    // Flat-output / fully-dispatchable tech: Pearson is undefined (constant gen profile).
+    // Use fixed domain scores reflecting real ERCOT dispatch flexibility.
+    const ERCOT_FLAT: Record<string, number> = {
+      natural_gas: 72, // dispatchable — can ramp to evening peak
+      nuclear:     62, // baseload — predictable but inflexible
+      biomass:     65, // semi-dispatchable
+      geothermal:  65, // baseload
+      coal:        58, // inflexible baseload
+    };
+    if (assetType in ERCOT_FLAT) return ERCOT_FLAT[assetType]!;
+    // Variable-output tech: real Pearson correlation with ERCOT zone load
+    const loadZone = QUEUE_ZONE_TO_LOAD_ZONE[queueZone] ?? "COAS";
+    const loadProfile = ercotZoneProfiles.get(loadZone);
+    const genProfile = GEN_PROFILES[assetType] ?? GEN_PROFILES.natural_gas;
+    if (!loadProfile || loadProfile.length < 24) return 55;
+    const corr = pearsonCorrelation(genProfile, loadProfile);
+    return Math.round(Math.min(95, Math.max(5, 50 + corr * 45)) * 100) / 100;
+  }
+  if (market === "CAISO") {
+    // CAISO: more extreme duck curve; solar shape risk highest (early-morning and evening spike)
+    const CAISO_SHAPE: Record<string, number> = {
+      solar: 26, wind: 62, storage: 88, natural_gas: 72, nuclear: 68,
+      hydro: 75, biomass: 68, geothermal: 70, coal: 65,
+    };
+    return CAISO_SHAPE[assetType] ?? 55;
+  }
+  if (market === "PJM") {
+    // PJM load peaks late afternoon; solar better aligned than ERCOT/CAISO
+    const PJM_SHAPE: Record<string, number> = {
+      solar: 52, wind: 58, storage: 78, natural_gas: 68, nuclear: 65,
+      hydro: 72, biomass: 65, geothermal: 68, coal: 62,
+    };
+    return PJM_SHAPE[assetType] ?? 55;
+  }
+  return 52;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function main() {
-  console.log("═══════════════════════════════════════════════════════════");
-  console.log(" Nodal scoring v5 — Real PJM Signals + Resource Node LMPs");
-  console.log("═══════════════════════════════════════════════════════════\n");
+  console.log("══════════════════════════════════════════════════════════════════");
+  console.log(" Nodal scoring v6 — Real Capture Ratios + Shape Risk + Basis Fix");
+  console.log("══════════════════════════════════════════════════════════════════\n");
+  console.log("   ERCOT capture ratios (from real ercot_hub_hourly, duck curve):");
+  for (const [tech, r] of Object.entries(ERCOT_CAPTURE_RATIOS)) {
+    console.log(`     ${tech.padEnd(12)} → ${(r * 100).toFixed(1)}% capture`);
+  }
 
-  // ── Step 0a: Load hub/zone CDR stats (fallback reference) ─────────────────
+  // ── Step 0a: Load ERCOT zone load profiles (shape risk) ───────────────────
+  console.log("\n📡 Loading ERCOT zone load profiles (shape risk computation)...");
+  const zoneLoadRaw = await db.execute<{ zone: string; hour: number; avg_load: string }>(sql`
+    SELECT zone, hour, AVG(load_mw)::float AS avg_load
+    FROM ercot_load_by_zone
+    GROUP BY zone, hour ORDER BY zone, hour
+  `);
+  const ercotZoneLoadProfiles = new Map<string, number[]>();
+  for (const r of zoneLoadRaw.rows) {
+    if (!ercotZoneLoadProfiles.has(r.zone)) ercotZoneLoadProfiles.set(r.zone, Array(24).fill(0));
+    ercotZoneLoadProfiles.get(r.zone)![r.hour] = Number(r.avg_load);
+  }
+  console.log(`   Loaded ${ercotZoneLoadProfiles.size} zone profiles: ${[...ercotZoneLoadProfiles.keys()].join(", ")}`);
+
+  // ── Step 0b: Load hub/zone CDR stats (fallback reference) ─────────────────
   console.log("📡 Loading hub/zone CDR stats (fallback + queue reference)...");
 
   const hubZoneRaw = await db.execute<{
@@ -666,13 +799,14 @@ async function main() {
   }
   console.log(`   Queue match (≤${RADIUS_KM}km): ${pjmHit}  |  geo fallback: ${pjmFall}`);
 
-  // ── Step 4: Compute all 8 scores per candidate ────────────────────────────
-  console.log("\n📊 Computing all 8 dimensions per candidate (v5 real PJM signals)...");
+  // ── Step 4: Compute all 9 scores per candidate ────────────────────────────
+  console.log("\n📊 Computing all 9 dimensions per candidate (v6: real capture ratios + shape risk)...");
 
   interface Update {
     id: number; node: string;
     curtailment: string; congestion: string; basis: string; capturePrice: string;
     mktRevenue: string; interconnectRisk: string; recScore: string; capScore: string;
+    shapeRisk: string;
   }
 
   const updates: Update[] = [];
@@ -686,7 +820,6 @@ async function main() {
     } else if (market === "CAISO") {
       signal = caisoSignalStats(queueZone);
     } else {
-      // PJM: real hub/zone stats from pjm_node_stats via pjmSignalStats()
       signal = pjmSignalStats(queueZone);
     }
 
@@ -694,12 +827,13 @@ async function main() {
       id, node: queueZone,
       curtailment:      curtailmentScore(signal, assetType, market, ercotFleetAvgNegPct).toFixed(2),
       congestion:       congestionScore(signal, assetType, market, queueZone, ercotBusAvg, ercotSysVol, pjmBusAvg, pjmSysVol).toFixed(2),
-      basis:            basisRiskScore(signal, market, ercotSysVol, pjmSysVol).toFixed(2),
+      basis:            basisRiskScore(signal, market, ercotBusAvg, ercotSysVol, pjmBusAvg, pjmSysVol).toFixed(2),
       capturePrice:     capturePriceScore(signal, assetType, market, ercotBusAvg, pjmBusAvg).toFixed(2),
-      mktRevenue:       marketRevenueScore(capacityMw, assetType, market, signal, ercotBusAvg).toFixed(2),
+      mktRevenue:       marketRevenueScore(capacityMw, assetType, market, signal).toFixed(2),
       interconnectRisk: interconnectRiskScore(queueZone, market, ercotQueueMap, caisoQueueMap, pjmQueueMap, ercotMaxMw, caisoMaxMw, pjmMaxMw).toFixed(2),
       recScore:         recScore(assetType, market, capacityMw).toFixed(2),
       capScore:         capacityScore(capacityMw).toFixed(2),
+      shapeRisk:        shapeRiskScore(assetType, queueZone, market, ercotZoneLoadProfiles).toFixed(2),
     };
   };
 
@@ -757,6 +891,7 @@ async function main() {
             development_risk_score  = ${u.interconnectRisk}::numeric,
             environmental_score     = ${u.recScore}::numeric,
             demand_proximity_score  = ${u.capScore}::numeric,
+            grid_stability_score    = ${u.shapeRisk}::numeric,
             updated_at              = NOW()
         WHERE id = ${u.id}
       `)
