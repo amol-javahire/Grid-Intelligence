@@ -83,6 +83,8 @@ The Q&A Copilot should eventually answer natural-language questions about the pl
 | ERCOT Resource nodes | **REAL (full history)** | 1,108 real resource nodes from ERCOT API monthly bundles (np6-905-cd RT + np4-190-cd DA). 27,193 rows covering Jan 2024–Apr 2026 (28 months RT, 20 months DA). Python bundle seeder in `scripts/src/`. |
 | CAISO prices (DA) | **REAL** | 100% real from CAISO OASIS PRC_LMP (public API). SP15 + NP15 (28 months each) + ZP26 (14 months). 70 rows. Script: `seed-caiso-real`. |
 | PJM prices | Calibrated model | No publicly accessible real-time PJM node prices (requires PJM account). Values calibrated to published monthly hub averages. 14,336 rows. |
+| ERCOT load by zone | **REAL** | 174,282 rows Jan 2024–Jun 2026. 8 zones (COAS/EAST/FWES/NCEN/NRTH/SCEN/SOUT/WEST) from EIA-930 region-sub-ba-data. Script: `seed-ercot-real-data.py` (pypsa venv). |
+| ERCOT fuel mix | **REAL** | 167,190 rows Jan 2024–Jun 2026. 8 fuel types from EIA-930 fuel-type-data (ERCO respondent). Gas ~22 GW avg, wind ~13 GW, solar ~7 GW, hydro ~52 MW (accurate — ERCOT has almost no hydro). |
 | Interconnection Queue | Seeded | CAISO queue from public ISO data (2,433 real projects); ERCOT/PJM synthetic. |
 | EIA 860 projects | **Live (2024)** | 3,875 operable generators >1 MW from EIA Form 860 2024 "Operable" sheet. ISO mapped via BA codes (ERCO/CISO/PJM). |
 | Candidate scoring | Partial | Scoring engine live on all 3,875 EIA 860 plants. Real signal scoring from nodal+queue data planned. |
@@ -105,12 +107,21 @@ The Q&A Copilot should eventually answer natural-language questions about the pl
 - Streaming ZIP (compSize=0 in local header) — uses central directory for actual compSize
 - Gap-fill mode: skips already-populated months, retries rate-limited months
 
+### EIA-930 (seed-ercot-real-data.py)
+- **Load by zone**: `https://api.eia.gov/v2/electricity/rto/region-sub-ba-data/data/` — `facets[parent][]=ERCO`
+  - 8 sub-BAs: COAS, EAST, FWES, NCEN, NRTH, SCEN, SOUT, WEST (EIA zone codes, stored directly in DB)
+- **Fuel mix**: `https://api.eia.gov/v2/electricity/rto/fuel-type-data/data/` — `facets[respondent][]=ERCO`
+  - Fuel codes: COL→coal, NG→natural_gas, NUC→nuclear, SUN→solar, WAT→hydro, WND→wind, BAT→storage, OTH→other
+- Key: `EIA_API_KEY` environment variable
+- Script: `cd artifacts/pypsa-engine && .venv/bin/python3 ../../scripts/src/seed-ercot-real-data.py`
+
 ## ERCOT API Credentials
 
 - `ERCOT_SUBSCRIPTION_KEY` — set in env
 - `ERCOT_USERNAME` — set in env  
 - `ERCOT_PASSWORD` — set in secrets
-- **Missing**: `client_id` from user's developer.ercot.com registered application (needed for Bearer token via B2C ROPC flow to access resource node pricing endpoints np4-190-cd and np6-785-er)
+- `ERCOT_CLIENT_ID` — set in secrets (needed for Bearer token via B2C_1_PUBAPI-ROPC-FLOW policy)
+- Note: NP6-345-CD (load by weather zone) returns 404 even with valid Bearer token — use EIA-930 instead
 
 ## Architecture Notes
 

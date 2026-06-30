@@ -30,9 +30,14 @@ const NODES = [
 ];
 
 const ZONE_COLORS: Record<string, string> = {
-  LZ_HOUSTON: "#f59e0b", LZ_NORTH: "#14b8a6", LZ_SOUTH: "#8b5cf6",
-  LZ_WEST: "#22c55e", LZ_AEN: "#06b6d4", LZ_CPS: "#f97316",
-  LZ_LCRA: "#ec4899", LZ_RAYBN: "#3b82f6",
+  NCEN: "#f59e0b", COAS: "#14b8a6", FWES: "#8b5cf6",
+  SCEN: "#22c55e", SOUT: "#06b6d4", NRTH: "#f97316",
+  EAST: "#ec4899", WEST: "#3b82f6",
+};
+const ZONE_LABELS: Record<string, string> = {
+  NCEN: "North Central", COAS: "Coast", FWES: "Far West",
+  SCEN: "South Central", SOUT: "South", NRTH: "North",
+  EAST: "East", WEST: "West",
 };
 const ZONES = Object.keys(ZONE_COLORS);
 
@@ -319,7 +324,7 @@ export default function ErcotHistorical() {
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
                 <KpiCard label="Peak System Load" value={mwLabel(peakLoad.mw)} sub={`${peakLoad.zone} · ${peakLoad.month}`} color="text-amber-400" />
                 <KpiCard label="Avg Monthly Load" value={mwLabel(loadData.reduce((s, d) => s + (d.total as number), 0) / loadData.length)} sub="All zones combined" color="text-teal-400" />
-                <KpiCard label="Largest Zone" value="LZ_HOUSTON" sub="~36% of system load" color="text-amber-400" />
+                <KpiCard label="Largest Zone" value={peakLoad.zone ? (ZONE_LABELS[peakLoad.zone] ?? peakLoad.zone) : "NCEN"} sub="North Central — largest ERCOT zone" color="text-amber-400" />
                 <KpiCard label="Zones Tracked" value={`${ZONES.length}`} sub="ERCOT load zones" color="text-teal-400" />
               </div>
 
@@ -347,7 +352,7 @@ export default function ErcotHistorical() {
                         formatter={(v: number, name: string) => [mwLabel(v), name]} />
                       <Legend wrapperStyle={{ fontSize: 11 }} />
                       {ZONES.map(z => (
-                        <Area key={z} type="monotone" dataKey={z} name={z} stackId="1"
+                        <Area key={z} type="monotone" dataKey={z} name={ZONE_LABELS[z] ?? z} stackId="1"
                           stroke={ZONE_COLORS[z]} fill={`url(#grad-${z})`} strokeWidth={1.5} isAnimationActive={false} />
                       ))}
                     </AreaChart>
@@ -370,7 +375,7 @@ export default function ErcotHistorical() {
                       <RechartsTooltip contentStyle={TOOLTIP_STYLE} formatter={(v: number, name: string) => [mwLabel(v), name]} />
                       <Legend wrapperStyle={{ fontSize: 11 }} />
                       {ZONES.map(z => (
-                        <Bar key={z} dataKey={z} name={z} stackId="a" fill={ZONE_COLORS[z]}
+                        <Bar key={z} dataKey={z} name={ZONE_LABELS[z] ?? z} stackId="a" fill={ZONE_COLORS[z]}
                           isAnimationActive={false} />
                       ))}
                     </BarChart>

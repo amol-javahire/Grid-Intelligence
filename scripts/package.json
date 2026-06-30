@@ -28,7 +28,8 @@
     "seed-aeso-data": "tsx ./src/seed-aeso-data.ts",
     "seed-aeso-real": "tsx ./src/seed-aeso-real.ts",
     "seed-ercot-load-fuelmix": "tsx ./src/seed-ercot-load-fuelmix.ts",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "seed-ercot-real-data": "cd ../artifacts/pypsa-engine && .venv/bin/python3 ../../scripts/src/seed-ercot-real-data.py"
   },
   "dependencies": {
     "@workspace/db": "workspace:*",
