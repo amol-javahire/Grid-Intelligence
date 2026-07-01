@@ -2,7 +2,9 @@ import { useState, useMemo } from "react";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, Legend, ComposedChart, Area,
+  AreaChart,
 } from "recharts";
+import { useQuery } from "@tanstack/react-query";
 import {
   useGetTemperature,
   useGetTemperatureStats,
@@ -606,9 +608,266 @@ function ForecastSection({
   );
 }
 
+// ── Load Forecast Section ─────────────────────────────────────────────────────
+
+interface LoadForecastRow {
+  zone: string; year: number; month: number;
+  baseMw: number; evMw: number; dcMw: number; totalMw: number; peakMw: number;
+}
+
+const LOAD_ZONE_COLORS: Record<string, string> = {
+  COAS: "#14b8a6", NCEN: "#8b5cf6", NRTH: "#f59e0b",
+  EAST: "#22c55e", SCEN: "#ef4444", SOUT: "#3b82f6",
+  FWES: "#f97316", WEST: "#ec4899",
+};
+
+function LoadForecastSection() {
+  const [selectedZone, setSelectedZone] = useState("NCEN");
+  const [showEv,       setShowEv]       = useState(true);
+  const [showDc,       setShowDc]       = useState(true);
+
+  const { data: rows = [], isLoading } = useQuery<LoadForecastRow[]>({
+    queryKey: ["load-forecast-overview"],
+    queryFn:  () => fetch("/api/load-forecast/overview").then(r => r.json()),
+    staleTime: 10 * 60 * 1000,
+  });
+
+  const zoneData = useMemo(() =>
+    rows
+      .filter(r => r.zone === selectedZone)
+      .map(r => ({
+        label:   `${MONTHS[r.month - 1]} '${String(r.year).slice(2)}`,
+        base:    Math.round(r.baseMw),
+        ev:      Math.round(r.evMw),
+        dc:      Math.round(r.dcMw),
+        total:   Math.round(r.totalMw),
+        peak:    Math.round(r.peakMw),
+      })),
+    [rows, selectedZone]
+  );
+
+  // All-zone comparison (annual avg)
+  const allZoneComparison = useMemo(() => {
+    const byZone: Record<string, { zone: string; avg2027: number; avg2029: number }> = {};
+    for (const r of rows) {
+      if (!byZone[r.zone]) byZone[r.zone] = { zone: r.zone, avg2027: 0, avg2029: 0 };
+    }
+    for (const zone of Object.keys(byZone)) {
+      const data2027 = rows.filter(r => r.zone === zone && r.year === 2027);
+      const data2029 = rows.filter(r => r.zone === zone && r.year === 2029);
+      byZone[zone].avg2027 = data2027.length
+        ? Math.round(data2027.reduce((s, r) => s + r.totalMw, 0) / data2027.length)
+        : 0;
+      byZone[zone].avg2029 = data2029.length
+        ? Math.round(data2029.reduce((s, r) => s + r.totalMw, 0) / data2029.length)
+        : 0;
+    }
+    return Object.values(byZone).sort((a, b) => b.avg2029 - a.avg2029);
+  }, [rows]);
+
+  const zones = Object.keys(LOAD_ZONE_COLORS);
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center h-64 text-slate-500">
+        Loading load forecast…
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* Zone selector + overlay toggles */}
+      <div className="flex items-center gap-6 flex-wrap">
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-slate-400 uppercase tracking-wide">Zone</span>
+          <div className="flex gap-1 bg-slate-800/60 p-1 rounded-lg border border-slate-700/50">
+            {zones.map(z => (
+              <button
+                key={z}
+                onClick={() => setSelectedZone(z)}
+                className={`px-3 py-1 rounded text-xs font-medium transition-colors ${
+                  selectedZone === z
+                    ? "text-white"
+                    : "text-slate-400 hover:text-slate-200"
+                }`}
+                style={selectedZone === z ? { backgroundColor: LOAD_ZONE_COLORS[z] } : undefined}
+              >
+                {z}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => setShowEv(!showEv)}
+            className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md border transition-colors ${
+              showEv
+                ? "border-amber-500/50 bg-amber-500/15 text-amber-400"
+                : "border-slate-700 text-slate-500"
+            }`}
+          >
+            <span className="inline-block w-2.5 h-2.5 rounded-sm bg-amber-400" />
+            EV Charging
+          </button>
+          <button
+            onClick={() => setShowDc(!showDc)}
+            className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md border transition-colors ${
+              showDc
+                ? "border-purple-500/50 bg-purple-500/15 text-purple-400"
+                : "border-slate-700 text-slate-500"
+            }`}
+          >
+            <span className="inline-block w-2.5 h-2.5 rounded-sm bg-purple-400" />
+            Datacenter Pipeline
+          </button>
+        </div>
+      </div>
+
+      {/* Stacked area chart */}
+      <div className="bg-slate-800/50 rounded-lg p-4 border border-slate-700/50">
+        <div className="mb-3">
+          <h3 className="text-sm font-semibold text-slate-300">
+            3-Year Load Forecast — {selectedZone} Zone
+          </h3>
+          <p className="text-xs text-slate-500 mt-0.5">
+            Temperature regression (OLS) applied to CMIP6 climate forecast · Jul 2026 – Jun 2029
+          </p>
+        </div>
+        <ResponsiveContainer width="100%" height={300}>
+          <AreaChart data={zoneData} margin={{ top: 4, right: 16, left: 10, bottom: 4 }}>
+            <defs>
+              <linearGradient id="baseGrad" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="5%"  stopColor={LOAD_ZONE_COLORS[selectedZone] ?? "#14b8a6"} stopOpacity={0.3} />
+                <stop offset="95%" stopColor={LOAD_ZONE_COLORS[selectedZone] ?? "#14b8a6"} stopOpacity={0.05} />
+              </linearGradient>
+            </defs>
+            <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
+            <XAxis
+              dataKey="label"
+              tick={{ fill: "#94a3b8", fontSize: 10 }}
+              interval={2}
+            />
+            <YAxis
+              tick={{ fill: "#94a3b8", fontSize: 11 }}
+              tickFormatter={(v) => `${(v / 1000).toFixed(0)}GW`}
+              width={42}
+            />
+            <Tooltip
+              contentStyle={{ background: "#0f172a", border: "1px solid #1e293b", borderRadius: 8 }}
+              labelStyle={{ color: "#94a3b8" }}
+              formatter={(v: number, name: string) => {
+                const labels: Record<string, string> = {
+                  base: "Base (Regression)", ev: "EV Charging +", dc: "Datacenter +",
+                };
+                return [`${v.toLocaleString()} MW`, labels[name] ?? name];
+              }}
+            />
+            <Legend
+              formatter={(val) => ({ base: "Base Load (Regression)", ev: "EV Charging Increment", dc: "Datacenter Pipeline" })[val] ?? val}
+              wrapperStyle={{ color: "#94a3b8", fontSize: 11 }}
+            />
+            <Area
+              type="monotone"
+              dataKey="base"
+              stackId="1"
+              stroke={LOAD_ZONE_COLORS[selectedZone] ?? "#14b8a6"}
+              fill="url(#baseGrad)"
+              strokeWidth={1.5}
+            />
+            {showEv && (
+              <Area
+                type="monotone"
+                dataKey="ev"
+                stackId="1"
+                stroke="#f59e0b"
+                fill="#f59e0b"
+                fillOpacity={0.35}
+                strokeWidth={1}
+              />
+            )}
+            {showDc && (
+              <Area
+                type="monotone"
+                dataKey="dc"
+                stackId="1"
+                stroke="#8b5cf6"
+                fill="#8b5cf6"
+                fillOpacity={0.35}
+                strokeWidth={1}
+              />
+            )}
+          </AreaChart>
+        </ResponsiveContainer>
+      </div>
+
+      {/* All-zone 2027 vs 2029 comparison */}
+      <div className="bg-slate-800/50 rounded-lg p-4 border border-slate-700/50">
+        <h3 className="text-sm font-semibold text-slate-300 mb-4">
+          Zone Comparison — Avg Daily Load (MW incl. EV + DC)
+        </h3>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-slate-400 text-xs uppercase">
+                <th className="text-left pb-2 font-medium">Zone</th>
+                <th className="text-right pb-2 font-medium">2027 Avg MW</th>
+                <th className="text-right pb-2 font-medium">2029 Avg MW</th>
+                <th className="text-right pb-2 font-medium">Growth</th>
+              </tr>
+            </thead>
+            <tbody>
+              {allZoneComparison.map(r => (
+                <tr key={r.zone} className="border-t border-slate-700/40">
+                  <td className="py-2">
+                    <div className="flex items-center gap-2">
+                      <span
+                        className="inline-block w-2.5 h-2.5 rounded-sm"
+                        style={{ backgroundColor: LOAD_ZONE_COLORS[r.zone] ?? "#94a3b8" }}
+                      />
+                      <span className="text-slate-200 font-medium">{r.zone}</span>
+                      <span className="text-slate-500 text-xs">
+                        {ERCOT_ZONES[r.zone]?.label.split("(")[1]?.replace(")", "") ?? ""}
+                      </span>
+                    </div>
+                  </td>
+                  <td className="py-2 text-right text-slate-300 font-mono">
+                    {r.avg2027.toLocaleString()}
+                  </td>
+                  <td className="py-2 text-right font-mono" style={{ color: LOAD_ZONE_COLORS[r.zone] ?? "#14b8a6" }}>
+                    {r.avg2029.toLocaleString()}
+                  </td>
+                  <td className="py-2 text-right text-amber-400 text-xs">
+                    {r.avg2027 > 0
+                      ? `+${((r.avg2029 / r.avg2027 - 1) * 100).toFixed(1)}%`
+                      : "—"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Methodology */}
+      <div className="bg-slate-900/60 rounded-lg p-3 border border-slate-700/30">
+        <p className="text-xs text-slate-500 leading-relaxed">
+          <span className="text-slate-400 font-medium">Methodology:</span>{" "}
+          Base load forecast fits an OLS regression per ERCOT zone on 2.5 years of hourly EIA-930 data:
+          Load_MW ≈ β₀ + β₁·Temp + β₂·Temp² + β₃·sin(2πm/12) + β₄·cos(2πm/12) + β₅·IsWeekend.
+          R² = 0.88–0.92 for NCEN, COAS, SCEN (major load zones); lower for FWES/WEST (flat, industry-dominated).
+          Coefficients applied to EC-Earth3P-HR CMIP6 temperature forecast (Jul 2026–Jun 2029).
+          EV increment above Jun-2026 baseline per ERCOT LTSA 2024; zone shares via EIA vehicle registration data.
+          Datacenter increment uses announced pipeline COD dates from company filings.
+        </p>
+      </div>
+    </div>
+  );
+}
+
 // ── Main Page ─────────────────────────────────────────────────────────────────
 export default function WeatherPage() {
-  const [mode,      setMode]      = useState<"actuals" | "forecast">("actuals");
+  const [mode,      setMode]      = useState<"actuals" | "forecast" | "load">("actuals");
   const [activeIso, setActiveIso] = useState<"ERCOT" | "CAISO">("ERCOT");
 
   // Actuals selectors
@@ -653,48 +912,60 @@ export default function WeatherPage() {
         )}
       </div>
 
-      {/* ── Toggles row: Actuals|Forecast ··· ERCOT|CAISO ── */}
-      <div className="flex items-center gap-16">
+      {/* ── Toggles row ── */}
+      <div className="flex items-center gap-8 flex-wrap">
         <div className="flex gap-1 bg-slate-800/60 p-1 rounded-lg border border-slate-700/50">
-          {(["actuals", "forecast"] as const).map(m => (
+          {(["actuals", "forecast", "load"] as const).map(m => (
             <button
               key={m}
               onClick={() => setMode(m)}
-              className={`px-6 py-1.5 rounded-md text-sm font-medium transition-colors ${
+              className={`px-5 py-1.5 rounded-md text-sm font-medium transition-colors ${
                 mode === m
                   ? m === "forecast"
                     ? "bg-amber-500 text-white"
-                    : "bg-teal-500 text-white"
+                    : m === "load"
+                      ? "bg-blue-600 text-white"
+                      : "bg-teal-500 text-white"
                   : "text-slate-400 hover:text-slate-200"
               }`}
             >
-              {m === "actuals" ? "Actuals" : "Forecast"}
+              {m === "actuals" ? "Temp Actuals" : m === "forecast" ? "Temp Forecast" : "Load Forecast"}
             </button>
           ))}
         </div>
 
-        <div className="flex gap-1 bg-slate-800/40 p-1 rounded-lg border border-slate-700/30">
-          {(["ERCOT", "CAISO"] as const).map(iso => (
-            <button
-              key={iso}
-              onClick={() => setActiveIso(iso)}
-              className={`px-5 py-1.5 rounded-md text-sm font-medium transition-colors ${
-                activeIso === iso
-                  ? "bg-slate-600 text-white"
-                  : "text-slate-500 hover:text-slate-300"
-              }`}
-            >
-              {iso}
-            </button>
-          ))}
-        </div>
+        {mode !== "load" && (
+          <div className="flex gap-1 bg-slate-800/40 p-1 rounded-lg border border-slate-700/30">
+            {(["ERCOT", "CAISO"] as const).map(iso => (
+              <button
+                key={iso}
+                onClick={() => setActiveIso(iso)}
+                className={`px-5 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                  activeIso === iso
+                    ? "bg-slate-600 text-white"
+                    : "text-slate-500 hover:text-slate-300"
+                }`}
+              >
+                {iso}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {mode === "load" && (
+          <span className="text-xs text-slate-500 bg-slate-800/40 px-3 py-1.5 rounded border border-slate-700/30">
+            ERCOT only · 8 zones · Jul 2026 – Jun 2029
+          </span>
+        )}
       </div>
 
       {/* ── Content ── */}
       {mode === "actuals" ? (
         <ActualsSection iso={activeIso} year={year} month={month} zones={zones} />
-      ) : (
+      ) : mode === "forecast" ? (
         <ForecastSection iso={activeIso} zones={zones} />
+      ) : (
+        <LoadForecastSection />
       )}
     </div>
   );

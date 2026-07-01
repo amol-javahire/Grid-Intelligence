@@ -10,6 +10,8 @@ import congestionIntelRouter from "./congestion_intel";
 import adminRouter from "./admin";
 import aesoStatsRouter from "./aeso_stats";
 import ppaRouter from "./ppa";
+import loadForecastRouter from "./load_forecast";
+import datacentersRouter from "./datacenters";
 
 const router: IRouter = Router();
 
@@ -24,5 +26,7 @@ router.use(congestionIntelRouter);
 router.use(adminRouter);
 router.use(aesoStatsRouter);
 router.use(ppaRouter);
+router.use(loadForecastRouter);
+router.use(datacentersRouter);
 
 export default router;
