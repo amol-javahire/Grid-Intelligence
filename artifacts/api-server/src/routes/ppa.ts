@@ -5,6 +5,7 @@ import { eq } from "drizzle-orm";
 
 const router = Router();
 
+// Capacity factor by asset type × market
 const CF: Record<string, Record<string, number>> = {
   solar:       { ERCOT: 0.27, CAISO: 0.29, PJM: 0.22 },
   wind:        { ERCOT: 0.40, CAISO: 0.32, PJM: 0.35 },
@@ -17,6 +18,7 @@ const CF: Record<string, Record<string, number>> = {
   coal:        { ERCOT: 0.55, CAISO: 0.55, PJM: 0.55 },
 };
 
+// Capture ratios from real hourly ERCOT data (scoring v6) / OASIS for CAISO
 const ERCOT_CAPTURE: Record<string, number> = {
   solar: 0.724, wind: 1.010, storage: 1.797, natural_gas: 1.0,
   nuclear: 0.99, hydro: 0.95, biomass: 0.99, geothermal: 1.0, coal: 0.94,
@@ -30,10 +32,43 @@ const PJM_CAPTURE: Record<string, number> = {
   nuclear: 0.95, hydro: 1.02, biomass: 0.99, geothermal: 1.0, coal: 0.94,
 };
 
+// Market DA reference prices ($/MWh, 2024 avg from real data)
+const MARKET_REF_DA: Record<string, number> = {
+  ERCOT: 31.42, CAISO: 33.25, PJM: 38.50,
+};
+
 function getCaptureRatio(assetType: string, market: string): number {
   if (market === "ERCOT") return ERCOT_CAPTURE[assetType] ?? 0.90;
   if (market === "CAISO") return CAISO_CAPTURE[assetType] ?? 0.90;
   return PJM_CAPTURE[assetType] ?? 0.90;
+}
+
+/**
+ * Convert 0-100 dimension scores into monetary/volume risk adjustments.
+ *
+ * basisAdjMwh:        locationScore → node-hub DA spread ($/MWh, can be negative)
+ * curtailmentHaircut: curtailmentScore → fraction of generation lost to curtailment
+ * shapeDiscount:      gridStabilityScore → capture price discount from gen/load mismatch
+ */
+function scoreToRiskDefaults(
+  locationScore: number,     // 0-100, higher = better (lower basis risk)
+  curtailmentScore: number,  // 0-100, higher = better (lower curtailment)
+  gridStabilityScore: number // 0-100, higher = better (better shape match)
+) {
+  // Basis adjustment: asymmetric — downside up to -$12, upside up to +$6
+  //   score 100 → +$6, score 50 → $0, score 0 → -$12
+  const basisAdjMwh = locationScore >= 50
+    ? ((locationScore - 50) / 50) * 6
+    : ((locationScore - 50) / 50) * 12;
+
+  // Curtailment haircut: score 100 → 0%, score 50 → 10%, score 0 → 22%
+  const curtailmentHaircut = Math.max(0, Math.min(0.25, (100 - curtailmentScore) / 100 * 0.22));
+
+  // Shape discount on price: score 100 → 0%, score 50 → 7.5%, score 0 → 15%
+  // (already partially captured in capture ratio, this is the residual mismatch)
+  const shapeDiscount = Math.max(0, Math.min(0.20, (100 - gridStabilityScore) / 100 * 0.15));
+
+  return { basisAdjMwh, curtailmentHaircut, shapeDiscount };
 }
 
 function npv(cashflows: number[], wacc: number): number {
@@ -49,12 +84,17 @@ function npv(cashflows: number[], wacc: number): number {
  *   Negative = hedge cost (market < strike)
  *
  * Query params:
- *   candidateId  - integer (required)
- *   strike       - $/MWh offtake/settlement price (required)
- *   term         - contract length in years (default 15)
- *   wacc         - offtaker WACC for discounting (default 0.08)
- *   volume       - override contracted MWh/yr (default = capacity × CF × 8760)
- *   escalation   - annual market price escalation rate (default 0.015 = 1.5%/yr)
+ *   candidateId       - integer (required)
+ *   strike            - $/MWh settlement price (required)
+ *   term              - contract length in years (default 15)
+ *   wacc              - offtaker WACC for discounting (default 0.08)
+ *   volume            - override contracted MWh/yr
+ *   escalation        - annual market price escalation rate (default 0.015)
+ *
+ * Risk override params (defaults derived from candidate scores):
+ *   basisAdjMwh       - node-hub basis adjustment $/MWh (can be negative)
+ *   curtailmentHaircut - fraction of volume lost to curtailment (0–0.25)
+ *   shapeDiscount      - capture price discount from shape mismatch (0–0.20)
  */
 router.get("/ppa-npv", async (req, res) => {
   try {
@@ -64,10 +104,10 @@ router.get("/ppa-npv", async (req, res) => {
       return;
     }
 
-    const strike       = Number(req.query.strike       ?? 35);
-    const term         = Math.min(30, Math.max(1, Number(req.query.term ?? 15)));
-    const wacc         = Math.max(0.01, Math.min(0.20, Number(req.query.wacc ?? 0.08)));
-    const escalation   = Math.max(0, Math.min(0.10, Number(req.query.escalation ?? 0.015)));
+    const strike     = Number(req.query.strike ?? 35);
+    const term       = Math.min(30, Math.max(1, Number(req.query.term ?? 15)));
+    const wacc       = Math.max(0.01, Math.min(0.20, Number(req.query.wacc ?? 0.08)));
+    const escalation = Math.max(0, Math.min(0.10, Number(req.query.escalation ?? 0.015)));
 
     const [cand] = await db.select().from(candidatesTable).where(eq(candidatesTable.id, candidateId));
     if (!cand) {
@@ -79,25 +119,43 @@ router.get("/ppa-npv", async (req, res) => {
     const market     = cand.market;
     const capacityMw = Number(cand.capacityMw);
     const cf         = CF[assetType]?.[market] ?? 0.30;
-    const capture    = getCaptureRatio(assetType, market);
+    const captureRatio = getCaptureRatio(assetType, market);
 
-    // Nodal DA price from price_score → back-calc or use a lookup
-    // Use the stored estimatedLcoe as a proxy, or fall back to market reference
-    const marketRefDA = market === "ERCOT" ? 31.42 : market === "CAISO" ? 33.25 : 38.50;
-    const contractedMwhYr = Number(req.query.volume) > 0
+    // Score-derived risk defaults
+    const locationScore     = cand.locationScore     ? Number(cand.locationScore)     : 50;
+    const curtailmentScoreN = cand.curtailmentScore  ? Number(cand.curtailmentScore)  : 50;
+    const gridStabilityN    = cand.gridStabilityScore ? Number(cand.gridStabilityScore) : 50;
+
+    const defaults = scoreToRiskDefaults(locationScore, curtailmentScoreN, gridStabilityN);
+
+    // Accept caller overrides or fall back to score-derived defaults
+    const basisAdjMwh      = req.query.basisAdjMwh       !== undefined
+      ? Number(req.query.basisAdjMwh)       : defaults.basisAdjMwh;
+    const curtailmentHaircut = req.query.curtailmentHaircut !== undefined
+      ? Math.max(0, Math.min(0.25, Number(req.query.curtailmentHaircut))) : defaults.curtailmentHaircut;
+    const shapeDiscount    = req.query.shapeDiscount      !== undefined
+      ? Math.max(0, Math.min(0.20, Number(req.query.shapeDiscount)))      : defaults.shapeDiscount;
+
+    // Effective price build-up:
+    //   marketRefDA × captureRatio → raw capture price
+    //   × (1 - shapeDiscount)     → shape/timing penalty
+    //   + basisAdjMwh             → node-hub congestion spread
+    const marketRefDA       = MARKET_REF_DA[market] ?? 31.42;
+    const rawCapturePrice   = marketRefDA * captureRatio;
+    const afterShapePrice   = rawCapturePrice * (1 - shapeDiscount);
+    const effectiveCapturePrice = afterShapePrice + basisAdjMwh;
+
+    // Contracted volume with curtailment haircut
+    const grossMwhYr = Number(req.query.volume) > 0
       ? Number(req.query.volume)
       : capacityMw * cf * 8760;
-
-    // Base (P50) capture price = market ref × capture ratio × an adjustment from price_score
-    const priceScoreRatio = cand.priceScore ? (Number(cand.priceScore) / 50) : 1.0;
-    const baseCapture = marketRefDA * capture * priceScoreRatio;
+    const effectiveMwhYr = grossMwhYr * (1 - curtailmentHaircut);
 
     function buildScenarioCashflows(priceMultiplier: number): number[] {
       const cashflows: number[] = [];
       for (let t = 0; t < term; t++) {
-        const marketPrice = baseCapture * priceMultiplier * Math.pow(1 + escalation, t);
-        const annualCashflow = (marketPrice - strike) * contractedMwhYr;
-        cashflows.push(annualCashflow);
+        const marketPrice = effectiveCapturePrice * priceMultiplier * Math.pow(1 + escalation, t);
+        cashflows.push((marketPrice - strike) * effectiveMwhYr);
       }
       return cashflows;
     }
@@ -110,14 +168,12 @@ router.get("/ppa-npv", async (req, res) => {
     const p10Npv = npv(p10Flows, wacc);
     const p90Npv = npv(p90Flows, wacc);
 
-    const p50AvgCashflow = p50Flows.reduce((s, v) => s + v, 0) / term;
-
     const breakevenPrice = (() => {
       let lo = 0, hi = 300;
       for (let i = 0; i < 60; i++) {
         const mid = (lo + hi) / 2;
         const flows = Array.from({ length: term }, (_, t) =>
-          (mid * Math.pow(1 + escalation, t) - strike) * contractedMwhYr
+          (mid * Math.pow(1 + escalation, t) - strike) * effectiveMwhYr
         );
         if (npv(flows, wacc) < 0) lo = mid; else hi = mid;
       }
@@ -126,13 +182,37 @@ router.get("/ppa-npv", async (req, res) => {
 
     res.json({
       candidateId,
-      candidateName: cand.name,
+      candidateName:    cand.name,
       assetType,
       market,
       capacityMw,
-      contractedMwhYr: Math.round(contractedMwhYr),
+      contractedMwhYr:  Math.round(effectiveMwhYr),
+      grossMwhYr:       Math.round(grossMwhYr),
       inputs: { strike, term, wacc, escalation },
-      baseCapturePriceMwh: Math.round(baseCapture * 100) / 100,
+
+      // Full price waterfall for frontend display
+      priceWaterfall: {
+        marketRefDa:      Math.round(marketRefDA * 100) / 100,
+        captureRatio:     Math.round(captureRatio * 1000) / 1000,
+        rawCapturePrice:  Math.round(rawCapturePrice * 100) / 100,
+        shapeDiscount:    Math.round(shapeDiscount * 1000) / 1000,
+        afterShapePrice:  Math.round(afterShapePrice * 100) / 100,
+        basisAdjMwh:      Math.round(basisAdjMwh * 100) / 100,
+        effectiveCapture: Math.round(effectiveCapturePrice * 100) / 100,
+      },
+
+      // Risk factor values used (defaults or caller overrides)
+      riskFactors: {
+        locationScore,
+        curtailmentScore:    curtailmentScoreN,
+        gridStabilityScore:  gridStabilityN,
+        basisAdjMwh:         Math.round(basisAdjMwh * 100) / 100,
+        curtailmentHaircut:  Math.round(curtailmentHaircut * 1000) / 1000,
+        shapeDiscount:       Math.round(shapeDiscount * 1000) / 1000,
+        curtailmentLossMwhYr: Math.round(grossMwhYr * curtailmentHaircut),
+      },
+
+      baseCapturePriceMwh: Math.round(effectiveCapturePrice * 100) / 100,
       scenarios: {
         p10: {
           label: "Bullish (+20% power price)",
@@ -144,7 +224,7 @@ router.get("/ppa-npv", async (req, res) => {
           label: "Base (current market)",
           priceMultiplier: 1.00,
           npvM: Math.round(p50Npv / 1e6 * 10) / 10,
-          avgAnnualCashflowM: Math.round(p50AvgCashflow / 1e6 * 10) / 10,
+          avgAnnualCashflowM: Math.round(npv(p50Flows, 0) / term / 1e6 * 10) / 10,
         },
         p90: {
           label: "Bearish (-20% power price)",
@@ -155,9 +235,9 @@ router.get("/ppa-npv", async (req, res) => {
       },
       breakevenPriceMwh: Math.round(breakevenPrice * 100) / 100,
       annualCashflowsP50M: p50Flows.map((v, t) => ({
-        year: t + 1,
-        cashflowM: Math.round(v / 1e6 * 10) / 10,
-        marketPriceMwh: Math.round(baseCapture * Math.pow(1 + escalation, t) * 100) / 100,
+        year:          t + 1,
+        cashflowM:     Math.round(v / 1e6 * 10) / 10,
+        marketPriceMwh: Math.round(effectiveCapturePrice * Math.pow(1 + escalation, t) * 100) / 100,
       })),
     });
   } catch (err) {
