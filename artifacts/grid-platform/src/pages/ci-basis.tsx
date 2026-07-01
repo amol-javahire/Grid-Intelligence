@@ -180,13 +180,13 @@ export default function CIBasis() {
           </div>
 
           {/* Basis time series */}
-          <Card className="flex-1">
+          <Card className="shrink-0">
             <CardHeader className="pb-2">
               <CardTitle className="text-sm">Monthly Basis Comparison — {nodeA} vs {nodeB}</CardTitle>
               <CardDescription className="text-xs">RT − DA basis. Reference lines at ±$10/MWh (congestion) and ±$25/MWh (severe).</CardDescription>
             </CardHeader>
-            <CardContent className="h-full pb-6">
-              <ResponsiveContainer width="100%" height="100%">
+            <CardContent className="pb-4">
+              <ResponsiveContainer width="100%" height={260}>
                 <LineChart data={chartData} margin={{ top:0, right:8, left:0, bottom:0 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#1e2d3e" vertical={false} />
                   <XAxis dataKey="label" stroke="#64748b" tick={{ fill:"#64748b", fontSize:9 }} interval={3} />
