@@ -146,7 +146,8 @@ function TempChart({
         <YAxis
           tick={{ fill: "#94a3b8", fontSize: 11 }}
           tickFormatter={(v) => `${v}°F`}
-          domain={["auto", "auto"]}
+          domain={[20, 110]}
+          ticks={[20, 30, 40, 50, 60, 70, 80, 90, 100, 110]}
         />
         <Tooltip
           contentStyle={{ background: "#0f172a", border: "1px solid #1e293b", borderRadius: 8 }}
@@ -250,7 +251,8 @@ function ForecastOverviewChart({
         <YAxis
           tick={{ fill: "#94a3b8", fontSize: 11 }}
           tickFormatter={(v) => `${v}°F`}
-          domain={["auto", "auto"]}
+          domain={[20, 110]}
+          ticks={[20, 30, 40, 50, 60, 70, 80, 90, 100, 110]}
         />
         <Tooltip
           contentStyle={{ background: "#0f172a", border: "1px solid #1e293b", borderRadius: 8 }}
@@ -332,7 +334,8 @@ function ForecastDailyChart({
         <YAxis
           tick={{ fill: "#94a3b8", fontSize: 11 }}
           tickFormatter={(v) => `${v}°F`}
-          domain={["auto", "auto"]}
+          domain={[20, 110]}
+          ticks={[20, 30, 40, 50, 60, 70, 80, 90, 100, 110]}
         />
         <Tooltip
           contentStyle={{ background: "#0f172a", border: "1px solid #1e293b", borderRadius: 8 }}
@@ -650,40 +653,41 @@ export default function WeatherPage() {
         )}
       </div>
 
-      {/* ── Top-level mode toggle ── */}
-      <div className="flex gap-1 bg-slate-800/60 p-1 rounded-lg w-fit border border-slate-700/50">
-        {(["actuals", "forecast"] as const).map(m => (
-          <button
-            key={m}
-            onClick={() => setMode(m)}
-            className={`px-6 py-1.5 rounded-md text-sm font-medium transition-colors ${
-              mode === m
-                ? m === "forecast"
-                  ? "bg-amber-500 text-white"
-                  : "bg-teal-500 text-white"
-                : "text-slate-400 hover:text-slate-200"
-            }`}
-          >
-            {m === "actuals" ? "Actuals" : "Forecast"}
-          </button>
-        ))}
-      </div>
+      {/* ── Toggles row: Actuals|Forecast ··· ERCOT|CAISO ── */}
+      <div className="flex items-center gap-16">
+        <div className="flex gap-1 bg-slate-800/60 p-1 rounded-lg border border-slate-700/50">
+          {(["actuals", "forecast"] as const).map(m => (
+            <button
+              key={m}
+              onClick={() => setMode(m)}
+              className={`px-6 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                mode === m
+                  ? m === "forecast"
+                    ? "bg-amber-500 text-white"
+                    : "bg-teal-500 text-white"
+                  : "text-slate-400 hover:text-slate-200"
+              }`}
+            >
+              {m === "actuals" ? "Actuals" : "Forecast"}
+            </button>
+          ))}
+        </div>
 
-      {/* ── ISO sub-toggle ── */}
-      <div className="flex gap-1 bg-slate-800/40 p-1 rounded-lg w-fit border border-slate-700/30">
-        {(["ERCOT", "CAISO"] as const).map(iso => (
-          <button
-            key={iso}
-            onClick={() => setActiveIso(iso)}
-            className={`px-5 py-1.5 rounded-md text-sm font-medium transition-colors ${
-              activeIso === iso
-                ? "bg-slate-600 text-white"
-                : "text-slate-500 hover:text-slate-300"
-            }`}
-          >
-            {iso}
-          </button>
-        ))}
+        <div className="flex gap-1 bg-slate-800/40 p-1 rounded-lg border border-slate-700/30">
+          {(["ERCOT", "CAISO"] as const).map(iso => (
+            <button
+              key={iso}
+              onClick={() => setActiveIso(iso)}
+              className={`px-5 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                activeIso === iso
+                  ? "bg-slate-600 text-white"
+                  : "text-slate-500 hover:text-slate-300"
+              }`}
+            >
+              {iso}
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* ── Content ── */}
