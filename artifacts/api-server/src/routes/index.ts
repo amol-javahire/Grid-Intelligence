@@ -12,6 +12,7 @@ import aesoStatsRouter from "./aeso_stats";
 import ppaRouter from "./ppa";
 import loadForecastRouter from "./load_forecast";
 import datacentersRouter from "./datacenters";
+import regulatoryRouter from "./regulatory";
 
 const router: IRouter = Router();
 
@@ -28,5 +29,6 @@ router.use(aesoStatsRouter);
 router.use(ppaRouter);
 router.use(loadForecastRouter);
 router.use(datacentersRouter);
+router.use(regulatoryRouter);
 
 export default router;

@@ -37,6 +37,7 @@ import WeatherPage from "@/pages/weather";
 import PpaCalculator from "@/pages/ppa-calculator";
 import EvChargingPage from "@/pages/ev-charging";
 import DatacentersPage from "@/pages/datacenters";
+import RegulatoryPage from "@/pages/regulatory";
 import NotFound from "@/pages/not-found";
 
 const queryClient = new QueryClient();
@@ -78,6 +79,7 @@ function Router() {
         <Route path="/ppa" component={PpaCalculator} />
         <Route path="/ev-charging" component={EvChargingPage} />
         <Route path="/datacenters" component={DatacentersPage} />
+        <Route path="/regulatory" component={RegulatoryPage} />
         {/* Legacy / spec-documented aliases */}
         <Route path="/rec"><Redirect to="/recs" /></Route>
         <Route path="/ci/heatmap"><Redirect to="/ci-heatmap" /></Route>

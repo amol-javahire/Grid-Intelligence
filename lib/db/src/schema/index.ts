@@ -27,3 +27,4 @@ export * from "./hourly_temperatures";
 export * from "./temperature_forecasts";
 export * from "./load_forecasts";
 export * from "./datacenters";
+export * from "./regulatory";
