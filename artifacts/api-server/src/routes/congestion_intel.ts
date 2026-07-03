@@ -15,9 +15,9 @@ function riskScore(absAvgBasis: number, basisStddev: number, congPct: number, ne
 // ── Overview ─────────────────────────────────────────────────────────────────
 router.get("/congestion-intel/overview", async (req, res) => {
   try {
-    const threshold = Number(req.query.threshold ?? 10);
-    const severe    = Number(req.query.severe    ?? 25);
-    const extreme   = Number(req.query.extreme   ?? 50);
+    const threshold = Number(req.query.threshold ?? 3);
+    const severe    = Number(req.query.severe    ?? 15);
+    const extreme   = Number(req.query.extreme   ?? 35);
 
     const [sumRows, monthRows] = await Promise.all([
       db.execute<{
@@ -276,7 +276,7 @@ router.get("/congestion-intel/basis-compare", async (req, res) => {
 // ── Backtest (dynamic year) ───────────────────────────────────────────────────
 router.get("/congestion-intel/backtest", async (req, res) => {
   try {
-    const threshold = Number(req.query.threshold ?? 10);
+    const threshold = Number(req.query.threshold ?? 3);
 
     // Find the most recent year with RT data — works regardless of what years are in the DB
     const boundsRes = await db.execute<{ test_year: string }>(sql`

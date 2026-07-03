@@ -410,8 +410,8 @@ async def admin_seed(
     if _seeding or seed_status.get("running"):
         return {"status": "already_running", "seed_status": dict(seed_status)}
 
-    if mode not in ("quick", "full"):
-        raise HTTPException(status_code=400, detail="mode must be 'quick' or 'full'")
+    if mode not in ("quick", "full", "gaps"):
+        raise HTTPException(status_code=400, detail="mode must be 'quick', 'full', or 'gaps'")
 
     _seeding = True
 
@@ -421,6 +421,9 @@ async def admin_seed(
             if mode == "full":
                 from seeder import seed_ercot_api_full
                 seed_ercot_api_full()
+            elif mode == "gaps":
+                from seeder import seed_ercot_api_gaps
+                seed_ercot_api_gaps()
             else:
                 from seeder import seed_cdr_quick
                 seed_cdr_quick()

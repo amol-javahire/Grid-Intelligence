@@ -521,3 +521,171 @@ def seed_ercot_api_full() -> None:
     except Exception as exc:
         logger.exception("ERCOT API full seed failed")
         _fail(str(exc))
+
+
+# ── ERCOT API — Gap-fill mode (only missing/partial months) ───────────────────
+
+def seed_ercot_api_gaps() -> None:
+    """
+    Gap-fill: fetch only months missing or partially seeded in ercot_node_stats.
+    Uses 100k page size for speed. Typically covers the last 1-3 months.
+    """
+    _reset("gaps")
+    logger.info("ERCOT API gap-fill seed starting")
+    try:
+        client_id = os.environ.get("ERCOT_CLIENT_ID", "")
+        username  = os.environ.get("ERCOT_USERNAME",  "")
+        password  = os.environ.get("ERCOT_PASSWORD",  "")
+        sub_key   = os.environ.get("ERCOT_SUBSCRIPTION_KEY", "")
+
+        missing = [k for k, v in {
+            "ERCOT_CLIENT_ID": client_id, "ERCOT_USERNAME": username,
+            "ERCOT_PASSWORD": password,   "ERCOT_SUBSCRIPTION_KEY": sub_key,
+        }.items() if not v]
+        if missing:
+            _fail(f"Missing env vars: {', '.join(missing)}")
+            return
+
+        # Find months that are missing or have < 900 nodes (partial)
+        conn = _get_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT year, month, COUNT(DISTINCT node) AS n
+                    FROM ercot_node_stats
+                    WHERE year >= 2026
+                    GROUP BY year, month
+                    ORDER BY year, month
+                """)
+                covered = {(r[0], r[1]): r[2] for r in cur.fetchall()}
+        finally:
+            conn.close()
+
+        # Build gap list: months in 2026 up to today with < 900 nodes
+        now = datetime.date.today()
+        gaps: list[tuple[int, int]] = []
+        y, m = 2026, 1
+        while (y, m) <= (now.year, now.month):
+            node_count = covered.get((y, m), 0)
+            if node_count < 900:
+                gaps.append((y, m))
+                logger.info("Gap month: %d-%02d (%d nodes)", y, m, node_count)
+            y_next, m_next = (y + 1, 1) if m == 12 else (y, m + 1)
+            y, m = y_next, m_next
+
+        if not gaps:
+            _finish(0)
+            logger.info("Gap-fill: no missing months found")
+            return
+
+        logger.info("Gap-fill: %d months to seed: %s",
+                    len(gaps), ", ".join(f"{y}-{m:02d}" for y, m in gaps))
+        _set(progress=f"Found {len(gaps)} gap months: "
+             + ", ".join(f"{y}-{m:02d}" for y, m in gaps))
+
+        _set(phase="authenticating with ERCOT B2C")
+        token = _get_token(client_id, username, password)
+        logger.info("ERCOT API token obtained for gap-fill")
+
+        rt_agg: dict = {}
+        da_agg: dict = {}
+
+        for idx, (year, month) in enumerate(gaps):
+            last_day  = calendar.monthrange(year, month)[1]
+            date_from = f"{year}-{month:02d}-01"
+            date_to   = f"{year}-{month:02d}-{last_day:02d}"
+            label     = f"{year}-{month:02d}"
+
+            # RT
+            _set(phase=f"RT {label}",
+                 progress=f"Gap {idx + 1}/{len(gaps)} — {label} RT prices")
+            try:
+                # Try 100k page size first (reduces round-trips 10x if API supports it)
+                headers = {
+                    "Authorization": f"Bearer {token}",
+                    "Ocp-Apim-Subscription-Key": sub_key,
+                    "Accept": "application/json",
+                }
+                page, total_pages = 1, 1
+                params = {"deliveryDateFrom": date_from, "deliveryDateTo": date_to}
+                while page <= total_pages:
+                    qs = {**params, "size": "100000", "page": str(page)}
+                    resp = requests.get(_RT_URL, params=qs, headers=headers, timeout=120)
+                    body = resp.json()
+                    if isinstance(body, dict) and body.get("statusCode") == 429:
+                        msg = body.get("message", "")
+                        m_wait = re.search(r"try again in (\d+)", msg, re.IGNORECASE)
+                        wait = int(m_wait.group(1)) + 2 if m_wait else 30
+                        logger.info("Rate limited RT %s — waiting %ds", label, wait)
+                        time.sleep(wait)
+                        continue
+                    total_pages = (body.get("_meta") or {}).get("totalPages", 1) or 1
+                    for row in body.get("data") or []:
+                        if not isinstance(row, list) or len(row) < 6:
+                            continue
+                        date_s = str(row[0])
+                        hour   = int(row[1])
+                        node   = str(row[3])
+                        price  = float(row[5])
+                        key    = (node, year, month)
+                        if key not in rt_agg:
+                            rt_agg[key] = {"rt": [], "on_pk": [], "off_pk": []}
+                        rt_agg[key]["rt"].append(price)
+                        if _on_peak_iso(date_s, hour):
+                            rt_agg[key]["on_pk"].append(price)
+                        else:
+                            rt_agg[key]["off_pk"].append(price)
+                    logger.info("%s RT p%d/%d done", label, page, total_pages)
+                    page += 1
+                    if page <= total_pages:
+                        time.sleep(1.4)
+            except Exception as exc:
+                logger.warning("%s RT fetch failed: %s", label, exc)
+            time.sleep(0.5)
+
+            # DA
+            _set(phase=f"DA {label}",
+                 progress=f"Gap {idx + 1}/{len(gaps)} — {label} DA prices")
+            try:
+                page, total_pages = 1, 1
+                while page <= total_pages:
+                    qs = {**params, "size": "100000", "page": str(page)}
+                    resp = requests.get(_DA_URL, params=qs, headers=headers, timeout=120)
+                    body = resp.json()
+                    if isinstance(body, dict) and body.get("statusCode") == 429:
+                        msg = body.get("message", "")
+                        m_wait = re.search(r"try again in (\d+)", msg, re.IGNORECASE)
+                        wait = int(m_wait.group(1)) + 2 if m_wait else 30
+                        logger.info("Rate limited DA %s — waiting %ds", label, wait)
+                        time.sleep(wait)
+                        continue
+                    total_pages = (body.get("_meta") or {}).get("totalPages", 1) or 1
+                    for row in body.get("data") or []:
+                        if not isinstance(row, list) or len(row) < 4:
+                            continue
+                        node  = str(row[2])
+                        price = float(row[3])
+                        key   = (node, year, month)
+                        if key not in da_agg:
+                            da_agg[key] = {"da": []}
+                        da_agg[key]["da"].append(price)
+                    logger.info("%s DA p%d/%d done", label, page, total_pages)
+                    page += 1
+                    if page <= total_pages:
+                        time.sleep(1.4)
+            except Exception as exc:
+                logger.warning("%s DA fetch failed: %s", label, exc)
+            time.sleep(0.5)
+
+        _set(phase="building aggregated rows")
+        rows_to_insert = _build_rows(rt_agg, da_agg)
+        logger.info("Gap-fill: %d node×month rows ready to upsert", len(rows_to_insert))
+
+        _set(phase="upserting to DB")
+        inserted = _upsert(rows_to_insert)
+        _finish(inserted)
+        logger.info("ERCOT API gap-fill complete — %d rows", inserted)
+
+    except Exception as exc:
+        logger.exception("ERCOT API gap-fill failed")
+        _fail(str(exc))

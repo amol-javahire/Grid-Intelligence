@@ -38,11 +38,12 @@ const NODE_TYPE_LABELS: Record<string, string> = {
 
 export default function CIHeatmap() {
   const [, navigate] = useLocation();
-  const [search, setSearch]     = useState("");
-  const [nodeType, setNodeType] = useState<string>("all");
-  const [sortKey, setSortKey]   = useState<SortKey>("riskScore");
-  const [sortDir, setSortDir]   = useState<"desc"|"asc">("desc");
-  const [page, setPage]         = useState(0);
+  const [search, setSearch]       = useState("");
+  const [nodeType, setNodeType]   = useState<string>("all");
+  const [minMonths, setMinMonths] = useState(3);
+  const [sortKey, setSortKey]     = useState<SortKey>("riskScore");
+  const [sortDir, setSortDir]     = useState<"desc"|"asc">("desc");
+  const [page, setPage]           = useState(0);
   const pageSize = 100;
 
   const { data: raw, isLoading } = useQuery<HeatmapRow[]>({
@@ -54,12 +55,13 @@ export default function CIHeatmap() {
   const filtered = useMemo(() => {
     let rows = raw ?? [];
     if (nodeType !== "all") rows = rows.filter(r => r.nodeType === nodeType);
+    if (minMonths > 1) rows = rows.filter(r => r.rtMonths >= minMonths);
     if (search) rows = rows.filter(r => r.node.toLowerCase().includes(search.toLowerCase()));
     return [...rows].sort((a, b) => {
       const diff = (a[sortKey] ?? 0) - (b[sortKey] ?? 0);
       return sortDir === "desc" ? -diff : diff;
     });
-  }, [raw, nodeType, search, sortKey, sortDir]);
+  }, [raw, nodeType, search, minMonths, sortKey, sortDir]);
 
   const paged = filtered.slice(page * pageSize, (page + 1) * pageSize);
   const totalPages = Math.ceil(filtered.length / pageSize);
@@ -101,17 +103,27 @@ export default function CIHeatmap() {
         </div>
 
         <div className="shrink-0 flex flex-wrap gap-3 items-center">
-          <div className="relative w-[240px]">
+          <div className="relative w-[220px]">
             <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
             <Input placeholder="Search nodes…" className="pl-8 h-9" value={search} onChange={e => { setSearch(e.target.value); setPage(0); }} />
           </div>
           <Select value={nodeType} onValueChange={v => { setNodeType(v); setPage(0); }}>
-            <SelectTrigger className="w-[160px] h-9"><SelectValue /></SelectTrigger>
+            <SelectTrigger className="w-[155px] h-9"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All Types</SelectItem>
               <SelectItem value="resource_node">Resource Nodes</SelectItem>
               <SelectItem value="hub">Hubs</SelectItem>
               <SelectItem value="load_zone">Load Zones</SelectItem>
+            </SelectContent>
+          </Select>
+          <Select value={String(minMonths)} onValueChange={v => { setMinMonths(Number(v)); setPage(0); }}>
+            <SelectTrigger className="w-[160px] h-9"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="1">All coverage</SelectItem>
+              <SelectItem value="3">≥ 3 months</SelectItem>
+              <SelectItem value="6">≥ 6 months</SelectItem>
+              <SelectItem value="12">≥ 12 months</SelectItem>
+              <SelectItem value="24">≥ 24 months</SelectItem>
             </SelectContent>
           </Select>
           <div className="ml-auto flex items-center gap-4 text-xs text-muted-foreground">

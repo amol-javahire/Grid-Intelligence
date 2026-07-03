@@ -31,9 +31,10 @@ if (!CLIENT_ID || !USERNAME || !PASSWORD || !SUB_KEY) {
 }
 
 // ── Date range ────────────────────────────────────────────────────────────────
+// Gap-fill: only seed months missing or partial in the DB.
+// Full history (Jan 2024 – Apr 2026) already seeded. Fetching only the gaps.
 const MONTHS: Array<{ year: number; month: number }> = [];
-for (let m = 5; m <= 12; m++) MONTHS.push({ year: 2025, month: m });
-for (let m = 1; m <= 5; m++)  MONTHS.push({ year: 2026, month: m });
+for (let m = 5; m <= 5; m++)  MONTHS.push({ year: 2026, month: m }); // May 2026 only; run again for June
 
 function padZ(n: number) { return String(n).padStart(2, "0"); }
 function daysInMonth(y: number, m: number) { return new Date(y, m, 0).getDate(); }
@@ -129,7 +130,7 @@ async function fetchAllPages<T>(
   const results: T[] = [];
 
   do {
-    const qs = new URLSearchParams({ ...params, size: "10000", page: String(page) }).toString();
+    const qs = new URLSearchParams({ ...params, size: "100000", page: String(page) }).toString();
     let respText: string;
     let attempts = 0;
 

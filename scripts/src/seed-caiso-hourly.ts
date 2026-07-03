@@ -32,7 +32,7 @@ const YEARS_MONTHS: Array<{ year: number; month: number }> = [];
 for (const year of [2024, 2025]) {
   for (let m = 1; m <= 12; m++) YEARS_MONTHS.push({ year, month: m });
 }
-for (let m = 1; m <= 5; m++) YEARS_MONTHS.push({ year: 2026, month: m });
+for (let m = 1; m <= 6; m++) YEARS_MONTHS.push({ year: 2026, month: m });
 
 function padZero(n: number) { return n.toString().padStart(2, "0"); }
 
@@ -53,16 +53,19 @@ function downloadBuffer(url: string, redirects = 0): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     if (redirects > 5) return reject(new Error("Too many redirects"));
     let settled = false;
-    https.get(url, { headers: { "User-Agent": "Mozilla/5.0" } }, (res): void => {
+    const settle = (fn: () => void) => { if (!settled) { settled = true; fn(); } };
+    const req = https.get(url, { headers: { "User-Agent": "Mozilla/5.0" } }, (res): void => {
       if ((res.statusCode === 301 || res.statusCode === 302) && res.headers.location) {
         void downloadBuffer(res.headers.location, redirects + 1).then(resolve).catch(reject);
         return;
       }
       const chunks: Buffer[] = [];
       res.on("data", (c: Buffer) => chunks.push(c));
-      res.on("end", () => { if (!settled) { settled = true; resolve(Buffer.concat(chunks)); } });
-      res.on("error", (err) => { if (!settled) { settled = true; reject(err); } });
-    }).on("error", (err) => { if (!settled) { settled = true; reject(err); } });
+      res.on("end", () => settle(() => resolve(Buffer.concat(chunks))));
+      res.on("error", (err) => settle(() => reject(err)));
+    });
+    req.on("error", (err) => settle(() => reject(err)));
+    req.setTimeout(20_000, () => { settle(() => reject(new Error("Download timeout"))); req.destroy(); });
   });
 }
 
@@ -151,7 +154,7 @@ async function fetchMonthHourly(nodeId: string, marketRunId: string, year: numbe
 
 async function main() {
   console.log("=== CAISO Hub Hourly Seed ===");
-  console.log("Nodes: SP15, NP15, ZP26 · DA + RT · Jan 2024–May 2026\n");
+  console.log("Nodes: SP15, NP15, ZP26 · DA + RT · Jan 2024–Jun 2026\n");
 
   // Check existing rows — skip only months that have BOTH da_price and rt_price populated
   const existingRows = await db.execute<{ node: string; year: number; month: number; has_rt: string }>(
@@ -191,14 +194,21 @@ async function main() {
 
       try {
         daRows = await fetchMonthHourly(node.id, "DAM", year, month);
-        process.stdout.write(` ${daRows.length} rows. RT...`);
+        process.stdout.write(` ${daRows.length} rows.`);
+      } catch (err) {
+        process.stdout.write(` DA ERROR: ${err}\n`);
+        await sleep(5000);
+        continue;
+      }
+
+      process.stdout.write(` RT...`);
+      try {
         await sleep(1000); // be polite to OASIS
         rtRows = await fetchMonthHourly(node.id, "RTM", year, month);
         process.stdout.write(` ${rtRows.length} rows.`);
       } catch (err) {
-        process.stdout.write(` ERROR: ${err}\n`);
-        await sleep(5000);
-        continue;
+        process.stdout.write(` RT ERROR (${err}) — saving DA-only.\n`);
+        await sleep(2000);
       }
 
       if (daRows.length === 0 && rtRows.length === 0) {

@@ -1,0 +1,30 @@
+The "EV charging/datacenters/regulatory" URLs 404 in the React router — they're SPA catch-all 200s but not wired up yet. Let me check the live CI data and the backtest issue.Used Claude in Chrome (2 actions)Used Claude in Chrome (2 actions)Now I have the full picture. Let me compile the complete assessment.
+
+What I found — full audit
+The 340-bus model
+The guide still says "5-bus" and there's no /opf or /pypsa route in the React router (returns 404). Either the 340-bus upgrade is backend-only (not yet surfaced in the UI), or it needs a new route wired up. Nothing in the nav references it.
+
+EV Charging / Datacenters / Regulatory
+These 404 in the React Router. They seem to not be wired up yet — the React SPA returns 200 for all unknown URLs (catch-all), but navigating to /ev-charging, /datacenters, /regulatory, /ira all render the "Did you forget to add the page to the router?" fallback. They need to be built and added to the router.
+
+CI Congestion Intelligence — Key Issues Found
+1. Resource node data is nearly empty (critical)
+The DB has only ~1,100 total records across 820 nodes — that's ~1.3 months per resource node on average. It should have 820 × 28 months ≈ 23,000 records. The Python seeder appears to have only loaded ~1 month per node instead of the full Jan 2024–Apr 2026 history. Downstream effects:
+
+Every resource node shows 1/1 months in the heatmap
+Every resource node shows $0.00 basis (1 month of data = DA≈RT by construction)
+The CI Overview shows 0 congestion events, 0 severe events, 0 neg-price months — even though the hub data is real
+The backtest returns n: 0, records: [] — no 2026 test data found
+
+2. Heatmap ranking is inverted
+Because resource nodes with 1 month of data and ~20% neg-price frequency get a base score of 8–10, they rank above LZ_HOUSTON (riskScore 8, 36 months, real data) and LZ_NORTH (7, 36 months). The top 84 ranked nodes in the heatmap are all single-month resource nodes with $0 basis — meaningless for deal decisions. LZ_HOUSTON doesn't appear until rank #85.
+Fix: add a minimum coverage filter (≥3 months) before ranking, or show a "data coverage" warning badge on single-month nodes.
+3. Backtest completely broken
+/api/congestion-intel/backtest returns {n: 0, records: []}. The seasonal mean model was trained on 2024–2025 and should test on Jan–Apr 2026 — but those records aren't in the DB for resource nodes (only hub/zone nodes have 2022–2026 coverage). The backtest page correctly shows "No 2026 actuals found" but needs the data pipeline fixed first.
+4. Date range display misleading
+CI Overview header says "2022-01 → 2026-06" which is accurate for hub/zone nodes only. Resource nodes start Jan 2024. The UI doesn't make this distinction clear to a viewer.
+5. CI Overview thresholds too high for hub/zone data
+Default threshold is $10/MWh congestion. LZ_HOUSTON's max basis is $8.34 — just below that. So even the hubs correctly show 0 congestion events by that definition. The thresholds work fine once resource node data is loaded (some West Texas resource nodes will easily hit $10+), but for hub-only data they'll always show zero. Lowering the default to $3 would give meaningful stats immediately.
+
+The /recs page
+Live and functional with correct methodology: ERCOT TRC ~$1.50/MWh, CAISO WREGIS solar $12, PJM SREC $15 offshore OREC $120. Good data. One suggestion: add a filter for post-OBBBA (July 4, 2025) eligibility — projects that can't meet the Dec 31, 2028 placed-in-service deadline should get flagged as "credit-ineligible" in the REC/tax credit scoring.

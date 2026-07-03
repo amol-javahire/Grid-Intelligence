@@ -26,9 +26,9 @@ function useCI<T>(endpoint: string, params: Record<string, string|number|undefin
 }
 
 export default function CIOverview() {
-  const [threshold, setThreshold] = useState(10);
-  const [severe, setSevere]       = useState(25);
-  const [extreme, setExtreme]     = useState(50);
+  const [threshold, setThreshold] = useState(3);
+  const [severe, setSevere]       = useState(15);
+  const [extreme, setExtreme]     = useState(35);
 
   const { data, isLoading } = useCI<Overview>("overview", { threshold, severe, extreme });
 

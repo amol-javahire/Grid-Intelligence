@@ -24,15 +24,15 @@ const CACHE_DIR = "/tmp/ercot-hourly-cache";
 
 const CDR = "https://www.ercot.com/misdownload/servlets/mirDownload?mimic_duns=000000000&doclookupId=";
 
-const RTM_IDS: Record<number, string> = {
+const RTM_IDS: Record<number, string> = { // CDR 13061 — updated July 2026
   2024: "1065471230",
   2025: "1177737535",
-  2026: "1238507929",
+  2026: "1243904638",
 };
-const DAM_IDS: Record<number, string> = {
+const DAM_IDS: Record<number, string> = { // CDR 13060 — updated July 2026
   2024: "1065468714",
   2025: "1177667469",
-  2026: "1238506057",
+  2026: "1243902715",
 };
 
 const HUB_ZONE_NODES = new Set([
@@ -48,16 +48,19 @@ function downloadBuffer(url: string, redirects = 0): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     if (redirects > 5) return reject(new Error("Too many redirects"));
     let settled = false;
-    https.get(url, { headers: { "User-Agent": "Mozilla/5.0" } }, (res): void => {
+    const settle = (fn: () => void) => { if (!settled) { settled = true; fn(); } };
+    const req = https.get(url, { headers: { "User-Agent": "Mozilla/5.0" } }, (res): void => {
       if ((res.statusCode === 301 || res.statusCode === 302) && res.headers.location) {
         void downloadBuffer(res.headers.location, redirects + 1).then(resolve).catch(reject);
         return;
       }
       const chunks: Buffer[] = [];
       res.on("data", (c: Buffer) => chunks.push(c));
-      res.on("end", () => { if (!settled) { settled = true; resolve(Buffer.concat(chunks)); } });
-      res.on("error", (e) => { if (!settled) { settled = true; reject(e); } });
-    }).on("error", (e) => { if (!settled) { settled = true; reject(e); } });
+      res.on("end", () => settle(() => resolve(Buffer.concat(chunks))));
+      res.on("error", (e) => settle(() => reject(e)));
+    });
+    req.on("error", (e) => settle(() => reject(e)));
+    req.setTimeout(90_000, () => { settle(() => reject(new Error("Download timeout"))); req.destroy(); });
   });
 }
 
@@ -171,18 +174,28 @@ async function getXlsxPath(year: number, type: "RTM" | "DAM", ids: Record<number
   return cachePath;
 }
 
-async function processYear(year: number, map: Map<HourKey, HourAgg>) {
+async function processYear(
+  year: number,
+  map: Map<HourKey, HourAgg>,
+  skipMonths: Set<number>,   // month numbers already fully covered in DB
+) {
   for (const [type, ids] of [["RTM", RTM_IDS], ["DAM", DAM_IDS]] as const) {
     const cachePath = await getXlsxPath(year, type, ids);
-    console.log(`  [${year}] Parsing ${type} sheet by sheet...`);
-    for (const sn of MONTHS) {
-      const wb = XLSX.read(fs.readFileSync(cachePath), { type: "buffer" });
+    console.log(`  [${year}] Parsing ${type}...`);
+    // Read workbook ONCE — not inside the per-sheet loop
+    const wb = XLSX.read(fs.readFileSync(cachePath), { type: "buffer" });
+    let parsed = 0;
+    for (let mi = 0; mi < MONTHS.length; mi++) {
+      const sn = MONTHS[mi];
+      const monthNum = mi + 1;
+      if (skipMonths.has(monthNum)) { process.stdout.write(` [${sn}:skip]`); continue; }
       if (!wb.Sheets[sn]) continue;
       if (type === "RTM") parseRtmSheet(wb.Sheets[sn], map);
       else parseDamSheet(wb.Sheets[sn], map);
-      process.stdout.write(`    ${sn}`);
+      process.stdout.write(` ${sn}`);
+      parsed++;
     }
-    console.log();
+    console.log(parsed === 0 ? " (all months already in DB)" : "");
   }
 }
 
@@ -190,11 +203,37 @@ async function main() {
   console.log("=== ERCOT Hourly Price Seed ===");
   console.log("Source: CDR 13061 RTM + 13060 DAM — all 15 hub/zone settlement points\n");
 
+  // Pre-flight: find which (year, month) combinations are already fully seeded
+  // "Fully seeded" = all 15 nodes present with both DA and RT for that year-month
+  const existingRes = await db.execute<{ year: number; month: number; node_count: number }>(sql`
+    SELECT year, month, COUNT(DISTINCT node) AS node_count
+    FROM ercot_hub_hourly
+    WHERE da_price IS NOT NULL AND rt_price IS NOT NULL
+    GROUP BY year, month
+  `);
+  const fullySeeded = new Map<number, Set<number>>();  // year → Set<month>
+  for (const r of existingRes.rows) {
+    const y = Number(r.year), m = Number(r.month), cnt = Number(r.node_count);
+    if (cnt >= 15) {
+      if (!fullySeeded.has(y)) fullySeeded.set(y, new Set());
+      fullySeeded.get(y)!.add(m);
+    }
+  }
+  for (const [y, months] of fullySeeded.entries()) {
+    console.log(`  ${y}: ${months.size} months already fully seeded (skip)`);
+  }
+
   const map = new Map<HourKey, HourAgg>();
   for (const year of [2024, 2025, 2026]) {
-    console.log(`[Year ${year}]`);
+    const skipMonths = fullySeeded.get(year) ?? new Set<number>();
+    // Skip entire year if all 12 months are covered
+    if (skipMonths.size >= 12) {
+      console.log(`[Year ${year}] — all months in DB, skipping.`);
+      continue;
+    }
+    console.log(`[Year ${year}] — skipping ${skipMonths.size} covered months, parsing ${12 - skipMonths.size} new.`);
     try {
-      await processYear(year, map);
+      await processYear(year, map, skipMonths);
     } catch (e) {
       console.warn(`  ⚠ Skipping year ${year}: ${(e as Error).message}`);
     }
@@ -217,6 +256,11 @@ async function main() {
       daPrice: daAvg !== null ? daAvg.toFixed(4) : null,
       rtPrice: rtAvg !== null ? rtAvg.toFixed(4) : null,
     });
+  }
+
+  if (rows.length === 0) {
+    console.log("Nothing new to insert — all data already in DB.");
+    process.exit(0);
   }
 
   console.log(`Inserting ${rows.length} hourly rows (ON CONFLICT DO NOTHING)...`);

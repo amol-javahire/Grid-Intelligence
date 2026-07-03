@@ -295,7 +295,7 @@ const TABS = [
         color: C.indigo,
         status: "live",
         summary:
-          "Interactive DC Optimal Power Flow simulator using a reduced-order 5-bus ERCOT network (NORTH, HOUSTON, SOUTH, WEST, PAN zones). Adjust System Load, Wind/Solar Capacity Factors, and Gas Price via sliders, then click Run OPF to dispatch a new optimisation. Results show nodal LMPs, line loading %, generation dispatch by fuel type (Gas, Wind, Solar, Nuclear), and congestion rent. The SVG network schematic colour-codes nodes green/amber/red by LMP level and shows line utilisation.",
+          "Interactive DC Optimal Power Flow simulator using a 340-bus ERCOT network (real bus/node topology from ERCOT shift-factor data). Adjust System Load, Wind/Solar Capacity Factors, and Gas Price via sliders, then click Run OPF to dispatch a new optimisation. Results show nodal LMPs, line loading %, generation dispatch by fuel type (Gas, Wind, Solar, Nuclear), and congestion rent. The network diagram colour-codes nodes green/amber/red by LMP level and shows line utilisation.",
         dataSource: "PyPSA + HiGHS LP solver — generators from EIA 860 aggregated by zone; synthetic load profiles",
         useCases: ["siting"],
       },
@@ -550,7 +550,7 @@ export default function PlatformGuide() {
               {
                 label: "PyPSA OPF Engine",
                 status: "real",
-                detail: "Live Python FastAPI microservice. HiGHS LP solver. 5-bus reduced-order ERCOT network. Runs on-demand.",
+                detail: "Live Python FastAPI microservice. HiGHS LP solver. 340-bus ERCOT network. Runs on-demand.",
               },
               {
                 label: "XGBoost ML Model",
