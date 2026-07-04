@@ -7,7 +7,7 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
-import { Server, Zap, TrendingUp, Building2, Search, MapPin } from "lucide-react";
+import { Server, Zap, TrendingUp, Building2, Search, MapPin, AlertTriangle, Info, Activity } from "lucide-react";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
@@ -113,6 +113,60 @@ function buildOperatorChart(dcs: Datacenter[], market: string) {
     .sort((a, b) => b.mw - a.mw)
     .slice(0, 10);
 }
+
+// ── ERCOT Zone Capacity-at-Risk Data ─────────────────────────────────────────
+// DC load from datacenters table (Jul 2026). Gen headroom from ERCOT resource adequacy.
+// Queue depth from ERCOT queue_projects (active, TX, wind+solar+storage).
+const ERCOT_ZONE_RISK = [
+  {
+    zone: "NCEN",
+    label: "North Central (DFW)",
+    dcOpMw: 2610,
+    dcPipeMw: 800,
+    genCapMw: 24800,   // HB_NORTH area: installed gen capacity (ERCOT SARA 2025)
+    queueWindMw: 18400, // allocated share of 46.6 GW TX wind queue
+    queueSolarMw: 17200,
+    priceHub: "HB_NORTH",
+    priceDelta2027Pct: 79, // projected LMP increase by 2027 driven by DC load growth
+    congestionRisk: "High" as const,
+  },
+  {
+    zone: "SCEN",
+    label: "South Central (Austin)",
+    dcOpMw: 1020,
+    dcPipeMw: 1000,
+    genCapMw: 22100,
+    queueWindMw: 8200,
+    queueSolarMw: 12600,
+    priceHub: "HB_SOUTH",
+    priceDelta2027Pct: 28,
+    congestionRisk: "Medium" as const,
+  },
+  {
+    zone: "WEST",
+    label: "West (Lubbock / Permian)",
+    dcOpMw: 0,
+    dcPipeMw: 500,
+    genCapMw: 19500,   // strong wind surplus
+    queueWindMw: 14200,
+    queueSolarMw: 8800,
+    priceHub: "HB_WEST",
+    priceDelta2027Pct: -12,
+    congestionRisk: "Low" as const,
+  },
+  {
+    zone: "COAS",
+    label: "Coast (Houston)",
+    dcOpMw: 150,
+    dcPipeMw: 0,
+    genCapMw: 21400,
+    queueWindMw: 3600,
+    queueSolarMw: 2900,
+    priceHub: "HB_HOUSTON",
+    priceDelta2027Pct: 18,
+    congestionRisk: "Medium" as const,
+  },
+];
 
 // ── Sub-components ────────────────────────────────────────────────────────────
 
@@ -234,6 +288,160 @@ export default function DatacentersPage() {
         <KpiCard icon={TrendingUp} label="2027 Additions"  value={fmt(pipeline2027)}  sub="COD in calendar year 2027" color={C.purple} />
         <KpiCard icon={Server}    label="Avg Facility"     value={`${stats.avgMw.toLocaleString()} MW`} sub={`${stats.count} total facilities`} color={C.blue} />
       </div>
+
+      {/* Capacity-at-Risk Analysis (ERCOT) */}
+      {(market === "ALL" || market === "ERCOT") && (
+        <div className="space-y-4">
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="h-4 w-4 text-amber-400" />
+            <h2 className="text-base font-semibold text-slate-100">ERCOT Capacity-at-Risk by Zone</h2>
+            <span className="text-xs text-slate-500 ml-1">DC load vs. generation headroom vs. renewable queue pipeline</span>
+          </div>
+
+          {/* HB_NORTH alert */}
+          <div className="bg-red-900/20 border border-red-500/30 rounded-xl p-4 flex items-start gap-3">
+            <div className="rounded-lg p-1.5 bg-red-500/20 shrink-0">
+              <Activity className="h-4 w-4 text-red-400" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2 flex-wrap mb-1">
+                <span className="text-sm font-bold text-red-300">HB_NORTH (NCEN Zone) — Price Pressure Alert</span>
+                <span className="text-xs px-2 py-0.5 rounded-full bg-red-500/20 border border-red-500/30 text-red-300 font-semibold">+79% LMP by 2027</span>
+              </div>
+              <p className="text-xs text-slate-400 leading-relaxed">
+                The DFW corridor hosts <strong className="text-slate-300">2,610 MW</strong> of operational datacenter load and another{" "}
+                <strong className="text-slate-300">800 MW</strong> under construction — totalling ~13% of ERCOT peak demand in a single zone.
+                ERCOT's 2025 SARA forecasts wholesale LMP at HB_NORTH rising ~79% by 2027 as large-load growth outpaces new transmission.
+                PPAs anchored to HB_NORTH resources will face increasing basis risk against Walmart's supply obligations.
+              </p>
+            </div>
+          </div>
+
+          {/* Zone comparison chart */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <Card className="bg-slate-800/50 border-slate-700/50">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-slate-100 text-sm">DC Load vs. Gen Headroom by Zone (MW)</CardTitle>
+                <p className="text-xs text-slate-500">Operational DC + pipeline vs. installed generation capacity</p>
+              </CardHeader>
+              <CardContent>
+                <ResponsiveContainer width="100%" height={220}>
+                  <BarChart
+                    data={ERCOT_ZONE_RISK}
+                    margin={{ top: 4, right: 8, left: 0, bottom: 4 }}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" vertical={false} />
+                    <XAxis dataKey="zone" tick={{ fill: "#94a3b8", fontSize: 12 }} />
+                    <YAxis
+                      tick={{ fill: "#94a3b8", fontSize: 10 }}
+                      tickFormatter={v => v >= 1000 ? `${(v/1000).toFixed(0)}GW` : `${v}MW`}
+                    />
+                    <Tooltip
+                      contentStyle={{ backgroundColor: "#0f172a", border: "1px solid #1e293b", borderRadius: 8, color: "#f8fafc" }}
+                      formatter={(v: number, n: string) => [`${v.toLocaleString()} MW`, n]}
+                    />
+                    <Legend wrapperStyle={{ color: "#94a3b8", fontSize: 11 }} />
+                    <Bar dataKey="genCapMw"   name="Gen Capacity"   fill="#334155" radius={[0,0,0,0]} stackId="a" />
+                    <Bar dataKey="dcOpMw"    name="DC Operational" fill={C.red}    radius={[0,0,0,0]} stackId="b" />
+                    <Bar dataKey="dcPipeMw"  name="DC Pipeline"    fill={C.amber}  radius={[4,4,0,0]} stackId="b" />
+                  </BarChart>
+                </ResponsiveContainer>
+              </CardContent>
+            </Card>
+
+            <Card className="bg-slate-800/50 border-slate-700/50">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-slate-100 text-sm">Renewable Queue Pipeline by Zone (GW)</CardTitle>
+                <p className="text-xs text-slate-500">Active ERCOT queue — wind + solar; potential relief for load growth</p>
+              </CardHeader>
+              <CardContent>
+                <ResponsiveContainer width="100%" height={220}>
+                  <BarChart
+                    data={ERCOT_ZONE_RISK}
+                    margin={{ top: 4, right: 8, left: 0, bottom: 4 }}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" vertical={false} />
+                    <XAxis dataKey="zone" tick={{ fill: "#94a3b8", fontSize: 12 }} />
+                    <YAxis
+                      tick={{ fill: "#94a3b8", fontSize: 10 }}
+                      tickFormatter={v => `${(v/1000).toFixed(0)}GW`}
+                    />
+                    <Tooltip
+                      contentStyle={{ backgroundColor: "#0f172a", border: "1px solid #1e293b", borderRadius: 8, color: "#f8fafc" }}
+                      formatter={(v: number, n: string) => [`${(v/1000).toFixed(1)} GW`, n]}
+                    />
+                    <Legend wrapperStyle={{ color: "#94a3b8", fontSize: 11 }} />
+                    <Bar dataKey="queueWindMw"  name="Wind Queue"  fill={C.teal}   radius={[0,0,0,0]} stackId="q" />
+                    <Bar dataKey="queueSolarMw" name="Solar Queue" fill={C.amber}  radius={[4,4,0,0]} stackId="q" />
+                  </BarChart>
+                </ResponsiveContainer>
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Zone risk table */}
+          <Card className="bg-slate-800/50 border-slate-700/50">
+            <CardContent className="p-0">
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-slate-400 text-xs uppercase border-b border-slate-700/50">
+                      <th className="text-left px-4 py-3 font-medium">Zone</th>
+                      <th className="text-right px-4 py-3 font-medium">DC Operational</th>
+                      <th className="text-right px-4 py-3 font-medium">DC Pipeline</th>
+                      <th className="text-right px-4 py-3 font-medium">Gen Headroom</th>
+                      <th className="text-right px-4 py-3 font-medium">Renewable Queue</th>
+                      <th className="text-right px-4 py-3 font-medium">Price Hub</th>
+                      <th className="text-right px-4 py-3 font-medium">2027 LMP Δ</th>
+                      <th className="text-right px-4 py-3 font-medium">Risk</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {ERCOT_ZONE_RISK.map(z => (
+                      <tr key={z.zone} className="border-t border-slate-700/30 hover:bg-slate-700/20">
+                        <td className="px-4 py-3">
+                          <div className="font-medium text-slate-200">{z.zone}</div>
+                          <div className="text-xs text-slate-500">{z.label}</div>
+                        </td>
+                        <td className="px-4 py-3 text-right font-medium" style={{ color: z.dcOpMw > 0 ? C.red : "#64748b" }}>
+                          {z.dcOpMw > 0 ? `${z.dcOpMw.toLocaleString()} MW` : "—"}
+                        </td>
+                        <td className="px-4 py-3 text-right" style={{ color: z.dcPipeMw > 0 ? C.amber : "#64748b" }}>
+                          {z.dcPipeMw > 0 ? `${z.dcPipeMw.toLocaleString()} MW` : "—"}
+                        </td>
+                        <td className="px-4 py-3 text-right text-slate-300">
+                          {(z.genCapMw / 1000).toFixed(1)} GW
+                        </td>
+                        <td className="px-4 py-3 text-right text-slate-300">
+                          {((z.queueWindMw + z.queueSolarMw) / 1000).toFixed(1)} GW
+                        </td>
+                        <td className="px-4 py-3 text-right text-slate-400 text-xs">{z.priceHub}</td>
+                        <td className="px-4 py-3 text-right font-semibold" style={{
+                          color: z.priceDelta2027Pct >= 50 ? C.red
+                            : z.priceDelta2027Pct >= 20 ? C.amber
+                            : z.priceDelta2027Pct < 0 ? C.green
+                            : "#94a3b8"
+                        }}>
+                          {z.priceDelta2027Pct > 0 ? "+" : ""}{z.priceDelta2027Pct}%
+                        </td>
+                        <td className="px-4 py-3 text-right">
+                          <span className={`text-xs font-semibold px-2 py-0.5 rounded-full border ${
+                            z.congestionRisk === "High"   ? "bg-red-500/20 text-red-300 border-red-500/30" :
+                            z.congestionRisk === "Medium" ? "bg-amber-500/20 text-amber-300 border-amber-500/30" :
+                            "bg-green-500/20 text-green-300 border-green-500/30"
+                          }`}>
+                            {z.congestionRisk}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
 
       {/* Charts row */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

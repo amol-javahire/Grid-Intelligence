@@ -869,4 +869,42 @@ router.get("/temperature/stats", async (req, res) => {
   }
 });
 
+// ── ERCOT System-Wide Hourly Profile (avg Jan 2024–Jun 2026) ─────────────────
+// GET /api/ercot/hourly-profile
+// Hours stored in UTC per EIA-930 convention (subtract ~5-6h for Central Time)
+router.get("/ercot/hourly-profile", async (_req, res) => {
+  try {
+    const rows = await db.execute<{
+      hour: number; system_load_mw: number; wind_mw: number; solar_mw: number;
+    }>(sql`
+      SELECT z.hour,
+        ROUND(AVG(z.total_load))::int  AS system_load_mw,
+        ROUND(AVG(f.wind_mw))::int     AS wind_mw,
+        ROUND(AVG(f.solar_mw))::int    AS solar_mw
+      FROM (
+        SELECT year, month, day, hour, SUM(load_mw) AS total_load
+        FROM ercot_load_by_zone GROUP BY year, month, day, hour
+      ) z
+      JOIN (
+        SELECT year, month, day, hour,
+          SUM(gen_mw) FILTER (WHERE fuel_type = 'wind')  AS wind_mw,
+          SUM(gen_mw) FILTER (WHERE fuel_type = 'solar') AS solar_mw
+        FROM ercot_fuel_mix GROUP BY year, month, day, hour
+      ) f ON z.year = f.year AND z.month = f.month AND z.day = f.day AND z.hour = f.hour
+      GROUP BY z.hour ORDER BY z.hour
+    `);
+    res.json(rows.rows.map(r => ({
+      hour:         Number(r.hour),
+      ctHour:       ((Number(r.hour) - 6) + 24) % 24, // approx Central Time
+      systemLoadMw: Number(r.system_load_mw),
+      windMw:       Number(r.wind_mw),
+      solarMw:      Number(r.solar_mw),
+      netLoadMw:    Number(r.system_load_mw) - Number(r.wind_mw) - Number(r.solar_mw),
+    })));
+  } catch (err) {
+    (res as any).log?.error({ err }, "ercot/hourly-profile error");
+    res.status(500).json({ error: "internal_error" });
+  }
+});
+
 export default router;

@@ -82,4 +82,90 @@ router.get("/regulatory/summary", async (_req, res) => {
   }
 });
 
+// ── OBBBA Credit Eligibility Analysis ─────────────────────────────────────────
+// GET /api/regulatory/credit-eligibility
+// Analyzes EIA 860 candidates (operable plants) for remaining PTC window + OBBBA context
+router.get("/regulatory/credit-eligibility", async (_req, res) => {
+  try {
+    // Wind PTC runs 10 years from commissioning year. Active if COD + 10 >= 2026.
+    const windPtc = await db.execute<{
+      market: string; ptc_status: string; cnt: string; total_mw: string;
+    }>(sql`
+      SELECT market,
+        CASE
+          WHEN commissioning_year IS NULL THEN 'unknown'
+          WHEN commissioning_year + 10 >= 2026 THEN 'active'
+          ELSE 'expired'
+        END AS ptc_status,
+        COUNT(*)::text          AS cnt,
+        SUM(capacity_mw)::int::text AS total_mw
+      FROM candidates
+      WHERE asset_type = 'wind'
+      GROUP BY market, ptc_status
+      ORDER BY market, ptc_status
+    `);
+
+    // PTC years remaining per wind plant
+    const windPtcYears = await db.execute<{
+      market: string; ptc_yr_bucket: string; cnt: string; total_mw: string;
+    }>(sql`
+      SELECT market,
+        CASE
+          WHEN commissioning_year IS NULL THEN 'Unknown'
+          WHEN commissioning_year + 10 <= 2025 THEN 'Expired'
+          WHEN commissioning_year + 10 - 2026 <= 2 THEN '1-2 yrs left'
+          WHEN commissioning_year + 10 - 2026 <= 5 THEN '3-5 yrs left'
+          ELSE '6+ yrs left'
+        END AS ptc_yr_bucket,
+        COUNT(*)::text          AS cnt,
+        SUM(capacity_mw)::int::text AS total_mw
+      FROM candidates WHERE asset_type = 'wind'
+      GROUP BY market, ptc_yr_bucket
+      ORDER BY market, ptc_yr_bucket
+    `);
+
+    // Solar: ITC was a one-time credit at commissioning. Flag IRA-era (2022+) vs pre-IRA.
+    const solar = await db.execute<{
+      market: string; era: string; cnt: string; total_mw: string;
+    }>(sql`
+      SELECT market,
+        CASE
+          WHEN commissioning_year >= 2022 THEN 'IRA era (2022+)'
+          WHEN commissioning_year >= 2017 THEN 'Pre-IRA (2017-2021)'
+          ELSE 'Legacy (pre-2017)'
+        END AS era,
+        COUNT(*)::text AS cnt,
+        SUM(capacity_mw)::int::text AS total_mw
+      FROM candidates WHERE asset_type = 'solar'
+      GROUP BY market, era ORDER BY market, era
+    `);
+
+    // Queue safe-harbor analysis: ERCOT projects with request_date before Sep 30 2025
+    const queue = await db.execute<{
+      status: string; cnt: string; total_mw: string;
+    }>(sql`
+      SELECT
+        CASE
+          WHEN request_date <= '2025-09-30'::date OR request_date IS NULL THEN 'pre_obbba'
+          ELSE 'post_obbba'
+        END AS status,
+        COUNT(*)::text AS cnt,
+        ROUND(SUM(capacity_mw))::text AS total_mw
+      FROM queue_projects
+      WHERE market = 'ERCOT' AND withdrawal_date IS NULL
+      GROUP BY 1
+    `);
+
+    res.json({
+      windPtc:    windPtc.rows.map(r => ({ ...r, cnt: Number(r.cnt), totalMw: Number(r.total_mw) })),
+      windPtcYears: windPtcYears.rows.map(r => ({ ...r, cnt: Number(r.cnt), totalMw: Number(r.total_mw) })),
+      solar:      solar.rows.map(r => ({ ...r, cnt: Number(r.cnt), totalMw: Number(r.total_mw) })),
+      queueSafeHarbor: queue.rows.map(r => ({ ...r, cnt: Number(r.cnt), totalMw: Number(r.total_mw) })),
+    });
+  } catch (err) {
+    (res as any).log?.error({ err }, "credit-eligibility error");
+    res.status(500).json({ error: "internal_error" });
+  }
+});
+
 export default router;
