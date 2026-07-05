@@ -1,6 +1,10 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
+import { execSync } from "child_process";
+import { writeFileSync } from "fs";
+import { join } from "path";
+import { tmpdir } from "os";
 
 const router = Router();
 
@@ -742,6 +746,58 @@ router.get("/aeso/interchange", async (req, res) => {
     })));
   } catch (err) {
     req.log.error({ err }, "getAesoInterchange error");
+    res.status(500).json({ error: "internal_error" });
+  }
+});
+
+// ─── LTA (Long-Term Adequacy Metrics) endpoints ─────────────────────────────
+
+const LTA_REPORTS = [
+  { year: 2026, quarter: 2, label: "May 2026",      posted: "2026-05-01", url: "https://www.aeso.ca/download/listedfiles/Long-term-adequacy-metrics-May-2026.pdf" },
+  { year: 2026, quarter: 1, label: "February 2026", posted: "2026-02-02", url: "https://www.aeso.ca/download/listedfiles/2026_02_LTA.pdf" },
+  { year: 2025, quarter: 4, label: "November 2025", posted: "2025-11-04", url: "https://www.aeso.ca/download/listedfiles/Long-term-adequacy-metrics-November-2025-v3.pdf" },
+  { year: 2025, quarter: 3, label: "August 2025",   posted: "2025-08-01", url: "https://www.aeso.ca/download/listedfiles/Long-term-adequacy-metrics-August-2025-v2.pdf" },
+  { year: 2025, quarter: 2, label: "May 2025",      posted: "2025-05-01", url: "https://www.aeso.ca/download/listedfiles/Long-term-adequacy-metrics-May-2025.pdf" },
+  { year: 2025, quarter: 1, label: "February 2025", posted: "2025-02-06", url: "https://www.aeso.ca/download/listedfiles/2025_02_LTA_FINAL.pdf" },
+  { year: 2024, quarter: 4, label: "November 2024", posted: "2024-11-01", url: "https://www.aeso.ca/download/listedfiles/2024_11_LTA.pdf" },
+  { year: 2024, quarter: 3, label: "August 2024",   posted: "2024-08-01", url: "https://www.aeso.ca/download/listedfiles/2024_08_LTA.pdf" },
+  { year: 2024, quarter: 2, label: "May 2024",      posted: "2024-04-30", url: "https://www.aeso.ca/download/listedfiles/Long-term-adequacy-metrics-May-2024.pdf" },
+  { year: 2024, quarter: 1, label: "February 2024", posted: "2024-02-01", url: "https://www.aeso.ca/download/listedfiles/2024_02_LTA.pdf" },
+  { year: 2023, quarter: 4, label: "November 2023", posted: "2023-11-09", url: "https://www.aeso.ca/download/listedfiles/2023_11_LTA.pdf" },
+  { year: 2023, quarter: 3, label: "August 2023",   posted: "2023-08-02", url: "https://www.aeso.ca/download/listedfiles/Long-term-adequacy-metrics-August-2023.pdf" },
+  { year: 2023, quarter: 2, label: "May 2023",      posted: "2023-04-24", url: "https://www.aeso.ca/download/listedfiles/2023_05_LTA.pdf" },
+  { year: 2023, quarter: 1, label: "February 2023", posted: "2023-02-01", url: "https://www.aeso.ca/download/listedfiles/2023_02_LTA.pdf" },
+];
+
+// GET /api/aeso/lta/reports
+router.get("/aeso/lta/reports", (_req, res) => {
+  res.json(LTA_REPORTS);
+});
+
+// GET /api/aeso/lta/data?url=<pdf_url>  — downloads + parses the PDF
+router.get("/aeso/lta/data", async (req, res) => {
+  try {
+    const { url } = req.query as Record<string, string | undefined>;
+    const pdfUrl = url ?? LTA_REPORTS[0].url;
+
+    const pdfRes = await fetch(pdfUrl, {
+      headers: { "User-Agent": "Mozilla/5.0" },
+      signal: AbortSignal.timeout(30000),
+    });
+    if (!pdfRes.ok) throw new Error(`PDF fetch failed: ${pdfRes.status}`);
+
+    const pdfBuf = Buffer.from(await pdfRes.arrayBuffer());
+    const ts = Date.now();
+    const pdfPath  = join(tmpdir(), `lta_${ts}.pdf`);
+    writeFileSync(pdfPath, pdfBuf);
+
+    const pyPath = "/home/runner/workspace/artifacts/pypsa-engine/.venv/bin/python3";
+    const scriptPath = "/home/runner/workspace/artifacts/pypsa-engine/lta_parse.py";
+    const output = execSync(`${pyPath} ${scriptPath} ${pdfPath}`, { timeout: 60000 }).toString();
+
+    res.json(JSON.parse(output));
+  } catch (err) {
+    req.log.error({ err }, "getAesoLtaData error");
     res.status(500).json({ error: "internal_error" });
   }
 });

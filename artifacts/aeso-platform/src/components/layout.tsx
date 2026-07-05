@@ -10,6 +10,7 @@ import {
   ListOrdered, 
   Route,
   BrainCircuit,
+  TrendingUp,
 } from "lucide-react";
 
 const navItems = [
@@ -21,6 +22,7 @@ const navItems = [
   { href: "/7day-capacity", label: "7-Day Capacity", icon: CalendarDays },
   { href: "/queue", label: "Queue", icon: ListOrdered },
   { href: "/congestion", label: "Congestion", icon: Route },
+  { href: "/lta", label: "LTA Metrics", icon: TrendingUp },
   { href: "/qa", label: "Market Copilot", icon: BrainCircuit },
 ];
 

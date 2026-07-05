@@ -13,6 +13,7 @@ import SevenDayCapacity from "@/pages/7day-capacity";
 import Queue from "@/pages/queue";
 import Congestion from "@/pages/congestion";
 import AesoQACopilot from "@/pages/qa";
+import LTA from "@/pages/lta";
 import NotFound from "@/pages/not-found";
 
 const queryClient = new QueryClient();
@@ -29,6 +30,7 @@ function Router() {
         <Route path="/7day-capacity" component={SevenDayCapacity} />
         <Route path="/queue" component={Queue} />
         <Route path="/congestion" component={Congestion} />
+        <Route path="/lta" component={LTA} />
         <Route path="/qa" component={AesoQACopilot} />
         <Route component={NotFound} />
       </Switch>
