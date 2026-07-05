@@ -780,6 +780,13 @@ router.get("/aeso/lta/data", async (req, res) => {
     const { url } = req.query as Record<string, string | undefined>;
     const pdfUrl = url ?? LTA_REPORTS[0].url;
 
+    // SSRF guard — only allow AESO-hosted LTA PDFs
+    const ALLOWED_PDF_PREFIX = "https://www.aeso.ca/download/listedfiles/";
+    if (!pdfUrl.startsWith(ALLOWED_PDF_PREFIX)) {
+      res.status(400).json({ error: "invalid_url" });
+      return;
+    }
+
     const pdfRes = await fetch(pdfUrl, {
       headers: { "User-Agent": "Mozilla/5.0" },
       signal: AbortSignal.timeout(30000),
