@@ -15,6 +15,7 @@ import datacentersRouter from "./datacenters";
 import regulatoryRouter from "./regulatory";
 import gasPricesRouter from "./gas_prices";
 import generatorsRouter from "./generators";
+import ercotDispatchRouter from "./ercot_dispatch";
 
 const router: IRouter = Router();
 
@@ -34,5 +35,6 @@ router.use(datacentersRouter);
 router.use(regulatoryRouter);
 router.use(gasPricesRouter);
 router.use(generatorsRouter);
+router.use(ercotDispatchRouter);
 
 export default router;

@@ -31,8 +31,9 @@ const sidebarEntries: NavEntry[] = [
   { title: "Dashboard",            href: "/",           icon: BarChart3 },
   { title: "Rankings",             href: "/rankings",   icon: List },
   { title: "Map Workspace",        href: "/map",        icon: MapIcon },
-  { title: "ERCOT Historical",     href: "/ercot",      icon: Activity },
-  { title: "ERCOT Gas & Power",   href: "/ercot-gas",  icon: Flame },
+  { title: "ERCOT Historical",     href: "/ercot",           icon: Activity },
+  { title: "ERCOT Gas & Power",   href: "/ercot-gas",       icon: Flame },
+  { title: "ERCOT Dispatch / SCED", href: "/ercot-dispatch", icon: Zap },
   {
     group: {
       label: "CAISO",

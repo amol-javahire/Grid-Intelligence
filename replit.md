@@ -87,6 +87,7 @@ The Q&A Copilot should eventually answer natural-language questions about the pl
 | ERCOT fuel mix | **REAL** | 167,190 rows Jan 2024–Jun 2026. 8 fuel types from EIA-930 fuel-type-data (ERCO respondent). Gas ~22 GW avg, wind ~13 GW, solar ~7 GW, hydro ~52 MW (accurate — ERCOT has almost no hydro). |
 | Interconnection Queue | **REAL (ERCOT + CAISO)** | ERCOT: 1,793 real projects from ERCOT GIS Report pg7-200-er (public EMIL portal, no auth). Script: `seed-ercot-queue-real` (pypsa venv, gridstatus lib). CAISO: 2,433 real projects from public ISO data. PJM: 580 synthetic. |
 | EIA 860 projects | **Live (2024)** | 3,875 operable generators >1 MW from EIA Form 860 2024 "Operable" sheet. ISO mapped via BA codes (ERCO/CISO/PJM). |
+| ERCOT Hourly Dispatch (SCED) | **REAL (loading)** | Real 5-min SCED dispatch + offer curves from NP3-965-ER 60-day disclosure. 1,215 resources, ~26K rows/day (hourly agg). Jan 2024 → May 2026 = 852 days; background seeder running (~3.5 hrs total). Tables: `ercot_hourly_dispatch`, `ercot_dispatch_seed_log`. Script: `seed-ercot-dispatch` (pypsa venv). Admin: POST /pypsa/admin/seed-dispatch. |
 | Candidate scoring | Partial | Scoring engine live on all 3,875 EIA 860 plants. Real signal scoring from nodal+queue data planned. |
 
 ## Real Data Sources

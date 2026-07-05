@@ -439,6 +439,70 @@ async def admin_seed(
 
 
 # ---------------------------------------------------------------------------
+# Admin: ERCOT Hourly Dispatch Seed (NP3-965-ER SCED 60-day disclosure)
+# ---------------------------------------------------------------------------
+_dispatch_seeding = False
+
+
+@app.get("/admin/seed-dispatch-status")
+def admin_dispatch_seed_status():
+    """Return current dispatch seed job progress. Safe to poll repeatedly."""
+    from dispatch_seeder import dispatch_seed_status
+    return dict(dispatch_seed_status)
+
+
+@app.post("/admin/seed-dispatch-reset")
+def admin_dispatch_seed_reset(key: str = ""):
+    """Force-clear the dispatch seeding lock."""
+    global _dispatch_seeding
+    _require_admin_key(key)
+    from dispatch_seeder import dispatch_seed_status
+    was_running = _dispatch_seeding or dispatch_seed_status.get("running", False)
+    _dispatch_seeding = False
+    dispatch_seed_status["running"] = False
+    dispatch_seed_status["phase"] = "reset"
+    dispatch_seed_status["completed"] = False
+    return {"reset": True, "was_running": was_running}
+
+
+@app.post("/admin/seed-dispatch")
+async def admin_seed_dispatch(
+    background_tasks: BackgroundTasks,
+    key: str = "",
+):
+    """
+    Trigger ERCOT SCED hourly dispatch seed in the background.
+
+    Pulls NP3-965-ER SCED 60-day disclosure data (Jan 2024 → present).
+    Gap-fill safe — skips dates already in ercot_dispatch_seed_log.
+    Requires ?key=<ERCOT_PASSWORD> for auth.
+    Poll GET /pypsa/admin/seed-dispatch-status for progress.
+    """
+    global _dispatch_seeding
+    _require_admin_key(key)
+
+    from dispatch_seeder import dispatch_seed_status
+    if _dispatch_seeding or dispatch_seed_status.get("running"):
+        return {"status": "already_running", "seed_status": dict(dispatch_seed_status)}
+
+    _dispatch_seeding = True
+
+    def _run() -> None:
+        global _dispatch_seeding
+        try:
+            from dispatch_seeder import seed_dispatch_full
+            seed_dispatch_full()
+        finally:
+            _dispatch_seeding = False
+
+    background_tasks.add_task(_run)
+    return {
+        "status": "started",
+        "message": "Dispatch seed running in background — poll GET /pypsa/admin/seed-dispatch-status",
+    }
+
+
+# ---------------------------------------------------------------------------
 # Alberta / AESO — 3-node OPF
 # ---------------------------------------------------------------------------
 

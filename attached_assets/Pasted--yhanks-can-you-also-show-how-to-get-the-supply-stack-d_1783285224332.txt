@@ -1,0 +1,168 @@
+
+yhanks, can you also show how to get the supply stack data by generator at hourly level in eRCOT from 2024 Jan?Searched the webSearched the webGood timing — I have the exact function signatures from the research. There are two complementary sources that together give you the full picture.
+
+Source 1 — ERCOT NP3-965-ER via gridstatus (Best: actual stack + offers)
+This is the definitive source. Every 5-minute SCED interval, per resource, with the actual offer curve submitted (price-MW segments) AND the telemetered actual output. From this you can reconstruct ERCOT's exact merit order for any hour back to Jan 2024.
+Install and pull:
+pythonpip install gridstatus
+
+from gridstatus import Ercot
+from gridstatus.ercot_api import ErcotAPI
+import pandas as pd
+
+ercot = Ercot()
+api = ErcotAPI()  # uses ERCOT Public Data API under the hood
+
+# Pull one day of 60-day SCED disclosure
+# Note: date must be >60 days in the past
+data = api.get_60_day_sced_disclosure(
+    date="2024-01-01",
+    end="2024-01-02",
+)
+
+# Returns a dict with multiple DataFrames:
+gen_resource  = data["sced_gen_resource"]   # actual dispatch per resource/interval
+offer_curves  = data["sced_eoc_updates"]    # energy offer curve segments (the stack)
+as_offers     = data["sced_resource_as_offers"]  # ancillary service offers
+What sced_gen_resource contains (one row per resource per 5-min interval):
+ColumnDescriptionresource_nameERCOT unit ID (maps to EIA plant)interval_start5-min interval timestamptelemetered_net_outputActual MW generatedbase_pointMW instructed by SCEDoutput_scheduleMW submitted in offerhslHigh Sustainable Limit (max output)lslLow Sustainable Limit (min load while online)startup_indicatorBoolean — unit starting up this interval
+What sced_eoc_updates contains (up to 10 rows per resource per interval — the offer curve):
+ColumnDescriptionresource_nameUnitinterval_startTimestampsegmentSegment number 1–10mwCapacity breakpoint for this segmentpriceOffer price ($/MWh) for this segment
+The offer curve IS the supply stack. Sort all segments from all resources by price ascending → you have the full ERCOT merit order for that interval. The system load at that interval determines where it clears.
+Note on schema change: Columns changed on December 5, 2025 when ERCOT launched RTC+B (Real-Time Co-optimization + Batteries). Pre-Dec-2025 and post-Dec-2025 data have slightly different column names. gridstatus handles this automatically.
+
+Source 2 — EPA CEMS via CAMPD API (Thermal only, hourly, no offer curves)
+If you just want hourly actual generation by thermal unit (gas, coal, nuclear) without the offer curve complexity, EPA CEMS is simpler. It covers only fossil-fuel generators but has cleaner hourly data.
+pythonimport requests
+import pandas as pd
+
+API_KEY = "YOUR_KEY"  # free from epa.gov/power-sector/cam-api-portal
+
+# Get all Texas thermal units hourly — Jan 2024
+url = "https://api.epa.gov/easey/streaming-services/emissions/apportioned/hourly"
+params = {
+    "api_key": API_KEY,
+    "stateCode": "TX",
+    "year": 2024,
+    "quarter": 1,    # Q1 = Jan-Mar
+    "operatingStatus": "Operating"
+}
+
+resp = requests.get(url, params=params, stream=True)
+df = pd.DataFrame(resp.json())
+
+# Key columns:
+# facilityName, unitId, stateCode
+# opDate (YYYY-MM-DD), opHour (0-23)
+# gload          → Gross Load (MW) ← this is your hourly generation per unit
+# heatInput      → Heat Input (MMBtu) → gload/heatInput = actual heat rate
+# co2Mass, so2Mass, noxMass
+Limitation: CEMS only covers combustion units — no wind, solar, or batteries. For renewables at unit level, you need the SCED data.
+
+Building the Hourly Supply Stack — Full Pipeline
+Putting it together: here's how to go from raw SCED data to an hourly supply stack for Jan 2024:
+pythonimport pandas as pd
+from gridstatus.ercot_api import ErcotAPI
+import psycopg2
+
+api = ErcotAPI()
+
+def build_hourly_supply_stack(date_str):
+    """Pull one day of SCED data and return hourly supply stack."""
+    
+    data = api.get_60_day_sced_disclosure(date=date_str)
+    gen = data["sced_gen_resource"]
+    offers = data["sced_eoc_updates"]
+    
+    # 1. Aggregate 5-min telemetered output → hourly by resource
+    gen["hour"] = gen["interval_start"].dt.floor("h")
+    hourly_gen = gen.groupby(["resource_name", "hour"]).agg(
+        avg_mw    = ("telemetered_net_output", "mean"),
+        max_mw    = ("telemetered_net_output", "max"),
+        avg_bp    = ("base_point", "mean"),       # what ERCOT instructed
+        hsl       = ("hsl", "mean"),
+        lsl       = ("lsl", "mean"),
+        starts    = ("startup_indicator", "sum"),
+    ).reset_index()
+    
+    # 2. Build merit order from offer curves — lowest offer price per resource per hour
+    offers["hour"] = offers["interval_start"].dt.floor("h")
+    # Get marginal segment (segment 1 = base price, last segment = marginal offer)
+    merit = offers.groupby(["resource_name", "hour"]).agg(
+        offer_price_min = ("price", "min"),   # minimum offer (always dispatched at this)
+        offer_price_max = ("price", "max"),   # marginal segment price
+        offer_mw_total  = ("mw", "max"),      # total offered capacity
+    ).reset_index()
+    
+    # 3. Join generation + offer curve
+    stack = hourly_gen.merge(merit, on=["resource_name", "hour"], how="left")
+    
+    # 4. Sort by offer price → supply stack for each hour
+    stack = stack.sort_values(["hour", "offer_price_min"])
+    stack["cumulative_mw"] = stack.groupby("hour")["avg_mw"].cumsum()
+    
+    return stack
+
+# Run for all of Jan 2024 (31 days)
+import datetime
+frames = []
+for i in range(31):
+    d = datetime.date(2024, 1, 1) + datetime.timedelta(days=i)
+    print(f"Pulling {d}...")
+    try:
+        df = build_hourly_supply_stack(str(d))
+        frames.append(df)
+    except Exception as e:
+        print(f"  Error: {e}")
+
+supply_stack_jan2024 = pd.concat(frames, ignore_index=True)
+print(f"Total rows: {len(supply_stack_jan2024):,}")
+# Expect ~700 units × 24 hours × 31 days = ~520,000 rows for Jan 2024
+
+Recommended PostgreSQL Schema
+sql-- Hourly generation actuals per resource
+CREATE TABLE ercot_hourly_dispatch (
+    resource_name   TEXT,
+    hour            TIMESTAMPTZ,
+    avg_mw          DECIMAL,        -- avg actual output over the hour
+    max_mw          DECIMAL,        -- peak output in hour
+    hsl             DECIMAL,        -- high sustainable limit
+    lsl             DECIMAL,        -- low sustainable limit (min load)
+    starts          INTEGER,        -- number of startup events in hour
+    PRIMARY KEY (resource_name, hour)
+);
+
+-- Hourly supply stack (merit order)
+CREATE TABLE ercot_supply_stack (
+    resource_name     TEXT,
+    hour              TIMESTAMPTZ,
+    offer_price_min   DECIMAL,      -- base offer price ($/MWh)
+    offer_price_max   DECIMAL,      -- marginal segment price
+    offer_mw_total    DECIMAL,      -- total offered capacity
+    cumulative_mw     DECIMAL,      -- running total MW when sorted by price
+    stack_rank        INTEGER,      -- position in merit order for this hour
+    PRIMARY KEY (resource_name, hour)
+);
+
+-- Join to EIA-860 for fuel type, zone, plant name
+-- resource_name → eia_plant_id via NP4-160-SG (Settlement Point / Bus Mapping)
+
+Scale and Storage Estimate
+LevelRows/yearStorage (est.)5-min raw (gen resource)~73M~8 GB5-min raw (offer curves × 10 segs)~730M~80 GBHourly aggregated (gen + stack)~6M~700 MB
+For the Replit app, hourly aggregation is the right call — 6M rows/year fits comfortably in a PostgreSQL instance, gives you minute-level dynamics without the storage cost, and is sufficient for all spark spread, heat rate, and dispatch modeling use cases.
+
+What This Unlocks in the App
+Once the hourly supply stack is in the DB:
+Dispatch heatmaps — for any hour, show the full ERCOT merit order as a waterfall chart (price on Y-axis, cumulative MW on X-axis). The clearing price is where the bar meets the load line.
+Unit-level capacity factors — actual MW / HSL by resource, by month. Instantly see which gas peakers are running 95% vs 15% of hours.
+Generator startup frequency — how often each unit starts cold vs warm. Combined with startup costs from the offer curve = realized startup cost burden by month.
+Congestion vs dispatch — correlate congestion events (high DA-RT spread) with which units were dispatched at premium prices. This reveals which generators are the marginal congestion drivers in each zone.
+Spark spread by unit — actual realized spark spread = (hourly clearing price) − (actual heat input × actual fuel cost). Per-unit, per-hour, going back to Jan 2024.
+Sources:
+
+ERCOT NP3-965-ER 60-Day SCED Disclosure
+Raw ERCOT SCED Reports — OSTI/DOE
+gridstatus ERCOT SCED Gen Resource 60-Day Dataset
+gridstatus ERCOT API source
+EPA CAMPD API Portal
+EPA CEMS via PUDL
