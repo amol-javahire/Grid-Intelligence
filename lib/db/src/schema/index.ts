@@ -29,3 +29,4 @@ export * from "./load_forecasts";
 export * from "./datacenters";
 export * from "./regulatory";
 export * from "./gas_prices";
+export * from "./generators";

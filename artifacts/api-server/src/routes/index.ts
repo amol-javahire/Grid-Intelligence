@@ -14,6 +14,7 @@ import loadForecastRouter from "./load_forecast";
 import datacentersRouter from "./datacenters";
 import regulatoryRouter from "./regulatory";
 import gasPricesRouter from "./gas_prices";
+import generatorsRouter from "./generators";
 
 const router: IRouter = Router();
 
@@ -32,5 +33,6 @@ router.use(loadForecastRouter);
 router.use(datacentersRouter);
 router.use(regulatoryRouter);
 router.use(gasPricesRouter);
+router.use(generatorsRouter);
 
 export default router;

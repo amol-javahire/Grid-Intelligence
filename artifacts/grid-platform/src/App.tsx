@@ -39,6 +39,7 @@ import EvChargingPage from "@/pages/ev-charging";
 import DatacentersPage from "@/pages/datacenters";
 import RegulatoryPage from "@/pages/regulatory";
 import ErcotGasPage from "@/pages/ercot-gas";
+import GeneratorsPage from "@/pages/generators";
 import NotFound from "@/pages/not-found";
 
 const queryClient = new QueryClient();
@@ -82,6 +83,7 @@ function Router() {
         <Route path="/datacenters" component={DatacentersPage} />
         <Route path="/regulatory" component={RegulatoryPage} />
         <Route path="/ercot-gas" component={ErcotGasPage} />
+        <Route path="/generators" component={GeneratorsPage} />
         {/* Legacy / spec-documented aliases */}
         <Route path="/rec"><Redirect to="/recs" /></Route>
         <Route path="/ci/heatmap"><Redirect to="/ci-heatmap" /></Route>

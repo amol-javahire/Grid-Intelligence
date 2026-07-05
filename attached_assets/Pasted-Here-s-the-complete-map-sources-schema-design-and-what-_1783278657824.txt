@@ -1,0 +1,196 @@
+Here's the complete map — sources, schema design, and what it enables.
+
+Data Sources by Layer
+There are five free public sources that together give you a near-complete generator characteristics database. The key insight is you don't need to build the pipeline from scratch — PUDL has already done most of it.
+Layer 1 — EIA Form 860 (static characteristics)
+The foundation. Covers every generator ≥1 MW. Fields most useful for this platform:
+FieldScheduleNameplate/Summer/Winter capacity (MW)3Design heat rate (MMBtu/MWh)3Technology (CCGT, CT, Steam, Wind, Solar PV)3Fuel type (NG, DFO, SUB, etc.)3Commercial operation date3Lat/lon, county, state2Status (Operating, Cold Standby, Retired)3Battery: Power (MW), Energy (MWh), Chemistry, RTE6Number of turbines, hub height (wind)6Cooling type6
+Schedule 6 (Added 2019) specifically covers storage — it has power capacity, energy capacity, technology type (Li-ion, flow, pumped hydro), and charge/discharge capability. This is the cleanest free source for ERCOT BESS characteristics.
+Layer 2 — EIA Form 923 (monthly actual operations)
+Where you get actual vs design heat rates. Filed monthly by plant operators. Key fields:
+
+Net generation (MWh) by generator
+Fuel consumed (MMBtu) by boiler
+Fuel cost ($/MMBtu) — actual delivered cost, not spot price
+Fuel type and quality
+
+Actual heat rate = fuel consumed / net generation. For a CCGT designed at 6.8 MMBtu/MWh, the 923 usually shows 7.2–8.0 actual, since it includes startups, part-load operation, and auxiliary loads.
+Layer 3 — EPA CEMS / CAMPD (hourly actual operations)
+The highest-resolution free source — hourly data for every thermal unit with emissions monitoring (which is essentially all fossil-fueled generators). Available at campd.epa.gov.
+
+Hourly gross load (MWh)
+Hourly heat input (MMBtu) → divide to get actual hourly heat rate
+CO2, SO2, NOx emissions → carbon intensity
+Unit operating time (hours online/offline)
+
+From CEMS you can empirically derive:
+
+Part-load heat rate curve (bin hours by output level, average heat input per bin)
+Startup/shutdown signature (the heat input spike when a unit starts)
+Minimum stable load (smallest output observed while running)
+Forced outage rate (unplanned offline hours / total hours)
+
+PUDL distributes CEMS as Parquet files on Google Cloud Storage — already cleaned, one row per unit-hour, going back to 1995. No scraping needed.
+Layer 4 — ERCOT NP3-965-ER (60-Day SCED Disclosure) — the richest source
+This is the most ERCOT-specific and most valuable. Published 60 days after the operating day, it contains every 5-minute SCED dispatch for every ERCOT resource. Key fields:
+
+resource_name — maps to ERCOT settlement point
+hsl / lsl — High/Low Sustainable Limit (effective operating range)
+telemetered_net_output — actual MW delivered
+base_point — what ERCOT instructed
+output_schedule — what the generator bid to provide
+energy_offer_curve — up to 10 price/MW segments. This IS the heat rate curve: each segment's price = (heat rate at that output level × gas price) + VOM. Back out the gas cost and you have the implicit heat rate at each MW level.
+startup_cost_cold / startup_cost_warm / startup_cost_hot — dollar cost per start by temperature state
+ramp_rate_normal / ramp_rate_emergency** — MW/minute in up to 10 segments
+
+From search results: startup costs range $106–$159/MW/start; ramp rates 36–100% of capacity per hour. The 10-segment ramp rate is the most granular free source of this data in the US.
+Note: Schema changed December 5, 2025 with ERCOT's RTC+B rollout — new columns added.
+Layer 5 — ERCOT ESR API (Battery-specific, launched May 2025)
+New endpoint rptesr-m/4_sec_esr_charging_mw — 4-second actual charging/discharging data for every Energy Storage Resource in ERCOT. From this you can empirically derive:
+
+Actual cycles per day
+Charge/discharge ramp rates (from 4-second transitions)
+State of charge behavior (inferred from charging/discharging pattern)
+Round-trip efficiency (energy out / energy in over full cycles)
+Response time to SCED dispatch
+
+Layer 6 — PUDL (pre-joined, analysis-ready)
+Catalyst Cooperative's open-source ETL pipeline that joins EIA-860, EIA-923, and EPA CEMS into a clean schema with consistent plant/unit IDs across all three datasets. The current release (2026.6.x) is on Zenodo and GitHub. This eliminates ~80% of the data engineering work.
+
+Proposed Database Schema
+sql-- Master generator table (from EIA-860)
+generators (
+  ercot_resource_id   TEXT,        -- ERCOT SCED name (e.g. RAYBURN_1)
+  eia_plant_id        INTEGER,     -- EIA plant code
+  eia_generator_id    TEXT,        -- EIA unit ID
+  plant_name          TEXT,
+  operator            TEXT,
+  asset_class         TEXT,        -- THERMAL | WIND | SOLAR | BATTERY | HYDRO
+  technology          TEXT,        -- CCGT | CT | STEAM | WIND | PV | LI_ION | PUMPED
+  fuel_primary        TEXT,        -- NG | DFO | SUB | SUN | WND
+  nameplate_mw        DECIMAL,
+  summer_capacity_mw  DECIMAL,
+  winter_capacity_mw  DECIMAL,
+  commercial_od       DATE,
+  lat                 DECIMAL,
+  lng                 DECIMAL,
+  load_zone           TEXT,        -- LZ_HOUSTON etc
+  resource_node       TEXT,        -- ERCOT settlement point
+  status              TEXT
+)
+
+-- Thermal characteristics (from EIA-860 + SCED offers + CEMS)
+thermal_params (
+  ercot_resource_id   TEXT,
+  -- Design (from EIA-860)
+  design_heat_rate    DECIMAL,     -- MMBtu/MWh
+  -- Actual (from EIA-923 / CEMS)
+  actual_heat_rate_avg  DECIMAL,   -- annual average
+  actual_hr_min_load  DECIMAL,     -- heat rate at minimum load (least efficient)
+  actual_hr_full_load DECIMAL,     -- heat rate at full load
+  -- Operating limits (from SCED NP3-965)
+  min_load_mw         DECIMAL,     -- LSL
+  max_load_mw         DECIMAL,     -- HSL
+  ramp_rate_mw_min    DECIMAL,     -- normal ramp
+  ramp_rate_emergency DECIMAL,
+  -- Startup (from SCED offers)
+  startup_cost_cold   DECIMAL,     -- $ per start (unit cold >8h)
+  startup_cost_warm   DECIMAL,     -- $ per start (2–8h offline)
+  startup_cost_hot    DECIMAL,     -- $ per start (<2h offline)
+  startup_time_cold_h DECIMAL,     -- hours to reach min load from cold
+  -- Economics
+  vom_per_mwh         DECIMAL,     -- Variable O&M (from offer curve intercept)
+  fuel_hub            TEXT,        -- HENRY_HUB | WAHA | KATY
+  co2_rate_tons_mwh   DECIMAL,     -- from EPA CEMS
+  -- Reliability (from CEMS derived)
+  forced_outage_rate  DECIMAL,     -- EFOR %
+  planned_outage_days INTEGER      -- annual maintenance days
+)
+
+-- Heat rate curve by segment (from SCED offer curve)
+heat_rate_curve (
+  ercot_resource_id   TEXT,
+  segment             INTEGER,     -- 1..10
+  mw_breakpoint       DECIMAL,
+  implied_heat_rate   DECIMAL,     -- derived: (offer_price - VOM) / gas_price
+  offer_price_mwh     DECIMAL      -- raw segment price from SCED offer
+)
+
+-- Battery characteristics (from EIA-860 Schedule 6 + ESR API)
+battery_params (
+  ercot_resource_id   TEXT,
+  power_mw            DECIMAL,
+  energy_mwh          DECIMAL,
+  duration_hrs        DECIMAL,     -- energy/power
+  chemistry           TEXT,        -- LI_ION | FLOW | LEAD_ACID
+  rte_design          DECIMAL,     -- round-trip efficiency (design)
+  rte_actual          DECIMAL,     -- derived from ESR 4-sec data
+  max_cycles_day      DECIMAL,     -- from ESR cycling analysis
+  soc_min_pct         DECIMAL,
+  soc_max_pct         DECIMAL,
+  degradation_pct_yr  DECIMAL,
+  charge_ramp_mw_min  DECIMAL,     -- from ESR 4-sec data
+  discharge_ramp_mw_min DECIMAL
+)
+
+-- Renewable characteristics (EIA-860 + curtailment history)
+renewable_params (
+  ercot_resource_id   TEXT,
+  p50_capacity_factor DECIMAL,     -- design
+  actual_cf_2024      DECIMAL,     -- from EIA-923
+  hub_height_m        DECIMAL,     -- wind
+  rotor_diameter_m    DECIMAL,     -- wind
+  num_turbines        INTEGER,     -- wind
+  panel_tilt_deg      DECIMAL,     -- solar
+  tracking_type       TEXT,        -- FIXED | SINGLE_AXIS | DUAL_AXIS
+  neg_price_pct       DECIMAL      -- from ERCOT node stats (curtailment signal)
+)
+
+-- Monthly operations (from EIA-923 + EPA CEMS)
+monthly_operations (
+  ercot_resource_id   TEXT,
+  year                INTEGER,
+  month               INTEGER,
+  net_gen_mwh         DECIMAL,
+  fuel_consumed_mmbtu DECIMAL,
+  actual_heat_rate    DECIMAL,     -- computed: fuel/gen
+  fuel_cost_mmbtu     DECIMAL,     -- delivered fuel cost
+  capacity_factor     DECIMAL,
+  forced_outage_hrs   DECIMAL,
+  co2_tons            DECIMAL
+)
+
+What This Enables for Financial Modeling
+1. Full dispatch stack / merit order
+Stack all ERCOT generators by marginal cost (heat rate × gas price + VOM) by zone. At any gas price, you can see the clearing price for a given load level. This is how proprietary power trading desks model the price floor.
+2. Spark spread by asset
+With actual heat rates from CEMS + delivered fuel costs from EIA-923, each generator's realized spark spread is calculated monthly — not just the hub-level spark spread, but the asset-specific spread accounting for that unit's actual efficiency.
+3. Retirement risk screening
+For each gas plant: realized spark spread < 0 consistently = candidate for retirement. Map retirement candidates by zone → where the generation capacity disappears signals future price upside for PPAs in that zone.
+4. Heat rate option pricing
+A gas peaker is a call option: value = max(HB_NORTH − Waha × 10.5, 0) × hours. With historical operating data you can fit a real options model using actual heat rates and actual gas prices — far more accurate than using design heat rates.
+5. Battery cycling economics
+Actual RTE from ESR API × actual price spread captured (charge at off-peak, discharge at peak) = realized margin. Against degradation rate → NPV of cycling strategy over asset life.
+6. Congestion attribution by fuel type
+Join generator characteristics with SCED dispatch and ERCOT node prices. When a gas peaker at a constrained node is dispatched to clear a congestion event, you can see the exact MW and cost. This is the raw material for TCR (Transmission Congestion Right) strategy.
+7. Carbon accounting for PPAs
+With EPA CEMS CO2 rates, every MWh from a given generator has a verified carbon intensity. For Walmart's Scope 2 reporting, a PPA from a low-carbon node vs a high-carbon node has different avoided emissions value.
+
+Implementation Path
+The fastest way to get this into the platform:
+
+Download PUDL SQLite/Parquet — it already joins EIA-860 + EIA-923 + CEMS with consistent plant IDs. One download gets you 90% of static and monthly operational data.
+Pull NP3-965-ER for ERCOT resources — use ERCOT API to pull the most recent 60-day SCED file, extract offer curves by resource name, join on EIA-860 plant name → adds ramp rates, startup costs, HSL/LSL.
+Pull ESR API for batteries — endpoint rptesr-m/4_sec_esr_charging_mw for all BESS in ERCOT, aggregate to daily cycling stats.
+Join on ERCOT settlement point name — the ERCOT resource name in SCED (RAYBURN_1, BOSQUE_CC1) maps to EIA plant names via the Settlement Point / Electrical Buses Mapping (NP4-160-SG), which is public.
+
+Sources:
+
+EIA Form 860 Data
+EIA Form 923 Data
+EPA CAMPD (CEMS)
+PUDL — Public Utility Data Liberation Project
+PUDL Data Release (Zenodo)
+ERCOT NP3-965-ER SCED Disclosure
+ERCOT Ramp Rate in SCED
+Raw ERCOT 60-Day SCED Reports (OSTI)
