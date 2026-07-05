@@ -30,7 +30,8 @@
     "seed-ercot-load-fuelmix": "tsx ./src/seed-ercot-load-fuelmix.ts",
     "seed-gas-prices": "tsx ./src/seed-gas-prices.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "seed-ercot-real-data": "cd ../artifacts/pypsa-engine && .venv/bin/python3 ../../scripts/src/seed-ercot-real-data.py"
+    "seed-ercot-real-data": "cd ../artifacts/pypsa-engine && .venv/bin/python3 ../../scripts/src/seed-ercot-real-data.py",
+    "seed-ercot-queue-real": "cd ../artifacts/pypsa-engine && .venv/bin/python3 ../../scripts/src/seed-ercot-queue-real.py"
   },
   "dependencies": {
     "@workspace/db": "workspace:*",

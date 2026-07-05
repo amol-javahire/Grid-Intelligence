@@ -1,0 +1,53 @@
+Three clean sources, ranked by ease:
+
+1. ERCOT GIS Report — pg7-200-er (Primary Source, Fully Free)
+The official ERCOT Generator Interconnection Status report. Published monthly as an Excel file on the ERCOT EMIL public portal — no login required. This is exactly what interconnection.fyi and ercotqueue.com both scrape.
+Direct page: ercot.com/mp/data-products/data-product-details?id=pg7-200-er
+Fields in the GIS report:
+
+INR number (unique queue ID)
+Project name
+Resource type (Solar, Wind, Battery, Gas, Nuclear, etc.)
+Nameplate MW
+County and region
+Transmission Service Provider (Oncor, AEP, etc.)
+CDR Reporting Zone (the ERCOT load zone — LZ_HOUSTON, LZ_WEST, etc.)
+Point of Interconnection (POI)
+Queue date
+Projected COD
+Current milestone / study phase status
+Developer / applicant name
+
+As of June 2026: 1,960 active projects, ~458 GW of nameplate capacity in queue. Battery + solar make up ~75% of that.
+There's also a new companion report added March 2026: pg7-201-er — GIS Transmission Interconnection Costs Report, which adds the estimated transmission upgrade cost for each project. Very useful for scoring interconnect risk.
+
+2. gridstatus.io Python Library (Easiest Programmatic Path)
+Open-source, free, wraps the ERCOT GIS report and returns a clean pandas DataFrame. One function call:
+pythonpip install gridstatus
+
+from gridstatus import Ercot
+ercot = Ercot()
+queue_df = ercot.get_interconnection_queue()
+# Returns: active + withdrawn + completed projects
+# Standardized column names across all ISOs
+Returned columns include: Queue ID, Project Name, Interconnecting Entity, Capacity (MW), Generation Type, Queue Date, Proposed Completion Date, Interconnection Location, County, State, Status, Actual Completion Date, plus ERCOT-specific fields appended at the end (CDR zone, POI voltage, etc.).
+This is the fastest path for the Replit backend — a scheduled Python script that calls this, writes to PostgreSQL, done.
+
+3. interconnection.fyi (Best Visual Browsing + Bulk Export)
+interconnection.fyi/?market=ERCOT — daily-updated, shows all 1,960 active ERCOT projects with filters for technology, MW range, status, county. Individual project pages (e.g. /project/ercot-21inr0450) have full milestone history.
+The underlying data API (Cleanview) is free with key for ERCOT queue data and returns JSON with project_name, capacity_mw, technology, cdr_reporting_zone, queue_id, detailed_status.
+Subscription is only needed for bulk downloads/historical snapshots — the API itself is accessible for free.
+
+What to Replace in the App
+The current Replit app has synthetic ERCOT queue data. The real GIS report will give you ~1,960 active projects vs whatever synthetic count is there now. The key fields that map directly to what the app already uses for queue scoring:
+App scoring fieldGIS report sourceMW capacityNameplate MWTechnology / fuel typeResource TypeLoad zoneCDR Reporting ZoneQueue statusCurrent MilestoneDeveloper qualityApplicant nameInterconnect risk scoreQueue date + study phase (early = lower risk)Projected CODProjected COD column
+The pg7-201-er transmission cost report adds the dollar cost of required grid upgrades per project — that's the most direct signal for interconnect risk scoring, better than queue depth alone.
+Recommended Replit implementation: Python seeder script using gridstatus → parse into a ercot_queue PostgreSQL table → expose via /api/queue?market=ERCOT replacing the synthetic data. Monthly cron to re-pull the latest GIS report.
+Sources:
+
+ERCOT GIS Report pg7-200-er
+ERCOT GIS Transmission Cost Report pg7-201-er
+gridstatus.io Interconnection Queues
+interconnection.fyi ERCOT
+Cleanview ERCOT Queue API
+ercotqueue.com Chartbook

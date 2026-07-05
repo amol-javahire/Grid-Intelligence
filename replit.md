@@ -85,7 +85,7 @@ The Q&A Copilot should eventually answer natural-language questions about the pl
 | PJM prices | Calibrated model | No publicly accessible real-time PJM node prices (requires PJM account). Values calibrated to published monthly hub averages. 14,336 rows. |
 | ERCOT load by zone | **REAL** | 174,282 rows Jan 2024–Jun 2026. 8 zones (COAS/EAST/FWES/NCEN/NRTH/SCEN/SOUT/WEST) from EIA-930 region-sub-ba-data. Script: `seed-ercot-real-data.py` (pypsa venv). |
 | ERCOT fuel mix | **REAL** | 167,190 rows Jan 2024–Jun 2026. 8 fuel types from EIA-930 fuel-type-data (ERCO respondent). Gas ~22 GW avg, wind ~13 GW, solar ~7 GW, hydro ~52 MW (accurate — ERCOT has almost no hydro). |
-| Interconnection Queue | Seeded | CAISO queue from public ISO data (2,433 real projects); ERCOT/PJM synthetic. |
+| Interconnection Queue | **REAL (ERCOT + CAISO)** | ERCOT: 1,793 real projects from ERCOT GIS Report pg7-200-er (public EMIL portal, no auth). Script: `seed-ercot-queue-real` (pypsa venv, gridstatus lib). CAISO: 2,433 real projects from public ISO data. PJM: 580 synthetic. |
 | EIA 860 projects | **Live (2024)** | 3,875 operable generators >1 MW from EIA Form 860 2024 "Operable" sheet. ISO mapped via BA codes (ERCO/CISO/PJM). |
 | Candidate scoring | Partial | Scoring engine live on all 3,875 EIA 860 plants. Real signal scoring from nodal+queue data planned. |
 
