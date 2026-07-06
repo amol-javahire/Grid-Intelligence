@@ -5,7 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from "recharts";
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
 import { Loader2, Activity, Zap, Server, Network } from "lucide-react";
 
 export default function Home() {
@@ -26,7 +26,48 @@ export default function Home() {
     setLocation(`/rankings?${params.toString()}`);
   };
 
-  const COLORS = ['hsl(var(--chart-1))', 'hsl(var(--chart-2))', 'hsl(var(--chart-3))', 'hsl(var(--chart-4))', 'hsl(var(--chart-5))'];
+  const ASSET_COLORS: Record<string, string> = {
+    wind:        "#14b8a6",
+    solar:       "#f59e0b",
+    storage:     "#8b5cf6",
+    hydro:       "#3b82f6",
+    geothermal:  "#ef4444",
+    biomass:     "#22c55e",
+    natural_gas: "#94a3b8",
+    nuclear:     "#f97316",
+  };
+
+  const ASSET_LABELS: Record<string, string> = {
+    wind:        "Wind",
+    solar:       "Solar",
+    storage:     "Storage",
+    hydro:       "Hydro",
+    geothermal:  "Geothermal",
+    biomass:     "Biomass",
+    natural_gas: "Natural Gas",
+    nuclear:     "Nuclear",
+  };
+
+  type BreakdownRow = { market: string; assetType: string; count: number; totalCapacityMw: number };
+
+  const pivotedBreakdown = (() => {
+    if (!breakdown || !Array.isArray(breakdown)) return [];
+    const rows = breakdown as BreakdownRow[];
+    const markets = [...new Set(rows.map(r => r.market))].sort();
+    const assetTypes = [...new Set(rows.map(r => r.assetType))];
+    return markets.map(market => {
+      const entry: Record<string, string | number> = { market };
+      for (const at of assetTypes) {
+        const match = rows.find(r => r.market === market && r.assetType === at);
+        entry[at] = match ? Math.round((match.totalCapacityMw / 1000) * 10) / 10 : 0;
+      }
+      return entry;
+    });
+  })();
+
+  const activeAssetTypes = breakdown && Array.isArray(breakdown)
+    ? [...new Set((breakdown as BreakdownRow[]).map(r => r.assetType))].sort()
+    : [];
 
   return (
     <div className="p-8 max-w-7xl mx-auto space-y-8">
@@ -151,28 +192,41 @@ export default function Home() {
         <Card className="col-span-2 bg-card border-border">
           <CardHeader>
             <CardTitle>Market Breakdown</CardTitle>
-            <CardDescription>Candidate distribution by ISO and asset type.</CardDescription>
+            <CardDescription>Installed capacity by ISO and technology type.</CardDescription>
           </CardHeader>
           <CardContent className="h-[350px]">
             {isLoadingBreakdown ? (
               <div className="h-full flex items-center justify-center">
                 <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
               </div>
-            ) : breakdown && Array.isArray(breakdown) && breakdown.length > 0 ? (
+            ) : pivotedBreakdown.length > 0 ? (
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={breakdown} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
+                <BarChart data={pivotedBreakdown} margin={{ top: 8, right: 16, left: 8, bottom: 5 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
-                  <XAxis dataKey="market" stroke="hsl(var(--muted-foreground))" tick={{fill: 'hsl(var(--muted-foreground))'}} />
-                  <YAxis stroke="hsl(var(--muted-foreground))" tick={{fill: 'hsl(var(--muted-foreground))'}} />
-                  <Tooltip 
-                    contentStyle={{ backgroundColor: 'hsl(var(--popover))', borderColor: 'hsl(var(--border))', color: 'hsl(var(--popover-foreground))' }}
-                    itemStyle={{ color: 'hsl(var(--popover-foreground))' }}
+                  <XAxis
+                    dataKey="market"
+                    stroke="hsl(var(--muted-foreground))"
+                    tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }}
                   />
-                  <Bar dataKey="count" name="Candidates" radius={[4, 4, 0, 0]}>
-                    {breakdown.map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                    ))}
-                  </Bar>
+                  <YAxis
+                    stroke="hsl(var(--muted-foreground))"
+                    tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 11 }}
+                    label={{ value: "GW", angle: -90, position: "insideLeft", offset: 10, fill: "hsl(var(--muted-foreground))", fontSize: 11 }}
+                    tickFormatter={(v: number) => v === 0 ? "0" : `${v}`}
+                  />
+                  <Tooltip
+                    contentStyle={{ backgroundColor: "hsl(var(--popover))", borderColor: "hsl(var(--border))", color: "hsl(var(--popover-foreground))", fontSize: 12 }}
+                    itemStyle={{ color: "hsl(var(--popover-foreground))" }}
+                    formatter={(value: number, name: string) => [`${value} GW`, ASSET_LABELS[name] ?? name]}
+                    cursor={{ fill: "hsl(var(--muted))", opacity: 0.3 }}
+                  />
+                  <Legend
+                    formatter={(val: string) => ASSET_LABELS[val] ?? val}
+                    wrapperStyle={{ color: "hsl(var(--muted-foreground))", fontSize: 11, paddingTop: 4 }}
+                  />
+                  {activeAssetTypes.map(at => (
+                    <Bar key={at} dataKey={at} name={at} stackId="stack" fill={ASSET_COLORS[at] ?? "#94a3b8"} radius={activeAssetTypes.indexOf(at) === activeAssetTypes.length - 1 ? [3, 3, 0, 0] : [0, 0, 0, 0]} />
+                  ))}
                 </BarChart>
               </ResponsiveContainer>
             ) : (
