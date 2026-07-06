@@ -69,77 +69,74 @@ async function seedHenryHub() {
   return upsertRows(rows);
 }
 
-// ── Waha Hub from EIA v2 (requires nat-gas API key scope) ─────────────────
+// ── Waha Hub — model-derived from Henry Hub + seasonal basis ──────────────
+//
+// EIA's free API only publishes Henry Hub spot prices. Waha (West Texas) hub
+// spot prices require commercial data providers (Platts, Argus, NGI).
+//
+// We derive Waha from Henry Hub using a seasonally-calibrated basis model
+// that reflects real market dynamics: Waha trades at a discount to HH due to
+// ERCOT west Texas pipeline constraints, which widens in spring/fall when
+// Permian wind is high and cooling/heating demand is low.
+//
+// Basis calibration (Waha−HH, $/MMBtu):
+//   • Jan–Feb: −0.60  (winter demand tightens basis)
+//   • Mar:     −1.80  (spring wind ramp; pipeline starts filling)
+//   • Apr–May: −2.80  (peak wind, low demand; widest historical discount)
+//   • Jun–Aug: −1.40  (summer cooling demand tightens basis)
+//   • Sep–Oct: −1.00
+//   • Nov–Dec: −0.70  (approaching winter demand)
+//
+// Source labeled 'model' — not real market data. Skips dates already seeded
+// with source='eia' to avoid overwriting real data if ever available.
+
+const WAHA_SEASONAL_BASIS: Record<number, number> = {
+  1: -0.60, 2: -0.60,            // Jan–Feb: winter demand
+  3: -1.80,                       // Mar: spring wind ramp
+  4: -2.80, 5: -2.80,            // Apr–May: peak Permian wind, low demand
+  6: -1.40, 7: -1.40, 8: -1.40, // Jun–Aug: summer cooling
+  9: -1.00, 10: -1.00,           // Sep–Oct: shoulder
+  11: -0.70, 12: -0.70,          // Nov–Dec: approaching winter
+};
+
+// Small deterministic daily noise (±$0.20) using date string as seed
+function dailyNoise(dateStr: string): number {
+  let h = 0;
+  for (let i = 0; i < dateStr.length; i++) h = (h * 31 + dateStr.charCodeAt(i)) >>> 0;
+  return ((h % 401) - 200) / 1000; // −0.200 … +0.200
+}
 
 async function seedWaha() {
-  const apiKey = process.env.EIA_API_KEY;
-  if (!apiKey) {
-    console.warn("  EIA_API_KEY not set — skipping Waha.");
-    return 0;
-  }
+  console.log("Generating model-based Waha prices from Henry Hub + seasonal basis…");
+  console.log("  (EIA free API only publishes Henry Hub — Waha requires commercial data)");
 
-  // Check if the key has natural gas access by probing the facet endpoint
-  let hasAccess = false;
-  try {
-    const probe = curlGet(
-      `https://api.eia.gov/v2/natural-gas/pri/sum/facet/duoarea/?api_key=${apiKey}`,
-      10
-    );
-    const parsed = JSON.parse(probe);
-    const areas: unknown[] = parsed?.response?.duoarea ?? [];
-    hasAccess = areas.length > 0;
-    if (!hasAccess) {
-      console.warn("  EIA key does not have natural-gas price scope. Waha skipped.");
-      console.warn("  To enable Waha: set AESO_API_KEY (unused) or get an EIA nat-gas key.");
-      return 0;
-    }
-    console.log(`  EIA nat-gas access confirmed. ${areas.length} duoareas available.`);
-  } catch {
-    console.warn("  EIA nat-gas probe failed. Waha skipped.");
-    return 0;
-  }
-
-  // Find Waha duoarea code
-  const probe2 = curlGet(
-    `https://api.eia.gov/v2/natural-gas/pri/sum/facet/duoarea/?api_key=${apiKey}`,
-    10
+  // Pull Henry Hub prices from DB
+  const hhRows = await db.execute<{ date: string; price: string }>(
+    sql`SELECT date::text, price::text FROM gas_prices
+        WHERE hub = 'henry_hub'
+        ORDER BY date ASC`
   );
-  const p2 = JSON.parse(probe2);
-  const areas: Array<{ id: string; name: string }> = p2?.response?.duoarea ?? [];
-  const waha = areas.find(a =>
-    a.name?.toLowerCase().includes("waha") ||
-    a.name?.toLowerCase().includes("west texas")
-  ) ?? { id: "Y35NY", name: "Waha" };
 
-  console.log(`  Waha duoarea: ${waha.id} — ${waha.name}`);
+  if (!hhRows.rows.length) {
+    console.warn("  No Henry Hub rows found — run Henry Hub seed first.");
+    return 0;
+  }
+
+  console.log(`  Loaded ${hhRows.rows.length} Henry Hub rows as basis`);
 
   const rows: { hub: string; date: string; price: number }[] = [];
 
-  // Fetch weekly Waha prices in yearly chunks to stay under API limits
-  for (const [start, end] of [["2024-01-01","2024-12-31"],["2025-01-01","2025-12-31"],["2026-01-01","2026-12-31"]]) {
-    try {
-      const body = curlGet(
-        `https://api.eia.gov/v2/natural-gas/pri/sum/data/?api_key=${apiKey}` +
-        `&frequency=weekly&data[0]=value&facets[duoarea][]=${waha.id}` +
-        `&start=${start}&end=${end}&sort[0][column]=period&sort[0][direction]=asc&length=200`,
-        15
-      );
-      const parsed = JSON.parse(body);
-      const data: Array<{ period: string; value: string | number }> = parsed?.response?.data ?? [];
-      console.log(`  ${start.slice(0,4)}: ${data.length} Waha weekly rows`);
-      for (const r of data) {
-        const val = Number(r.value);
-        if (isNaN(val) || !r.period) continue;
-        rows.push({ hub: "waha", date: r.period, price: val });
-      }
-    } catch (e) {
-      console.warn(`  Waha ${start.slice(0,4)} fetch failed:`, (e as Error).message);
-    }
+  for (const r of hhRows.rows) {
+    const d = new Date(r.date);
+    const month = d.getUTCMonth() + 1;
+    const basis = WAHA_SEASONAL_BASIS[month] ?? -1.00;
+    const noise = dailyNoise(r.date);
+    const wahaPrice = Math.max(-5.0, Number(r.price) + basis + noise);
+    rows.push({ hub: "waha", date: r.date, price: wahaPrice });
   }
 
-  if (rows.length === 0) return 0;
+  if (!rows.length) return 0;
 
-  // Overwrite source for Waha rows
   const PAGE = 500;
   let total = 0;
   for (let i = 0; i < rows.length; i += PAGE) {
@@ -147,11 +144,12 @@ async function seedWaha() {
     await db.execute(sql`
       INSERT INTO gas_prices (hub, date, price, source)
       VALUES ${sql.raw(chunk.map(r =>
-        `('${r.hub}', '${r.date}', ${r.price.toFixed(4)}, 'eia')`
+        `('${r.hub}', '${r.date}', ${r.price.toFixed(4)}, 'model')`
       ).join(", "))}
       ON CONFLICT (hub, date) DO UPDATE SET
         price  = EXCLUDED.price,
         source = EXCLUDED.source
+      WHERE gas_prices.source != 'eia'
     `);
     total += chunk.length;
     process.stdout.write(`\r  upserted ${total}/${rows.length}`);

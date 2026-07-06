@@ -210,22 +210,32 @@ export default function ErcotGasPage() {
         </Card>
         <Card className="bg-card border-border">
           <CardContent className="pt-4">
-            <p className="text-xs text-muted-foreground">Waha Hub (latest)</p>
-            <p className="text-2xl font-bold text-slate-500">
+            <p className="text-xs text-muted-foreground flex items-center gap-1">
+              Waha Hub (latest)
+              {wahaLatest && <span className="text-[10px] bg-slate-700 text-slate-400 px-1 rounded">model</span>}
+            </p>
+            <p className={`text-2xl font-bold ${wahaLatest && wahaLatest.price < 0 ? "text-red-400" : "text-amber-400"}`}>
               {wahaLatest ? `$${wahaLatest.price.toFixed(2)}` : "N/A"}
               <span className="text-sm font-normal text-muted-foreground ml-1">/MMBtu</span>
             </p>
-            <p className="text-xs text-muted-foreground mt-0.5">{wahaLatest ? wahaLatest.date : "Waha prices not seeded"}</p>
+            <p className="text-xs text-muted-foreground mt-0.5">{wahaLatest ? wahaLatest.date : "Not seeded"}</p>
           </CardContent>
         </Card>
         <Card className="bg-card border-border">
           <CardContent className="pt-4">
-            <p className="text-xs text-muted-foreground">Waha−HH Basis (latest)</p>
+            <p className="text-xs text-muted-foreground flex items-center gap-1">
+              Waha−HH Basis (latest)
+              {wahaBasisLatest && <span className="text-[10px] bg-slate-700 text-slate-400 px-1 rounded">model</span>}
+            </p>
             <p className={`text-2xl font-bold ${wahaBasisLatest && Number(wahaBasisLatest) < -2 ? "text-red-400" : "text-purple-400"}`}>
               {wahaBasisLatest ? `$${wahaBasisLatest}` : "N/A"}
               <span className="text-sm font-normal text-muted-foreground ml-1">/MMBtu</span>
             </p>
-            <p className="text-xs text-muted-foreground mt-0.5">{wahaBasisLatest ? "" : "Requires Waha prices"}</p>
+            {wahaBasisLatest && Number(wahaBasisLatest) < -3 && (
+              <p className="text-xs text-red-400 mt-0.5 flex items-center gap-1">
+                <AlertTriangle className="h-3 w-3" /> Extreme negative basis
+              </p>
+            )}
           </CardContent>
         </Card>
         <Card className="bg-card border-border">
@@ -253,14 +263,24 @@ export default function ErcotGasPage() {
         </Card>
       )}
 
-      {/* Waha note */}
-      {!noData && !wahaLatest && (
-        <div className="flex items-center gap-2 px-1 py-2 rounded text-xs text-muted-foreground border border-border/40 bg-muted/20">
+      {/* Waha model note */}
+      {!noData && wahaLatest && (
+        <div className="flex items-center gap-2 px-3 py-2 rounded text-xs text-muted-foreground border border-border/40 bg-muted/20">
           <AlertTriangle className="h-3.5 w-3.5 text-amber-500/70 shrink-0" />
           <span>
-            <strong className="text-foreground/70">Waha Hub prices not available.</strong>{" "}
-            Waha (West Texas) gas pricing requires a separate EIA API endpoint. Only Henry Hub (FRED DHHNGSP) is seeded.
-            Spark Spread and Basis analysis uses Henry Hub only.
+            <strong className="text-foreground/70">Waha prices are model-derived.</strong>{" "}
+            EIA's free API only publishes Henry Hub. Waha is estimated using Henry Hub + a seasonally-calibrated basis
+            (widest in Apr–May when Permian wind peaks, tightest in winter). Real Waha data requires a commercial feed (Platts, Argus, NGI).
+          </span>
+        </div>
+      )}
+      {/* Waha not seeded note */}
+      {!noData && !wahaLatest && (
+        <div className="flex items-center gap-2 px-3 py-2 rounded text-xs text-muted-foreground border border-border/40 bg-muted/20">
+          <AlertTriangle className="h-3.5 w-3.5 text-amber-500/70 shrink-0" />
+          <span>
+            <strong className="text-foreground/70">Waha Hub prices not seeded.</strong>{" "}
+            Run <code className="font-mono bg-muted px-1 rounded">seed-gas-prices</code> to generate model-based Waha prices from Henry Hub.
           </span>
         </div>
       )}
@@ -281,7 +301,7 @@ export default function ErcotGasPage() {
             <CardHeader>
               <CardTitle className="text-base">Henry Hub vs Waha — Monthly Average ($/MMBtu)</CardTitle>
               <CardDescription>
-                Left axis: gas prices. Both hubs from real market data (FRED DHHNGSP + EIA).
+                Henry Hub: real (FRED DHHNGSP). Waha: model-derived (Henry Hub + seasonal basis).
               </CardDescription>
             </CardHeader>
             <CardContent>
