@@ -150,9 +150,13 @@ function DataChart({ block }: { block: ChartBlock }) {
 
 const SUGGESTED = [
   "What was the average Alberta pool price in each month of 2025?",
-  "Which fuel type has the most MW in the interconnection queue?",
+  "Explain the REM program — how do CFDs work and who has won auctions?",
   "Show me the SMP vs pool price spread — is congestion rent increasing?",
+  "What is the MSA's role and what is their most recent publication?",
   "What does the generation mix look like? Break down by fuel type.",
+  "What does the AUC regulate and how does micro-generation approval work?",
+  "Which fuel type has the most MW in the interconnection queue?",
+  "What are the key market power metrics the MSA tracks?",
 ];
 
 export default function AesoQACopilot() {
@@ -160,7 +164,7 @@ export default function AesoQACopilot() {
     {
       role: "assistant",
       content:
-        "I'm the AESO Market Copilot, connected to live Alberta electricity market data. I can query pool prices, generation mix, SMP congestion spreads, supply & demand, operating reserves, interchange flows, and the interconnection queue.\n\nAsk me anything about Alberta's power market.",
+        "I'm the AESO Market Copilot, with full awareness of every tab on this platform.\n\n**Live market data:** Pool prices, generation mix, SMP congestion spreads, supply & demand, operating reserves, interchange flows, and the interconnection queue.\n\n**Regulatory & policy:** REM (Renewable Electricity Market) auctions and CFD mechanics, AUC rules and rate-setting process, MSA market surveillance reports and live document listings.\n\nAsk me anything about Alberta's power market — from the latest pool price trends to how a REM contract works.",
     },
   ]);
   const [input, setInput] = useState("");
@@ -407,7 +411,7 @@ export default function AesoQACopilot() {
         </div>
 
         <p className="text-xs text-muted-foreground text-center shrink-0">
-          Copilot queries live AESO data — pool price · generation mix · SMP congestion · interchange · queue
+          Copilot knows all tabs — pool price · gen mix · SMP congestion · queue · REM · AUC · MSA
         </p>
       </div>
     </div>

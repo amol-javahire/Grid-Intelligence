@@ -59,16 +59,33 @@ function parseAucRss(xml: string) {
   return items;
 }
 
-router.get("/aeso/auc/feed", async (req, res) => {
+// ── Exported helpers (shared by copilot) ──────────────────────────
+export async function getAucFeed(): Promise<{ items: ReturnType<typeof parseAucRss>; fetchedAt: string; source: string }> {
   const cacheKey = "auc:feed";
-  const cached = getCache(cacheKey);
-  if (cached) return res.json(cached);
+  const cached = getCache<{ items: ReturnType<typeof parseAucRss>; fetchedAt: string; source: string }>(cacheKey);
+  if (cached) return cached;
+  const xml  = curlGet("https://www.auc.ab.ca/feed/");
+  const news = parseAucRss(xml);
+  const data = { items: news, fetchedAt: new Date().toISOString(), source: "https://www.auc.ab.ca/feed/" };
+  setCache(cacheKey, data, HOUR);
+  return data;
+}
 
+export async function getMsaDocs(category = "all"): Promise<{ docs: MsaDoc[]; category: string; fetchedAt: string; source: string }> {
+  const url = MSA_CATEGORY_URLS[category] ?? MSA_CATEGORY_URLS.all;
+  const cacheKey = `msa:docs:${category}`;
+  const cached = getCache<{ docs: MsaDoc[]; category: string; fetchedAt: string; source: string }>(cacheKey);
+  if (cached) return cached;
+  const html = curlGet(url);
+  const docs = parseMsaDocs(html);
+  const data = { docs, category, fetchedAt: new Date().toISOString(), source: url };
+  setCache(cacheKey, data, DAY);
+  return data;
+}
+
+router.get("/aeso/auc/feed", async (req, res) => {
   try {
-    const xml  = curlGet("https://www.auc.ab.ca/feed/");
-    const news = parseAucRss(xml);
-    const data = { items: news, fetchedAt: new Date().toISOString(), source: "https://www.auc.ab.ca/feed/" };
-    setCache(cacheKey, data, HOUR);
+    const data = await getAucFeed();
     res.json(data);
   } catch (err) {
     res.status(500).json({ error: "Failed to fetch AUC feed" });
@@ -118,20 +135,11 @@ const MSA_CATEGORY_URLS: Record<string, string> = {
 
 router.get("/aeso/msa/documents", async (req, res) => {
   const category = (req.query.category as string) ?? "all";
-  const url = MSA_CATEGORY_URLS[category] ?? MSA_CATEGORY_URLS.all;
-  const cacheKey = `msa:docs:${category}`;
-
-  const cached = getCache(cacheKey);
-  if (cached) return res.json(cached);
-
   try {
-    const html = curlGet(url);
-    const docs = parseMsaDocs(html);
-    const data = { docs, category, fetchedAt: new Date().toISOString(), source: url };
-    setCache(cacheKey, data, DAY);
-    res.json(data);
+    const data = await getMsaDocs(category);
+    return res.json(data);
   } catch (err) {
-    res.status(500).json({ error: "Failed to fetch MSA documents" });
+    return res.status(500).json({ error: "Failed to fetch MSA documents" });
   }
 });
 

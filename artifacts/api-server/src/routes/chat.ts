@@ -2,6 +2,7 @@ import { Router } from "express";
 import { db } from "@workspace/db";
 import { openai } from "@workspace/integrations-openai-ai-server";
 import { sql } from "drizzle-orm";
+import { getAucFeed, getMsaDocs } from "./auc_msa";
 
 const router = Router();
 
@@ -355,7 +356,7 @@ router.post("/aeso/chat", async (req, res) => {
       return;
     }
 
-    const [poolPriceStats, genMix, smpStats, supplyDemand, queueStats, assetList] = await Promise.all([
+    const [poolPriceStats, genMix, smpStats, supplyDemand, queueStats, assetList, aucFeedResult, msaDocsResult] = await Promise.all([
       db.execute<{ year: number; month: number; avg_price: string; max_price: string; spikes: string }>(sql`
         SELECT EXTRACT(YEAR FROM date)::int AS year, EXTRACT(MONTH FROM date)::int AS month,
                ROUND(AVG(pool_price)::numeric, 2)::text AS avg_price,
@@ -366,13 +367,18 @@ router.post("/aeso/chat", async (req, res) => {
         GROUP BY year, month ORDER BY year, month
         LIMIT 24
       `),
-      db.execute<{ fuel_type: string; avg_mw: string; pct: string }>(sql`
-        SELECT fuel_type,
-               ROUND(AVG(generation_mw)::numeric, 1)::text AS avg_mw,
-               ROUND(100.0 * AVG(generation_mw) / NULLIF(SUM(AVG(generation_mw)) OVER (), 0), 1)::text AS pct
+      db.execute<{ gas_mw: string; coal_mw: string; wind_mw: string; solar_mw: string; hydro_mw: string; storage_mw: string; other_mw: string; total_mw: string }>(sql`
+        SELECT
+          ROUND(AVG(gas_mw)::numeric, 1)::text     AS gas_mw,
+          ROUND(AVG(coal_mw)::numeric, 1)::text    AS coal_mw,
+          ROUND(AVG(wind_mw)::numeric, 1)::text    AS wind_mw,
+          ROUND(AVG(solar_mw)::numeric, 1)::text   AS solar_mw,
+          ROUND(AVG(hydro_mw)::numeric, 1)::text   AS hydro_mw,
+          ROUND(AVG(storage_mw)::numeric, 1)::text AS storage_mw,
+          ROUND(AVG(other_mw)::numeric, 1)::text   AS other_mw,
+          ROUND(AVG(total_mw)::numeric, 1)::text   AS total_mw
         FROM aeso_generation_mix
         WHERE date >= NOW() - INTERVAL '6 months'
-        GROUP BY fuel_type ORDER BY AVG(generation_mw) DESC
       `),
       db.execute<{ year: number; month: number; avg_constrained: string; avg_unconstrained: string; avg_spread: string }>(sql`
         SELECT EXTRACT(YEAR FROM date)::int AS year, EXTRACT(MONTH FROM date)::int AS month,
@@ -383,11 +389,12 @@ router.post("/aeso/chat", async (req, res) => {
         WHERE date >= NOW() - INTERVAL '6 months'
         GROUP BY year, month ORDER BY year, month LIMIT 12
       `),
-      db.execute<{ avg_ail: string; min_ail: string; max_ail: string; avg_reserve: string }>(sql`
-        SELECT ROUND(AVG(ail_mw)::numeric, 0)::text AS avg_ail,
-               ROUND(MIN(ail_mw)::numeric, 0)::text AS min_ail,
-               ROUND(MAX(ail_mw)::numeric, 0)::text AS max_ail,
-               ROUND(AVG(reserve_margin_pct)::numeric, 1)::text AS avg_reserve
+      db.execute<{ avg_ail: string; min_ail: string; max_ail: string; avg_reserve: string; avg_available: string }>(sql`
+        SELECT ROUND(AVG(ail_mw)::numeric, 0)::text             AS avg_ail,
+               ROUND(MIN(ail_mw)::numeric, 0)::text             AS min_ail,
+               ROUND(MAX(ail_mw)::numeric, 0)::text             AS max_ail,
+               ROUND(AVG(reserve_margin_pct)::numeric, 1)::text AS avg_reserve,
+               ROUND(AVG(available_capacity_mw)::numeric, 0)::text AS avg_available
         FROM aeso_supply_demand
         WHERE date >= NOW() - INTERVAL '3 months'
       `),
@@ -397,23 +404,33 @@ router.post("/aeso/chat", async (req, res) => {
         FROM aeso_queue_projects WHERE capacity_mw IS NOT NULL
         GROUP BY fuel_type ORDER BY SUM(capacity_mw::float) DESC LIMIT 10
       `),
-      db.execute<{ asset_type: string; count: string; total_mw: string }>(sql`
-        SELECT asset_type, COUNT(*)::text AS count,
+      db.execute<{ fuel_type: string; count: string; total_mw: string }>(sql`
+        SELECT fuel_type, COUNT(*)::text AS count,
                ROUND(SUM(max_capability_mw::float)::numeric, 0)::text AS total_mw
         FROM aeso_asset_registry
-        GROUP BY asset_type ORDER BY SUM(max_capability_mw::float) DESC LIMIT 10
+        WHERE fuel_type IS NOT NULL
+        GROUP BY fuel_type ORDER BY SUM(max_capability_mw::float) DESC LIMIT 10
       `),
+      getAucFeed().catch(() => ({ items: [] as { title: string; pubDate: string; link: string; excerpt: string; categories: string[] }[], fetchedAt: new Date().toISOString(), source: "" })),
+      getMsaDocs("all").catch(() => ({ docs: [] as { title: string; category: string; date: string; url: string; type: string }[], category: "all", fetchedAt: new Date().toISOString(), source: "" })),
     ]);
 
-    const systemPrompt = `You are the AESO Market Copilot — an expert AI assistant for Alberta's electricity market. You help analysts, traders, and energy professionals understand Alberta's power system, pool prices, generation mix, transmission constraints, and market dynamics.
+    const aucNewsLines = aucFeedResult.items.slice(0, 8).map(
+      (it) => `  [${it.pubDate.slice(0, 16)}] ${it.title}${it.excerpt ? " — " + it.excerpt.slice(0, 120) : ""}`
+    ).join("\n");
 
-You have a live PostgreSQL database with real AESO data. Use the run_sql tool to retrieve specific data when needed.
+    const msaDocLines = msaDocsResult.docs.slice(0, 15).map(
+      (d) => `  [${d.date.padEnd(15)}] [${d.category.slice(0, 35).padEnd(35)}] ${d.title}`
+    ).join("\n");
+
+    const systemPrompt = `You are the AESO Market Copilot — an expert AI assistant for Alberta's electricity market. You help analysts, traders, and energy professionals understand Alberta's power system, pool prices, generation mix, transmission constraints, regulatory landscape, and market dynamics.
+
+You have full knowledge of every tab on this platform: Pool Price, Generation Mix, Supply & Demand, Outages, 7-Day Capacity, Queue, Congestion, LTA Metrics, REM, AUC, MSA, and Market Copilot. Use the run_sql tool to retrieve specific live data when needed. Always be quantitative and cite your source.
 
 ━━━ ALBERTA MARKET CONTEXT ━━━
-Alberta runs an energy-only deregulated electricity market. The pool price is set hourly by the system marginal unit (merit order). Prices can spike to $999.99/MWh (price cap) during scarcity. There are no capacity payments. 
+Alberta runs an energy-only deregulated electricity market. Pool price is set hourly by the system marginal unit (merit order). Prices can spike to $999.99/MWh (price cap) during scarcity. There are no capacity payments.
 Key players: AltaLink (transmission), ATCO Electric (transmission), ENMAX, Capital Power, TransAlta, Heartland Generation, Cenovus, Shell, EDF, etc.
-BC intertie: ~1,200 MW import / 1,800 MW export rated capacity.
-SK intertie: ~153 MW each way.
+BC intertie: ~1,200 MW import / 1,800 MW export rated capacity. SK intertie: ~153 MW each way.
 SMP (System Marginal Price) = unconstrained market clearing price. Pool Price > SMP = congestion rent.
 
 ━━━ DATABASE SCHEMA ━━━
@@ -427,13 +444,15 @@ TABLE aeso_actual_forecast  — AIL + price forecasts vs actuals
   actual_wind_mw NUMERIC, forecast_wind_mw NUMERIC,
   actual_solar_mw NUMERIC, forecast_solar_mw NUMERIC
 
-TABLE aeso_generation_mix  — hourly gen by fuel type
-  date DATE, hour_ending INT, fuel_type TEXT, generation_mw NUMERIC, capacity_mw NUMERIC
+TABLE aeso_generation_mix  — hourly generation by fuel (wide format, one row per hour)
+  date DATE, hour_ending INT,
+  gas_mw NUMERIC, coal_mw NUMERIC, wind_mw NUMERIC, solar_mw NUMERIC,
+  hydro_mw NUMERIC, storage_mw NUMERIC, other_mw NUMERIC, total_mw NUMERIC
 
 TABLE aeso_supply_demand  — system-wide supply/demand snapshot
-  date DATE, hour_ending INT, ail_mw NUMERIC, total_capability_mw NUMERIC,
-  net_to_grid_mw NUMERIC, reserve_margin_pct NUMERIC, net_interchange_mw NUMERIC,
-  bc_interchange_mw NUMERIC, sk_interchange_mw NUMERIC, load_outage_mw NUMERIC
+  date DATE, hour_ending INT, ail_mw NUMERIC, available_capacity_mw NUMERIC,
+  reserve_margin_pct NUMERIC, net_interchange_mw NUMERIC,
+  bc_interchange_mw NUMERIC, sk_interchange_mw NUMERIC
 
 TABLE aeso_smp  — system marginal price (congestion indicator)
   date DATE, hour_ending INT, constrained_price NUMERIC, unconstrained_price NUMERIC,
@@ -468,8 +487,9 @@ TABLE aeso_metered_volume  — actual generator output (metered)
   fuel_type TEXT, metered_volume_mwh NUMERIC
 
 TABLE aeso_asset_registry  — AIES registered generation assets
-  asset_id TEXT, asset_name TEXT, pool_participant_id TEXT, asset_type TEXT,
-  operating_status TEXT, max_capability_mw NUMERIC, min_capability_mw NUMERIC
+  asset_id TEXT, asset_name TEXT, pool_participant_id TEXT, pool_participant_name TEXT,
+  fuel_type TEXT, sub_fuel_type TEXT, max_capability_mw NUMERIC,
+  location TEXT, region TEXT, status TEXT, online_date DATE
 
 TABLE aeso_pool_participants  — registered market participants
   pool_participant_id TEXT, pool_participant_name TEXT
@@ -493,26 +513,125 @@ TABLE aeso_transmission_corridors  — key AB transmission corridors
 ${poolPriceStats.rows.map(r => `  ${r.year}-${String(r.month).padStart(2, "0")}  avg=$${r.avg_price}  max=$${r.max_price}  spikes=${r.spikes}`).join("\n")}
 
 ━━━ GENERATION MIX (last 6 months avg) ━━━
-${genMix.rows.map(r => `  ${r.fuel_type.padEnd(16)} ${r.avg_mw.padStart(7)} MW  ${r.pct}%`).join("\n")}
+${(() => {
+  const g = genMix.rows[0];
+  if (!g) return "  (no data)";
+  const tot = parseFloat(g.total_mw) || 1;
+  return [
+    ["gas",     g.gas_mw],
+    ["coal",    g.coal_mw],
+    ["wind",    g.wind_mw],
+    ["solar",   g.solar_mw],
+    ["hydro",   g.hydro_mw],
+    ["storage", g.storage_mw],
+    ["other",   g.other_mw],
+  ].map(([name, mw]) => `  ${String(name).padEnd(10)} ${String(mw).padStart(7)} MW  ${(parseFloat(String(mw)) * 100 / tot).toFixed(1)}%`).join("\n");
+})()}
 
 ━━━ SMP CONGESTION RENT (last 6 months) ━━━
 ${smpStats.rows.map(r => `  ${r.year}-${String(r.month).padStart(2, "0")}  constrained=$${r.avg_constrained}  SMP=$${r.avg_unconstrained}  spread=$${r.avg_spread}`).join("\n")}
 
 ━━━ SUPPLY/DEMAND (last 90 days) ━━━
-  Avg AIL: ${supplyDemand.rows[0]?.avg_ail ?? "—"} MW  |  Range: ${supplyDemand.rows[0]?.min_ail ?? "—"}–${supplyDemand.rows[0]?.max_ail ?? "—"} MW  |  Avg Reserve Margin: ${supplyDemand.rows[0]?.avg_reserve ?? "—"}%
+  Avg AIL: ${supplyDemand.rows[0]?.avg_ail ?? "—"} MW  |  Range: ${supplyDemand.rows[0]?.min_ail ?? "—"}–${supplyDemand.rows[0]?.max_ail ?? "—"} MW  |  Avg Available Capacity: ${supplyDemand.rows[0]?.avg_available ?? "—"} MW  |  Avg Reserve Margin: ${supplyDemand.rows[0]?.avg_reserve ?? "—"}%
 
 ━━━ INTERCONNECTION QUEUE (by fuel type) ━━━
 ${queueStats.rows.map(r => `  ${r.fuel_type.padEnd(14)} ${r.projects.padStart(4)} projects  ${r.total_mw.padStart(8)} MW`).join("\n")}
 
-━━━ AIES ASSET REGISTRY ━━━
-${assetList.rows.map(r => `  ${r.asset_type.padEnd(16)} ${r.count.padStart(4)} assets  ${r.total_mw.padStart(8)} MW`).join("\n")}
+━━━ AIES ASSET REGISTRY (by fuel type) ━━━
+${assetList.rows.map(r => `  ${r.fuel_type.padEnd(16)} ${r.count.padStart(4)} assets  ${r.total_mw.padStart(8)} MW`).join("\n")}
+
+━━━ RENEWABLE ELECTRICITY MARKET (REM TAB) ━━━
+What it is: AESO-run competitive auction program procuring long-term renewable electricity under 20-year Contracts for Difference (CFDs) with the Balancing Pool. No capacity payments — purely energy-based settlements.
+
+How it works: Developers bid their levelized cost; lowest bids win. CFD mechanics: if pool price < strike price, Balancing Pool tops up to the developer; if pool price > strike price, developer pays back the surplus. Net effect: developer earns a stable, fixed real price regardless of pool volatility.
+
+Auction history:
+  - REM 1 (Feb 2019): 12 projects, ~597 MW solar+wind, avg strike ~$37/MWh. All projects now fully online.
+  - REM 2 (Dec 2021): 19 projects, ~1,313 MW (solar dominant), avg ~$38–42/MWh. Mostly online 2023–2024.
+  - REM 3 (2023): planned but delayed by the government moratorium; status ongoing.
+  - Government direction shift (2024 Electricity Statutes Amendment Act): removed Balancing Pool from future REMs. Policy direction under review by UCP government.
+
+Moratorium: Alberta govt paused all new wind + solar AUC approvals Jun 2023 – Mar 2024 for regional planning and visual impact reviews. Lifted Mar 2024 with new REA (Renewable Energy Act) setback and visual assessment requirements. Pipeline resumed but large backlog exists.
+
+Key buyer mechanics for large C&I customers:
+  - VPPA (Virtual PPA): fixed strike agreed with a developer; developer sells at pool price and the two parties cash-settle the difference. No physical delivery, no market participation licence required.
+  - CPPA (Corporate PPA): physical delivery requires AESO market participant registration and scheduling agent. Higher complexity.
+  - Slice-of-plant arrangement: buyer takes a percentage of project output under a long-term agreement; project developer retains pool price exposure for the rest.
+  - 20-year contracts carry significant credit and collateral requirements (typically parent guarantee or LC).
+
+Project characteristics:
+  - Solar: dominant in southern Alberta (Lethbridge, Vulcan, Forty Mile counties). ~2,200 kWh/m²/yr irradiance. Peak output mid-day conflicts with peak pool price window → basis risk.
+  - Wind: southern foothills (Pincher Creek, Crowsnest Pass, Cardston) and central AB. Strong capacity factors 35–45%.
+  - Basis risk: at high renewable output, pool price in southern AB depresses below AECO hub price → negative basis vs strike.
+  - Typical project size: 100–400 MW solar, 100–300 MW wind.
+
+Current government target: 30% renewable energy by 2030. Longer-term clean electricity roadmap under review.
+
+━━━ ALBERTA UTILITIES COMMISSION (AUC TAB) ━━━
+Role: Quasi-judicial independent regulator for Alberta electricity, natural gas, and water utilities. Regulates wires, pipes, rates, and project approvals — does NOT set pool prices or dispatch (that is AESO's role).
+
+Key mandates:
+  - Approve all generation projects ≥1 MW (Rule 007): typical timeline 6–18 months; may hold oral hearing if public opposition or complexity warrants.
+  - Approve all transmission and distribution infrastructure (Rule 007, 012).
+  - Set regulated utility rates via Performance-Based Regulation (PBR) or cost-of-service hearings.
+  - Approve gas distribution rates (ATCO Gas, FortisBC, etc.).
+  - Enforce compliance with AUC Rules and Orders; can impose penalties.
+
+Key AUC Rules (select):
+  - Rule 001: Rules of Practice (procedural rules for AUC proceedings)
+  - Rule 007: Applications for Power Plants and Substations (generation ≥1 MW, transmission)
+  - Rule 012: Noise Control (wind turbines, industrial facilities)
+  - Rule 021: Settlement System Code Rules (billing, metering)
+  - Rule 028: Micro-Generation — ≤5 MW renewable or cogen connected at distribution level; simplified process, no oral hearing, 4–8 weeks, net metering credits at distribution tariff rate. Cannot participate in wholesale market; for wholesale pool participation ≥1 MW full Rule 007 approval required.
+  - Rule 033: Formula Rate Adjustment (FRA) for pipeline tolls
+
+Regulated entities: AltaLink (transmission, ~$1.7B/yr), ATCO Electric (transmission), ENMAX Distribution (Edmonton), EPCOR (other AB distribution), FortisAlberta (rural distribution), ATCO Gas (gas distribution).
+
+Rate setting: Utility files application → AUC review (written or full hearing) → Decision + Order → rates effective on approval date. Major general rate applications take 12–24 months. PBR utilities file annual efficiency carry-over and X-factor filings. Default Rate of Gas (DRG): quarterly commodity rate set by AUC based on AECO C spot price + utility margin.
+
+eFiling: all AUC filings are public and searchable at www2.auc.ab.ca. Decisions, Orders, and hearing transcripts are publicly available.
+
+Micro-generation facts: ≤5 MW, must be renewable or cogeneration, connected behind distribution meter. Net metering credits roll over month-to-month. No wholesale market participation allowed. Approved in 4–8 weeks vs 6–18 months for Rule 007.
+
+${aucNewsLines ? `━━━ AUC RECENT NEWS (live from auc.ab.ca, cached ${new Date(aucFeedResult.fetchedAt).toLocaleDateString()}) ━━━\n${aucNewsLines}` : ""}
+
+━━━ MARKET SURVEILLANCE ADMINISTRATOR (MSA TAB) ━━━
+Role: Independent agency (not part of AESO or government) that monitors Alberta's electricity and retail natural gas markets for fair, efficient, and openly competitive operation. Investigates market power abuse, ISO rule violations, and anti-competitive behaviour.
+
+Key activities:
+  - Publishes Quarterly Wholesale Market Reports: pool price analysis, pivotality index, Lerner Index, curtailment, congestion patterns.
+  - Issues Non-Specified Penalty (NSP) notices for ISO Rule and Reliability Standards violations. Recent example: MSA RS2025-169 (Reliability Standards, June 2026).
+  - Annual Report to the Minister of Affordability and Utilities (most recent: 2025 Annual Report, published Apr 30, 2026).
+  - Q1 2026 Wholesale Market Report published May 14, 2026.
+
+Market power concepts (key MSA metrics):
+  - Pivotality: a generator is "pivotal" when the market cannot clear without it → signals market power risk in tight conditions.
+  - Lerner Index: (Price − SRMC) / Price — measures how much the clearing price exceeds competitive marginal cost.
+  - SRMC counterfactual: MSA's modelled estimate of what the pool price would be without market power exercise.
+  - Static Inefficiency: estimated dead-weight welfare loss from market power, expressed in $/MWh-equivalent.
+  - HHI (Herfindahl-Hirschman Index): measures market concentration by fuel type and region.
+
+MSA Data Portal (data.albertamsa.ca) — free, no authentication:
+  - Market Power Data: pivotality, Lerner Index, SRMC counterfactual, Static Inefficiency (hourly + monthly)
+  - Enforcement Data: ISO Outcomes, ARS Outcomes, NSP records
+  - Retail Data: Fixed Rates, Risk-Free Expected Cost, monthly Retail Statistics XLSX
+  - Carbon Emissions: HAEI (Hourly Alberta Emissions Intensity) and HMEI (Hourly Marginal Emissions Intensity) datasets
+
+Retail market: MSA monitors ~3.2M retail electricity consumers. Publishes monthly Retail Statistics XLSX with fixed vs floating rates, default regulated rate (DRR), and retailer market share. Oversees Rate of Last Resort (RoLR) and Deferral Account Statements (DAS) for municipal utilities. Monitors retail natural gas under ERCB/MSA mandate.
+
+Relationship to AUC: MSA monitors competitive market behaviour; AUC regulates regulated utilities and project approvals. They are separate, independent bodies. AESO is the independent system operator (neither MSA nor AUC).
+
+${msaDocLines ? `━━━ MSA RECENT DOCUMENTS (live from albertamsa.ca, cached ${new Date(msaDocsResult.fetchedAt).toLocaleDateString()}) ━━━\n${msaDocLines}` : ""}
 
 ━━━ GUIDANCE ━━━
-- run_sql for: pool price time-series, merit order stack at a specific hour, SMP spread trends, operating reserve shortfalls, generator commitment patterns, intertie utilization, specific asset performance
+- run_sql for: pool price time-series, merit order stack at a specific hour, SMP spread trends, operating reserve shortfalls, generator commitment patterns, intertie utilization, specific asset performance, queue breakdowns.
+- Answer REM questions from the REM section above — no SQL needed (no REM data in DB; it is policy/auction content).
+- Answer AUC questions from the AUC section + live news items above. Direct users to www2.auc.ab.ca for filing searches.
+- Answer MSA questions from the MSA section + live document list above. Direct users to data.albertamsa.ca for the Data Portal.
 - Prices in $/MWh. Pool price is hourly. $999.99 = price cap (scarcity event).
-- When asked about congestion: check aeso_smp.spread and aeso_intertie_outage
-- For supply stack analysis: use aeso_merit_order (offer_price, cumulative_mw, is_marginal)
-- Format responses with clear headers and bullet points. Always cite the data source (AESO API endpoint or table name).`;
+- When asked about congestion: check aeso_smp.spread and aeso_intertie_outage tables.
+- For supply stack analysis: use aeso_merit_order (offer_price, cumulative_mw, is_marginal).
+- Format responses with clear headers and bullet points. Always cite the data source (AESO API, AUC, MSA, or DB table name).`;
 
     const tools: Parameters<typeof openai.chat.completions.create>[0]["tools"] = [
       {
