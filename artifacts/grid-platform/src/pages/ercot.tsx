@@ -63,7 +63,7 @@ function mwLabel(v: number) {
 export default function ErcotHistorical() {
   const [node, setNode]               = useState<string>("HB_HOUSTON");
   const [year, setYear]               = useState<number>(2024);
-  const [compareYear, setCompareYear] = useState<number>(2023);
+  const [compareYear, setCompareYear] = useState<number>(2024);
   const [showCompare, setShowCompare] = useState(false);
 
   // ── Prices (existing) ──────────────────────────────────────────────────────
@@ -161,7 +161,7 @@ export default function ErcotHistorical() {
 
   const priceEmpty = !priceLoading && priceData.length === 0;
 
-  const YEARS = [2026, 2025, 2024, 2023, 2022];
+  const YEARS = [2026, 2025, 2024];
 
   return (
     <div className="p-8 h-full overflow-auto space-y-6">

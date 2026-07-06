@@ -34,7 +34,7 @@ const TOOLTIP_STYLE = {
 export default function CaisoHistorical() {
   const [node, setNode] = useState<string>("NP15");
   const [year, setYear] = useState<number>(2025);
-  const [compareYear, setCompareYear] = useState<number>(2022);
+  const [compareYear, setCompareYear] = useState<number>(2024);
   const [showCompare, setShowCompare] = useState(false);
 
   const { data: stats, isLoading } = useListCaisoNodeStats({ node: node as "NP15" | "SP15" | "ZP26", year });
@@ -91,8 +91,6 @@ export default function CaisoHistorical() {
               <SelectItem value="2026">2026</SelectItem>
               <SelectItem value="2025">2025</SelectItem>
               <SelectItem value="2024">2024</SelectItem>
-              <SelectItem value="2023">2023</SelectItem>
-              <SelectItem value="2022">2022</SelectItem>
             </SelectContent>
           </Select>
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -113,8 +111,6 @@ export default function CaisoHistorical() {
               <SelectItem value="2026">2026</SelectItem>
               <SelectItem value="2025">2025</SelectItem>
               <SelectItem value="2024">2024</SelectItem>
-              <SelectItem value="2023">2023</SelectItem>
-              <SelectItem value="2022">2022</SelectItem>
             </SelectContent>
           </Select>
         </div>
