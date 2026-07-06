@@ -18,49 +18,61 @@ description: How ercot_node_locations table was built, what sources were used, a
 | LZ_NORTH | 173 |
 | LZ_HOUSTON | 117 |
 
-All 804 nodes fall in only 4 zones — CDR 12301 (7-day rolling window) captures nodes from the most active renewable build-out areas.
-
-## Lat/lon coverage (current)
+## Lat/lon coverage (current — after 4-phase pipeline v2)
 
 | Source | Count |
 |--------|-------|
 | EIA 860 exact name match | 110 |
-| EIA 860 fuzzy match (rapidfuzz, score ≥ 80) | 105 |
-| Zone centroid (approximate) | 589 |
+| EIA 860 fuzzy match (score ≥ 80) | 137 |
+| Queue lat/lon match (score ≥ 75) | 44 |
+| County centroid (queue name match, score ≥ 72) | 46 |
+| EIA 860 LMP direct match | 1 |
+| Zone centroid (approximate) | 466 |
 | Known hub/zone centroids | 15 |
 
-**Total geo-located: 215 of 804 resource nodes (27%)**
+**Total geo-located: 338 of 804 resource nodes (42%)**
 
-**Why only 215:** ERCOT does not publish node lat/lon in any free CDR report. HIFLD ArcGIS substations API returns empty (inaccessible). OSM Overpass didn't help because ERCOT substation codes (e.g. "BYRSW", "LMESA") are internal abbreviations not in OSM. The 589 zone_centroid ones use the 4-zone bounding box centroid.
+**Why ~466 still zone_centroid:** ERCOT does not publish node lat/lon in any free CDR report. Nodes without matches tend to be very new projects (post-2024), inactive/retired units, or nodes with highly abbreviated names that don't appear in EIA 860 or the queue.
 
-## Fuzzy matching approach (script: scripts/src/geo-locate-ercot-nodes.py)
+## 4-phase geolocation pipeline (script: scripts/src/geo-locate-ercot-nodes-v2.py)
 
-- Extracts prefix before first `_` from node name (e.g., `AJAXWIND_RN` → "AJAXWIND")
-- Strips tech tokens (SLR, WND, WIND, ESS, BESS) with `\b` word boundary regex
-- Strips generic EIA words (Wind, Solar, Farm, Project, LLC, etc.)
-- Scores with rapidfuzz: `0.5*partial_ratio + 0.3*token_sort_ratio + 0.2*ratio`
-- Guards: minimum EIA clean name length `max(4, len(node_clean)-2)` to prevent short plant names ("H 4" → "h") matching everything via partial_ratio
-- Threshold 80 gives ~105 high-confidence matches; 72–78 range has false positives
-- `location_source='eia_fuzzy_match'` (vs `'eia_name_match'` for exact, `'zone_centroid'`)
+**Phase 1 — EIA-860 direct LMP node match**
+- `3_1_Generator_Y2024.xlsx` column "RTO/ISO LMP Node Designation" is the ERCOT settlement point name
+- Normalize: strip dots/spaces/dashes, uppercase; match against ercot_node_locations.node_name
+- source = `eia_lmp_direct`
 
-## UI display
+**Phase 2 — EIA-860 fuzzy plant name match**
+- TX plants from `2___Plant_Y2024.xlsx` (June 2026 release, 1,367 TX plants)
+- Clean node prefix + clean EIA name; rapidfuzz composite score
+- **Key fix**: for nc ≤ 5 chars, use `token_sort*0.5 + ratio*0.5` only (no partial_ratio — causes false positives like 'ang' matching 'lANGer', 'adl' matching 'crADLe')
+- For nc < 4 chars, score = 0 (skip entirely)
+- Threshold 80; source = `eia_fuzzy_match`
 
-- Teal MapPin = exact EIA name match
+**Phase 3 — ERCOT queue project lat/lon match**
+- `queue_projects WHERE market='ERCOT' AND latitude IS NOT NULL`
+- Same fuzzy scoring; threshold 75 (queue names are slightly noisier)
+- source = `queue_latlon_match`
+
+**Phase 4 — County centroid fallback**
+- `queue_projects WHERE market='ERCOT'` with county but no lat/lon
+- Fuzzy match project_name to node prefix; threshold 72
+- TX county centroid dict (all 254 counties) in the script
+- source = `county_centroid`; eia_plant_name = "ProjectName (county: XYZ)"
+
+## EIA-860 data files
+
+Both ZIPs identical: `attached_assets/eia8602024_1777780153233.zip` and `_1777780224772.zip`
+- `2___Plant_Y2024.xlsx` — Plant Code → (Plant Name, State, Lat, Lon)
+- `3_1_Generator_Y2024.xlsx` — Generator rows; col "RTO/ISO LMP Node Designation" (idx 13) = ERCOT node
+
+## UI display in nodal.tsx (ERCOT Resource Node Browser)
+
+- Teal MapPin = exact EIA name match or eia_lmp_direct
 - Amber MapPin = fuzzy EIA match
+- Purple MapPin = queue lat/lon match
+- Slate MapPin = county centroid
 - Grey text = zone centroid (honest approximation)
-- Stats header shows: "215 geo-located (110 exact · 105 fuzzy EIA match) · 589 zone centroid"
-
-## Data sources used (all free, no auth)
-
-1. **gridstatus Python library** (no API key): `Ercot().get_settlement_points_electrical_bus_mapping()` → node name + zone + substation (no lat/lon)
-2. **EIA 860 candidates table** (already in DB): name + lat/lon → 787 ERCOT plants for matching
-3. **rapidfuzz** (installed in pypsa venv): fuzzy string matching
-
-## What would get full coverage
-
-- **gridstatus.io API key** (paid): historical LMP data embeds per-node coordinates
-- **ERCOT GIS portal** (EMIL): publishes a Substation Geographic file — not confirmed free/public
-- **Better fuzzy approach**: nodes like `AJAXWIND_RN` (Ajax Wind Farm) don't match because "Ajax Wind Farm" may not be in 2024 EIA 860 Operable sheet (pre-commercial, retired, or named differently)
+- Stats header: "338 geo-located (111 exact · 137 fuzzy EIA · 44 queue · 46 county) · 466 zone centroid"
 
 ## API endpoint
 

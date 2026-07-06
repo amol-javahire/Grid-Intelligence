@@ -479,10 +479,12 @@ function NodeLocationsBrowser() {
   }, [nodes, zoneFilter, search, sortBy]);
 
   const stats = useMemo(() => {
-    const exact = nodes.filter(n => n.locationSource === "eia_name_match").length;
-    const fuzzy = nodes.filter(n => n.locationSource === "eia_fuzzy_match").length;
-    const cent = nodes.filter(n => n.locationSource === "zone_centroid").length;
-    return { total: nodes.length, exact, fuzzy, geo: exact + fuzzy, cent };
+    const exact  = nodes.filter(n => n.locationSource === "eia_name_match" || n.locationSource === "eia_lmp_direct").length;
+    const fuzzy  = nodes.filter(n => n.locationSource === "eia_fuzzy_match").length;
+    const queue  = nodes.filter(n => n.locationSource === "queue_latlon_match").length;
+    const county = nodes.filter(n => n.locationSource === "county_centroid").length;
+    const cent   = nodes.filter(n => n.locationSource === "zone_centroid").length;
+    return { total: nodes.length, exact, fuzzy, queue, county, geo: exact + fuzzy + queue + county, cent };
   }, [nodes]);
 
   const priceColor = (p: number | null) => {
@@ -505,7 +507,7 @@ function NodeLocationsBrowser() {
             <CardDescription className="text-xs mt-0.5">
               {stats.total} nodes · ERCOT Bus Mapping (CDR 10008) via gridstatus ·{" "}
               <span className="text-teal-400">{stats.geo} geo-located</span>{" "}
-              <span className="text-muted-foreground">({stats.exact} exact · {stats.fuzzy} fuzzy EIA match)</span> ·{" "}
+              <span className="text-muted-foreground">({stats.exact} exact · {stats.fuzzy} fuzzy EIA · {stats.queue} queue · {stats.county} county)</span> ·{" "}
               <span className="text-muted-foreground">{stats.cent} zone centroid</span> · Apr–May 2026 pricing
             </CardDescription>
           </div>
@@ -585,7 +587,7 @@ function NodeLocationsBrowser() {
                         {n.avgRtPrice != null ? `$${n.avgRtPrice.toFixed(2)}` : "—"}
                       </td>
                       <td className="py-1.5">
-                        {n.locationSource === "eia_name_match" ? (
+                        {(n.locationSource === "eia_name_match" || n.locationSource === "eia_lmp_direct") ? (
                           <span className="flex items-center gap-1 text-teal-400">
                             <MapPin className="h-2.5 w-2.5" />
                             <span className="text-[10px]">{n.eiaPlantName ? n.eiaPlantName.slice(0, 22) : "EIA exact"}</span>
@@ -594,6 +596,16 @@ function NodeLocationsBrowser() {
                           <span className="flex items-center gap-1 text-amber-400/80">
                             <MapPin className="h-2.5 w-2.5" />
                             <span className="text-[10px]">{n.eiaPlantName ? n.eiaPlantName.slice(0, 22) : "EIA fuzzy"}</span>
+                          </span>
+                        ) : n.locationSource === "queue_latlon_match" ? (
+                          <span className="flex items-center gap-1 text-purple-400/80">
+                            <MapPin className="h-2.5 w-2.5" />
+                            <span className="text-[10px]">{n.eiaPlantName ? n.eiaPlantName.slice(0, 22) : "Queue match"}</span>
+                          </span>
+                        ) : n.locationSource === "county_centroid" ? (
+                          <span className="flex items-center gap-1 text-slate-400/70">
+                            <MapPin className="h-2.5 w-2.5" />
+                            <span className="text-[10px]">{n.eiaPlantName ? n.eiaPlantName.slice(0, 22) : "County centroid"}</span>
                           </span>
                         ) : (
                           <span className="text-[10px] text-muted-foreground">{n.loadZone} centroid</span>

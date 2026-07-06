@@ -1,0 +1,17 @@
+Here's the full picture on why you're stuck at ~200 and how to get the rest:
+Why ~700 nodes can't be matched
+ERCOT resource nodes don't have lat/lon published directly — they map to electrical buses in ERCOT's network model, and those bus coordinates are only in the CIM/network model files that require MIS login (NP4-160-SG maps settlement points → electrical buses, but no coordinates). The only practical way to geolocate resource nodes is by matching them to the physical generating plants behind them — which is what EIA-860 does. The gap in your app is mostly because the April 2024 EIA-860 snapshot only covered plants through December 2023.
+The sources, ranked by how many missing nodes each will fill:
+1. EIA-860 Annual 2024 — download this first (free, June 2026 release)
+The early 2025 data covering all of 2024 was released on June 9, 2026. File 2_1_Plant.xlsx has lat/lon for every US plant; 3_1_Generator.xlsx maps units to plants. This will catch all plants that reached commercial operation in 2024 — a big year for ERCOT gas, solar, and storage additions. Probably fills 100–200 missing nodes.
+→ eia.gov/electricity/data/eia860
+2. ERCOT Interconnection Queue (CDR file) — for plants not yet in EIA-860
+Many resource nodes in ERCOT correspond to projects that have received a resource node assignment in the queue but haven't reached commercial operation, so EIA-860 doesn't have them yet. ERCOT's CDR file has county and zone for each queued project. You can geocode to county centroid — not precise, but enough to plot on a map. Probably fills another 200–300.
+→ ercot.com/gridinfo/resource
+3. PUDL / Catalyst Cooperative — cleaner EIA-860 match
+PUDL is an open-source cleaned and standardized version of EIA-860 with better plant ID harmonization than raw EIA-860 files. The 2026.6.2 release is current. If your matching logic is based on plant name string matching, PUDL's normalized IDs will give you higher hit rates.
+→ catalystcoop-pudl.readthedocs.io
+4. Grid Status Python library — for the settlement points ↔ bus mapping
+gridstatus.ERCOT().get_settlement_points_electrical_bus_mapping() pulls the NP4-160-SG file without requiring MIS login. It gives you all current ERCOT settlement point names and their bus mappings — useful for confirming which node names are still active before spending time trying to locate them.
+→ gridstatus.io/datasets/ercot_electrical_buses
+→ opensource.gridstatus.io
