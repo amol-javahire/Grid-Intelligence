@@ -479,9 +479,10 @@ function NodeLocationsBrowser() {
   }, [nodes, zoneFilter, search, sortBy]);
 
   const stats = useMemo(() => {
-    const eia = nodes.filter(n => n.locationSource === "eia_name_match").length;
+    const exact = nodes.filter(n => n.locationSource === "eia_name_match").length;
+    const fuzzy = nodes.filter(n => n.locationSource === "eia_fuzzy_match").length;
     const cent = nodes.filter(n => n.locationSource === "zone_centroid").length;
-    return { total: nodes.length, eia, cent };
+    return { total: nodes.length, exact, fuzzy, geo: exact + fuzzy, cent };
   }, [nodes]);
 
   const priceColor = (p: number | null) => {
@@ -502,8 +503,9 @@ function NodeLocationsBrowser() {
               ERCOT Resource Node Browser
             </CardTitle>
             <CardDescription className="text-xs mt-0.5">
-              {stats.total} nodes · ERCOT Bus Mapping (CDR 10008) via gridstatus library ·{" "}
-              <span className="text-teal-400">{stats.eia} EIA-geolocated</span> ·{" "}
+              {stats.total} nodes · ERCOT Bus Mapping (CDR 10008) via gridstatus ·{" "}
+              <span className="text-teal-400">{stats.geo} geo-located</span>{" "}
+              <span className="text-muted-foreground">({stats.exact} exact · {stats.fuzzy} fuzzy EIA match)</span> ·{" "}
               <span className="text-muted-foreground">{stats.cent} zone centroid</span> · Apr–May 2026 pricing
             </CardDescription>
           </div>
@@ -586,7 +588,12 @@ function NodeLocationsBrowser() {
                         {n.locationSource === "eia_name_match" ? (
                           <span className="flex items-center gap-1 text-teal-400">
                             <MapPin className="h-2.5 w-2.5" />
-                            <span className="text-[10px]">{n.eiaPlantName ? n.eiaPlantName.slice(0, 22) : "EIA match"}</span>
+                            <span className="text-[10px]">{n.eiaPlantName ? n.eiaPlantName.slice(0, 22) : "EIA exact"}</span>
+                          </span>
+                        ) : n.locationSource === "eia_fuzzy_match" ? (
+                          <span className="flex items-center gap-1 text-amber-400/80">
+                            <MapPin className="h-2.5 w-2.5" />
+                            <span className="text-[10px]">{n.eiaPlantName ? n.eiaPlantName.slice(0, 22) : "EIA fuzzy"}</span>
                           </span>
                         ) : (
                           <span className="text-[10px] text-muted-foreground">{n.loadZone} centroid</span>
