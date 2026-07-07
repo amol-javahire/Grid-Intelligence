@@ -10,8 +10,8 @@ import { Loader2, Activity, Zap, Server, Network } from "lucide-react";
 
 export default function Home() {
   const [, setLocation] = useLocation();
-  const [market, setMarket] = useState<string>("ERCOT");
-  const [assetType, setAssetType] = useState<string>("solar");
+  const [market, setMarket] = useState<string>("");
+  const [assetType, setAssetType] = useState<string>("");
   const [objective, setObjective] = useState<string>("risk_adjusted");
 
   const { data: summary, isLoading: isLoadingSummary } = useGetDashboardSummary();
@@ -141,31 +141,32 @@ export default function Home() {
             <form onSubmit={handleScreeningSubmit} className="space-y-6">
               <div className="space-y-2">
                 <Label htmlFor="market">Market</Label>
-                <Select value={market} onValueChange={setMarket}>
+                <Select value={market || "all"} onValueChange={v => setMarket(v === "all" ? "" : v)}>
                   <SelectTrigger id="market">
-                    <SelectValue placeholder="Select market" />
+                    <SelectValue placeholder="All Markets" />
                   </SelectTrigger>
                   <SelectContent>
+                    <SelectItem value="all">All Markets</SelectItem>
                     <SelectItem value="ERCOT">ERCOT</SelectItem>
                     <SelectItem value="CAISO">CAISO</SelectItem>
+                    <SelectItem value="PJM">PJM</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
               <div className="space-y-2">
                 <Label htmlFor="assetType">Asset Type</Label>
-                <Select value={assetType} onValueChange={setAssetType}>
+                <Select value={assetType || "all"} onValueChange={v => setAssetType(v === "all" ? "" : v)}>
                   <SelectTrigger id="assetType">
-                    <SelectValue placeholder="Select asset type" />
+                    <SelectValue placeholder="All Types" />
                   </SelectTrigger>
                   <SelectContent>
+                    <SelectItem value="all">All Types</SelectItem>
                     <SelectItem value="solar">Solar</SelectItem>
                     <SelectItem value="wind">Wind</SelectItem>
                     <SelectItem value="storage">Storage</SelectItem>
-                    <SelectItem value="solar_storage">Solar + Storage</SelectItem>
-                    <SelectItem value="wind_storage">Wind + Storage</SelectItem>
+                    <SelectItem value="natural_gas">Natural Gas</SelectItem>
                     <SelectItem value="hydro">Hydro</SelectItem>
                     <SelectItem value="nuclear">Nuclear</SelectItem>
-                    <SelectItem value="natural_gas">Natural Gas</SelectItem>
                     <SelectItem value="geothermal">Geothermal</SelectItem>
                     <SelectItem value="biomass">Biomass</SelectItem>
                   </SelectContent>

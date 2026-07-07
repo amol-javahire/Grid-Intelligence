@@ -388,6 +388,7 @@ export default function Rankings() {
               <SelectItem value="all">All Markets</SelectItem>
               <SelectItem value="ERCOT">ERCOT</SelectItem>
               <SelectItem value="CAISO">CAISO</SelectItem>
+              <SelectItem value="PJM">PJM</SelectItem>
             </SelectContent>
           </Select>
           <Select value={assetTypeFilter || "all"} onValueChange={v => setAssetTypeFilter(v === "all" ? undefined : v)}>
