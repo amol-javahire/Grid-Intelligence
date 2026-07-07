@@ -15,8 +15,13 @@ import numpy as np
 from typing import Any
 
 from network import (
-    BUSES, LINES, GENERATORS, LOAD_FRACTIONS, HUB_MAP, HIDDEN_CARRIERS, build_network
+    BUSES, LINES, GENERATORS, LOAD_FRACTIONS, HUB_MAP, HIDDEN_CARRIERS, _build_tier1
 )
+
+def build_network(system_load_mw, wind_cf, solar_cf, gas_price_mmbtu):
+    """Always use the 5-bus Tier-1 network for simulators (curtailment, scarcity, tx-relief).
+    Tier-2 (340-bus) is used only by the main OPF page via network.build_network."""
+    return _build_tier1(system_load_mw, wind_cf, solar_cf, gas_price_mmbtu)
 
 
 # ---------------------------------------------------------------------------

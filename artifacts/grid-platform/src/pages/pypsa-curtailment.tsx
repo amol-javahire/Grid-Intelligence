@@ -75,7 +75,7 @@ export default function PypsaCurtailment() {
   const [windCf,  setWindCf]  = useState(55);
   const [solarCf, setSolarCf] = useState(28);
   const [gasPrice, setGasPrice] = useState(350);
-  const [loadMw,  setLoadMw]  = useState(45000);
+  const [loadMw,  setLoadMw]  = useState(55000);
   const [westBonus, setWestBonus] = useState(0);
   const [dirty, setDirty] = useState(false);
   const [result, setResult] = useState<CurtailResult | null>(null);
@@ -155,7 +155,7 @@ export default function PypsaCurtailment() {
                 <span className="text-muted-foreground">System Load</span>
                 <span className="font-mono text-teal-400">{(loadMw/1000).toFixed(0)} GW</span>
               </div>
-              <Slider min={30000} max={75000} step={1000} value={[loadMw]}
+              <Slider min={10000} max={100000} step={1000} value={[loadMw]}
                 onValueChange={([v]) => { setLoadMw(v); setDirty(true); }} />
             </div>
             <div>
@@ -179,7 +179,7 @@ export default function PypsaCurtailment() {
                 <span className="text-muted-foreground">Gas Price</span>
                 <span className="font-mono text-orange-400">${(gasPrice/100).toFixed(2)}/MMBtu</span>
               </div>
-              <Slider min={200} max={800} step={10} value={[gasPrice]}
+              <Slider min={50} max={1300} step={25} value={[gasPrice]}
                 onValueChange={([v]) => { setGasPrice(v); setDirty(true); }} />
             </div>
             <div>
