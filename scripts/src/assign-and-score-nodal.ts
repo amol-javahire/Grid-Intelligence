@@ -1,16 +1,16 @@
 /**
- * assign-and-score-nodal.ts  (v6 — Real Capture Ratios + Shape Risk + Basis Fix)
+ * assign-and-score-nodal.ts  (v7 — Zone Capture Prices + Gas Net Margin + Per-Plant Node Match)
  *
- * Key improvements vs v5:
- *   - Capture price: hourly-profile-weighted LMP from real ercot_hub_hourly data
- *     (ERCOT duck curve: solar ~0.72, wind ~1.01, storage ~1.80 — see ERCOT_CAPTURE_RATIOS)
- *   - Basis risk: actual nodal-hub basis (avg_da − hub_avg) + vol penalty
- *     replaces the vol-only proxy
- *   - Shape risk: Pearson(tech_gen_profile, zone_load_profile) from real ercot_load_by_zone
- *     populates grid_stability_score (was always 0 before)
+ * Key improvements vs v6:
+ *   - Capture price: zone-specific hourly profiles queried live from ercot_hub_hourly
+ *     (HB_WEST solar ≠ HB_HOUSTON solar ≠ HB_NORTH wind — real duck-curve differences)
+ *   - Gas net margin: Henry Hub gas price (from gas_prices table) × heat rate deducted
+ *     from gas/coal capture price → net margin basis instead of gross capture
+ *   - Per-plant resource node matching: in-memory haversine from EIA 860 lat/lon to
+ *     ~110 EIA-geolocated ercot_node_locations nodes → plant-level LMPs where possible
  *
  * Scoring dimension → DB column mapping:
- *   price_score            → Capture Price   (hourly-weighted LMP × tech profile)
+ *   price_score            → Capture Price   (zone-specific hourly-weighted LMP)
  *   curtailment_score      → Curtailment      (real neg_price_percent from resource nodes)
  *   interconnection_score  → Congestion       (real DA basis + volatility)
  *   location_score         → Basis Risk       (actual node-hub basis + vol)
@@ -18,7 +18,7 @@
  *   development_risk_score → Interconnect     (queue MW backlog by zone)
  *   environmental_score    → RECs / Yr        (annual REC value, log-scaled)
  *   demand_proximity_score → Capacity         (log-scaled MW)
- *   grid_stability_score   → Shape Risk       (NEW: Pearson gen/load correlation)
+ *   grid_stability_score   → Shape Risk       (Pearson gen/load correlation)
  */
 
 import { db } from "@workspace/db";
@@ -54,11 +54,56 @@ const GEN_PROFILES: Record<string, number[]> = {
   coal:        Array<number>(24).fill(0.85),
 };
 
+// Heat rates (MMBtu/MWh) for fuel cost deduction in net-margin price scoring
+const HEAT_RATE: Record<string, number> = {
+  natural_gas: 7.0,   // efficient CCGT at full load
+  coal:        9.5,   // avg coal steam plant
+};
+
+// Map ERCOT queue zone → hub/zone key in ercot_hub_hourly (for zone-specific capture prices)
+const QUEUE_ZONE_TO_HUB: Record<string, string> = {
+  LZ_HOUSTON: "LZ_HOUSTON", HB_HOUSTON: "HB_HOUSTON",
+  LZ_WEST:    "LZ_WEST",    HB_WEST:    "HB_WEST",
+  LZ_NORTH:   "LZ_NORTH",   HB_NORTH:   "HB_NORTH",
+  HB_PAN:     "HB_PAN",     LZ_CPS:     "LZ_CPS",
+  LZ_AEN:     "LZ_AEN",     LZ_LCRA:    "LZ_LCRA",
+  HB_BUSAVG:  "HB_BUSAVG",  HB_HUBAVG:  "HB_HUBAVG",
+};
+
+// ── Module-level state populated in main() before computeAll runs ─────────────
+// Zone-specific capture prices ($/MWh) per ERCOT hub/zone per tech type.
+// Key = hub/LZ name (e.g. "HB_WEST"), value = { solar: 18.5, wind: 31.2, ... }
+let ercotZoneCapturePrice: Map<string, Record<string, number>> = new Map();
+
+// EIA-geolocated resource nodes: real plant coordinates → per-plant LMP signals
+interface ResourceNode { node_name: string; latitude: number; longitude: number; avg_da: number; avg_rt: number; avg_vol: number; avg_neg_pct: number; }
+let ercotRealNodes: ResourceNode[] = [];
+
+// Trailing 12-month average Henry Hub gas price ($/MMBtu), default fallback
+let avgGasPrice = 1.51;
+
 function computeCaptureRatio(profile: number[], prices: number[]): number {
   const totalW = profile.reduce((s, w) => s + w, 0);
   if (totalW === 0) return 1.0;
   const weightedP = profile.reduce((s, w, i) => s + w * prices[i], 0);
   return weightedP / (totalW * ERCOT_FLAT_AVG);
+}
+
+// Compute actual $/MWh capture price for a tech at a given price profile
+function computeCapturePrice(profile: number[], hourlyPrices: number[]): number {
+  const totalW = profile.reduce((s, w) => s + w, 0);
+  if (totalW === 0) return hourlyPrices.reduce((s, p) => s + p, 0) / hourlyPrices.length;
+  return profile.reduce((s, w, i) => s + w * hourlyPrices[i], 0) / totalW;
+}
+
+// In-memory haversine distance (km)
+function haversinKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
 // Precomputed from real ERCOT price shape:
@@ -275,39 +320,55 @@ function basisRiskScore(
 function capturePriceScore(
   signalStats: NodeStats, assetType: string, market: string,
   ercotBusAvg: number, pjmBusAvg: number,
+  ercotHubCapPrice?: number,
 ): number {
-  let da: number;
   let sysAvg: number;
-  let ratio: number;
   if (market === "ERCOT") {
-    da = signalStats.avg_da;
     sysAvg = ercotBusAvg;
-    ratio = ERCOT_CAPTURE_RATIOS[assetType] ?? 0.90;
-  } else if (market === "CAISO") {
-    da = signalStats.avg_da;
-    sysAvg = 33.25;
-    ratio = CAISO_CAPTURE_RATIOS[assetType] ?? 0.90;
-  } else {
-    da = signalStats.avg_da;
-    sysAvg = pjmBusAvg;
-    ratio = PJM_CAPTURE_RATIOS[assetType] ?? 0.90;
+    // Preferred path: zone-specific capture price from ercot_hub_hourly
+    if (ercotHubCapPrice != null) {
+      // Gas/coal: deduct fuel variable cost → score on net margin basis
+      const fuelCost = (HEAT_RATE[assetType] ?? 0) * avgGasPrice;
+      const netCapture = ercotHubCapPrice - fuelCost;
+      const raw = (netCapture / sysAvg) * 50;
+      return Math.round(Math.min(95, Math.max(5, raw)) * 100) / 100;
+    }
+    // Fallback: legacy zone-avg × static ratio
+    const captureDA = signalStats.avg_da * (ERCOT_CAPTURE_RATIOS[assetType] ?? 0.90);
+    return Math.round(Math.min(95, Math.max(10, (captureDA / sysAvg) * 50)) * 100) / 100;
   }
-  const captureDA = da * ratio;
-  const raw = (captureDA / sysAvg) * 50;
+  if (market === "CAISO") {
+    const captureDA = signalStats.avg_da * (CAISO_CAPTURE_RATIOS[assetType] ?? 0.90);
+    const raw = (captureDA / 33.25) * 50;
+    return Math.round(Math.min(95, Math.max(10, raw)) * 100) / 100;
+  }
+  // PJM
+  const captureDA = signalStats.avg_da * (PJM_CAPTURE_RATIOS[assetType] ?? 0.90);
+  const raw = (captureDA / pjmBusAvg) * 50;
   return Math.round(Math.min(95, Math.max(10, raw)) * 100) / 100;
 }
 
 function marketRevenueScore(
   capacityMw: number, assetType: string, market: string,
   signalStats: NodeStats,
+  ercotHubCapPrice?: number,
 ): number {
-  const da = signalStats.avg_da;
   const cf = CF[assetType]?.[market] ?? 0.30;
-  let captureRatio: number;
-  if (market === "ERCOT") captureRatio = ERCOT_CAPTURE_RATIOS[assetType] ?? 0.90;
-  else if (market === "CAISO") captureRatio = CAISO_CAPTURE_RATIOS[assetType] ?? 0.90;
-  else captureRatio = PJM_CAPTURE_RATIOS[assetType] ?? 0.90;
-  const annualRevM = (capacityMw * cf * 8760 * da * captureRatio) / 1_000_000;
+  let captureP: number;
+  if (market === "ERCOT") {
+    if (ercotHubCapPrice != null) {
+      // Net margin for thermal (subtract fuel cost); gross for renewables
+      const fuelCost = (HEAT_RATE[assetType] ?? 0) * avgGasPrice;
+      captureP = Math.max(0, ercotHubCapPrice - fuelCost);
+    } else {
+      captureP = signalStats.avg_da * (ERCOT_CAPTURE_RATIOS[assetType] ?? 0.90);
+    }
+  } else if (market === "CAISO") {
+    captureP = signalStats.avg_da * (CAISO_CAPTURE_RATIOS[assetType] ?? 0.90);
+  } else {
+    captureP = signalStats.avg_da * (PJM_CAPTURE_RATIOS[assetType] ?? 0.90);
+  }
+  const annualRevM = (capacityMw * cf * 8760 * captureP) / 1_000_000;
   const logRev = annualRevM > 0 ? Math.log10(annualRevM) : -2;
   const raw = 20 + ((logRev + 2) / 4.3) * 75;
   return Math.round(Math.min(95, Math.max(15, raw)) * 100) / 100;
@@ -408,10 +469,10 @@ function shapeRiskScore(
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function main() {
-  console.log("══════════════════════════════════════════════════════════════════");
-  console.log(" Nodal scoring v6 — Real Capture Ratios + Shape Risk + Basis Fix");
-  console.log("══════════════════════════════════════════════════════════════════\n");
-  console.log("   ERCOT capture ratios (from real ercot_hub_hourly, duck curve):");
+  console.log("══════════════════════════════════════════════════════════════════════");
+  console.log(" Nodal scoring v7 — Zone Capture Prices + Gas Net Margin + Per-Plant");
+  console.log("══════════════════════════════════════════════════════════════════════\n");
+  console.log("   Fallback ERCOT capture ratios (system avg, used if hub_hourly unavail):");
   for (const [tech, r] of Object.entries(ERCOT_CAPTURE_RATIOS)) {
     console.log(`     ${tech.padEnd(12)} → ${(r * 100).toFixed(1)}% capture`);
   }
@@ -429,6 +490,91 @@ async function main() {
     ercotZoneLoadProfiles.get(r.zone)![r.hour] = Number(r.avg_load);
   }
   console.log(`   Loaded ${ercotZoneLoadProfiles.size} zone profiles: ${[...ercotZoneLoadProfiles.keys()].join(", ")}`);
+
+  // ── Step 0b-new: Load ERCOT hub hourly profiles (zone-specific capture prices) ──
+  console.log("📡 Loading ERCOT hub hourly profiles (zone-specific capture prices)...");
+  try {
+    const hubHourlyRaw = await db.execute<{ node: string; hour: number; avg_da: number }>(sql`
+      SELECT node, hour, AVG(da_price)::float AS avg_da
+      FROM ercot_hub_hourly
+      GROUP BY node, hour
+      ORDER BY node, hour
+    `);
+    const hubProfiles = new Map<string, number[]>();
+    for (const r of hubHourlyRaw.rows) {
+      if (!hubProfiles.has(r.node)) hubProfiles.set(r.node, Array(24).fill(0));
+      hubProfiles.get(r.node)![Number(r.hour) - 1] = Number(r.avg_da);
+    }
+    for (const [hub, profile] of hubProfiles.entries()) {
+      const techPrices: Record<string, number> = {};
+      for (const [tech, genProfile] of Object.entries(GEN_PROFILES)) {
+        techPrices[tech] = computeCapturePrice(genProfile, profile);
+      }
+      ercotZoneCapturePrice.set(hub, techPrices);
+    }
+    const hubs = [...ercotZoneCapturePrice.keys()];
+    console.log(`   Loaded ${hubs.length} hub/zone profiles: ${hubs.join(", ")}`);
+    // Print solar and wind capture prices per zone
+    for (const hub of ["HB_WEST", "HB_NORTH", "HB_HOUSTON", "HB_PAN", "LZ_WEST", "HB_BUSAVG"].filter(h => ercotZoneCapturePrice.has(h))) {
+      const p = ercotZoneCapturePrice.get(hub)!;
+      console.log(`     ${hub.padEnd(12)} solar $${p.solar?.toFixed(2) ?? "—"}  wind $${p.wind?.toFixed(2) ?? "—"}  gas $${p.natural_gas?.toFixed(2) ?? "—"}  storage $${p.storage?.toFixed(2) ?? "—"}`);
+    }
+  } catch (e) {
+    console.warn(`   ⚠  Hub hourly load failed (${(e as Error).message}) — falling back to hardcoded ERCOT_CAPTURE_RATIOS`);
+  }
+
+  // ── Step 0c-new: Load trailing 12-month gas price ─────────────────────────
+  console.log("📡 Loading gas price (net margin for thermal plants)...");
+  try {
+    const gasPriceRaw = await db.execute<{ avg_price: number }>(sql`
+      SELECT AVG(price)::float AS avg_price
+      FROM gas_prices
+      WHERE price IS NOT NULL AND date >= CURRENT_DATE - INTERVAL '12 months'
+    `);
+    avgGasPrice = Number(gasPriceRaw.rows[0]?.avg_price ?? 1.51);
+    console.log(`   12-month avg Henry Hub gas price: $${avgGasPrice.toFixed(2)}/MMBtu`);
+    console.log(`   CCGT variable cost (7 MMBtu/MWh): $${(avgGasPrice * 7).toFixed(2)}/MWh`);
+  } catch (e) {
+    console.warn(`   ⚠  Gas price load failed — using fallback $${avgGasPrice.toFixed(2)}/MMBtu`);
+  }
+
+  // ── Step 0d-new: Load EIA-geolocated resource nodes for per-plant matching ──
+  console.log("📡 Loading EIA-geolocated resource nodes (per-plant LMP matching)...");
+  try {
+    const realNodesRaw = await db.execute<{
+      node_name: string; latitude: number; longitude: number;
+      avg_da: number; avg_rt: number; avg_vol: number; avg_neg_pct: number;
+    }>(sql`
+      SELECT
+        enl.node_name,
+        enl.latitude::float            AS latitude,
+        enl.longitude::float           AS longitude,
+        AVG(ens.avg_da_price)::float   AS avg_da,
+        AVG(ens.avg_rt_price)::float   AS avg_rt,
+        AVG(ens.volatility)::float     AS avg_vol,
+        AVG(ens.neg_price_percent)::float AS avg_neg_pct
+      FROM ercot_node_locations enl
+      JOIN ercot_node_stats ens ON ens.node = enl.node_name AND ens.node_type = 'resource_node'
+      WHERE enl.location_source = 'eia_plant'
+        AND enl.latitude IS NOT NULL AND enl.longitude IS NOT NULL
+        AND ens.avg_da_price IS NOT NULL
+      GROUP BY enl.node_name, enl.latitude, enl.longitude
+    `);
+    ercotRealNodes = realNodesRaw.rows.map(r => ({
+      node_name: r.node_name,
+      latitude: Number(r.latitude), longitude: Number(r.longitude),
+      avg_da: Number(r.avg_da), avg_rt: Number(r.avg_rt),
+      avg_vol: Number(r.avg_vol), avg_neg_pct: Number(r.avg_neg_pct),
+    }));
+    console.log(`   Loaded ${ercotRealNodes.length} EIA-geolocated resource nodes`);
+    if (ercotRealNodes.length > 0) {
+      const sample = ercotRealNodes.slice(0, 3);
+      for (const n of sample)
+        console.log(`     ${n.node_name.padEnd(20)} DA $${n.avg_da.toFixed(2)}  vol ${n.avg_vol.toFixed(2)}  neg% ${n.avg_neg_pct.toFixed(2)}%`);
+    }
+  } catch (e) {
+    console.warn(`   ⚠  Real node load failed (${(e as Error).message}) — per-plant matching disabled`);
+  }
 
   // ── Step 0b: Load hub/zone CDR stats (fallback reference) ─────────────────
   console.log("📡 Loading hub/zone CDR stats (fallback + queue reference)...");
@@ -812,24 +958,59 @@ async function main() {
   const updates: Update[] = [];
 
   const computeAll = (
-    id: number, queueZone: string, assetType: string, market: string, capacityMw: number
+    id: number, queueZone: string, assetType: string, market: string, capacityMw: number,
+    lat?: number, lon?: number,
   ): Update => {
     let signal: NodeStats;
+    let ercotHubCapPrice: number | undefined;
+    let plantNodeMatch = false;
+
     if (market === "ERCOT") {
-      signal = ercotSignalStats(queueZone);
+      // v7: ERCOT queue projects use long tap-point strings as interconnection_node,
+      // not clean zone codes. Derive the signal zone from the candidate's lat/lon
+      // so that ercotSignalStats() and hub hourly capture prices can be looked up correctly.
+      // queueZone (long string) is still used for interconnectRiskScore queue depth.
+      const signalZone = (lat != null && lon != null)
+        ? ercotGeoFallback(lat, lon)   // returns "HB_WEST", "LZ_HOUSTON", "HB_NORTH", etc.
+        : queueZone;
+
+      // v7: try per-plant haversine to EIA-geolocated resource node (within 100 km)
+      if (lat != null && lon != null && ercotRealNodes.length > 0) {
+        let bestNode: ResourceNode | null = null;
+        let bestDist = 100; // km cutoff
+        for (const nd of ercotRealNodes) {
+          const d = haversinKm(lat, lon, nd.latitude, nd.longitude);
+          if (d < bestDist) { bestDist = d; bestNode = nd; }
+        }
+        if (bestNode) {
+          signal = { avg_da: bestNode.avg_da, avg_rt: bestNode.avg_rt, avg_vol: bestNode.avg_vol, avg_neg_pct: bestNode.avg_neg_pct, source: "resource" };
+          plantNodeMatch = true;
+        } else {
+          signal = ercotSignalStats(signalZone);  // use geo-derived zone, NOT raw queue string
+        }
+      } else {
+        signal = ercotSignalStats(signalZone);
+      }
+      // v7: zone-specific capture price from ercot_hub_hourly using geo-derived zone
+      const hubKey = QUEUE_ZONE_TO_HUB[signalZone] ?? signalZone;
+      const hubPrices = ercotZoneCapturePrice.get(hubKey) ?? ercotZoneCapturePrice.get("HB_BUSAVG");
+      if (hubPrices) {
+        ercotHubCapPrice = hubPrices[assetType] ?? hubPrices["natural_gas"];
+      }
     } else if (market === "CAISO") {
       signal = caisoSignalStats(queueZone);
     } else {
       signal = pjmSignalStats(queueZone);
     }
+    void plantNodeMatch; // used implicitly via signal
 
     return {
       id, node: queueZone,
       curtailment:      curtailmentScore(signal, assetType, market, ercotFleetAvgNegPct).toFixed(2),
       congestion:       congestionScore(signal, assetType, market, queueZone, ercotBusAvg, ercotSysVol, pjmBusAvg, pjmSysVol).toFixed(2),
       basis:            basisRiskScore(signal, market, ercotBusAvg, ercotSysVol, pjmBusAvg, pjmSysVol).toFixed(2),
-      capturePrice:     capturePriceScore(signal, assetType, market, ercotBusAvg, pjmBusAvg).toFixed(2),
-      mktRevenue:       marketRevenueScore(capacityMw, assetType, market, signal).toFixed(2),
+      capturePrice:     capturePriceScore(signal, assetType, market, ercotBusAvg, pjmBusAvg, ercotHubCapPrice).toFixed(2),
+      mktRevenue:       marketRevenueScore(capacityMw, assetType, market, signal, ercotHubCapPrice).toFixed(2),
       interconnectRisk: interconnectRiskScore(queueZone, market, ercotQueueMap, caisoQueueMap, pjmQueueMap, ercotMaxMw, caisoMaxMw, pjmMaxMw).toFixed(2),
       recScore:         recScore(assetType, market, capacityMw).toFixed(2),
       capScore:         capacityScore(capacityMw).toFixed(2),
@@ -838,7 +1019,7 @@ async function main() {
   };
 
   for (const c of ercotCandidates.rows)
-    updates.push(computeAll(c.id, ercotQueueZoneMap.get(c.id)!, c.asset_type, "ERCOT", Number(c.capacity_mw)));
+    updates.push(computeAll(c.id, ercotQueueZoneMap.get(c.id)!, c.asset_type, "ERCOT", Number(c.capacity_mw), Number(c.latitude), Number(c.longitude)));
   for (const c of caisoCandidates.rows)
     updates.push(computeAll(c.id, caisoQueueZoneMap.get(c.id)!, c.asset_type, "CAISO", Number(c.capacity_mw)));
   for (const c of pjmCandidates.rows)
@@ -933,12 +1114,16 @@ async function main() {
     console.log(`   ${r.market.padEnd(7)}  n=${r.cnt.padStart(5)}  avg=${r.avg_score}  range [${r.min_score} – ${r.max_score}]`);
 
   const resourceZones = ercotZoneResource.size;
-  console.log(`\n   Signal source: ${resourceZones > 0 ? `${resourceZones} ERCOT zones used resource node LMPs` : "hub/zone CDR fallback (seed pending)"}`);
+  console.log(`\n   v7 signal sources:`);
+  console.log(`     ERCOT zone resource nodes: ${resourceZones > 0 ? `${resourceZones} zones` : "hub/zone CDR fallback"}`);
+  console.log(`     ERCOT hub hourly profiles: ${ercotZoneCapturePrice.size} zones (zone-specific capture prices)`);
+  console.log(`     EIA-geolocated real nodes: ${ercotRealNodes.length} nodes (per-plant LMP matching)`);
+  console.log(`     Gas price (12-mo avg):     $${avgGasPrice.toFixed(2)}/MMBtu → CCGT fuel cost $${(avgGasPrice * 7).toFixed(2)}/MWh`);
   console.log(`   PJM: ${pjmHubNodes.size} hub/zone nodes from pjm_node_stats (DA $${pjmBusAvg.toFixed(2)} avg, range $${Math.min(...pjmHubVals.map(v=>v.avg_da)).toFixed(2)}–$${Math.max(...pjmHubVals.map(v=>v.avg_da)).toFixed(2)})`);
-  console.log("\n   Dimension mapping:");
-  console.log("   price_score            → Capture Price   (DA × tech timing ratio)");
+  console.log("\n   Dimension mapping (v7):");
+  console.log("   price_score            → Capture Price   (zone hourly profile $/MWh; gas = net of fuel cost)");
   console.log("   curtailment_score      → Curtailment      (resource node neg_price_percent)");
-  console.log("   interconnection_score  → Congestion       (resource node DA basis + vol)");
+  console.log("   interconnection_score  → Congestion       (per-plant or zone resource node DA basis + vol)");
   console.log("   location_score         → Basis Risk       (resource node volatility)");
   console.log("   financial_score        → Mkt Revenue      (annual energy revenue, log-scaled)");
   console.log("   development_risk_score → Interconnect     (queue MW backlog by zone)");
