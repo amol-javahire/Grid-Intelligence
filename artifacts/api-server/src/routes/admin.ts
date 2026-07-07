@@ -92,14 +92,19 @@ router.get("/admin/status", requireAdminKey, async (req, res) => {
   try {
     const counts = await db.execute<{ table_name: string; cnt: number }>(sql`
       SELECT 'candidates' AS table_name, COUNT(*)::int AS cnt FROM candidates
-      UNION ALL
-      SELECT 'transmission_lines', COUNT(*)::int FROM transmission_lines
-      UNION ALL
-      SELECT 'ercot_node_stats', COUNT(*)::int FROM ercot_node_stats
-      UNION ALL
-      SELECT 'caiso_node_stats', COUNT(*)::int FROM caiso_node_stats
-      UNION ALL
-      SELECT 'queue_projects', COUNT(*)::int FROM queue_projects
+      UNION ALL SELECT 'transmission_lines', COUNT(*)::int FROM transmission_lines
+      UNION ALL SELECT 'ercot_node_stats', COUNT(*)::int FROM ercot_node_stats
+      UNION ALL SELECT 'ercot_nodal_stats', COUNT(*)::int FROM ercot_nodal_stats
+      UNION ALL SELECT 'ercot_hub_hourly', COUNT(*)::int FROM ercot_hub_hourly
+      UNION ALL SELECT 'ercot_load_by_zone', COUNT(*)::int FROM ercot_load_by_zone
+      UNION ALL SELECT 'ercot_fuel_mix', COUNT(*)::int FROM ercot_fuel_mix
+      UNION ALL SELECT 'caiso_node_stats', COUNT(*)::int FROM caiso_node_stats
+      UNION ALL SELECT 'caiso_hub_hourly', COUNT(*)::int FROM caiso_hub_hourly
+      UNION ALL SELECT 'pjm_node_stats', COUNT(*)::int FROM pjm_node_stats
+      UNION ALL SELECT 'queue_projects', COUNT(*)::int FROM queue_projects
+      UNION ALL SELECT 'gas_prices', COUNT(*)::int FROM gas_prices
+      UNION ALL SELECT 'generators', COUNT(*)::int FROM generators
+      UNION ALL SELECT 'thermal_params', COUNT(*)::int FROM thermal_params
     `);
 
     const activeJobs = Array.from(jobs.entries())
@@ -902,6 +907,149 @@ router.post("/admin/reseed-queue-inline", requireAdminKey, (req, res) => {
     job.status = "failed"; job.exitCode = 1; job.finishedAt = new Date().toISOString();
     job.output.push(`ERROR: ${String(err)}`);
   });
+});
+
+// ── POST /api/admin/reseed-gas-prices ────────────────────────────────────────
+// Spawns the seed-gas-prices script which pulls Henry Hub daily prices from FRED.
+router.post("/admin/reseed-gas-prices", requireAdminKey, (req, res) => {
+  const jobId = spawnScript("seed-gas-prices");
+  res.status(202).json({
+    message: "Gas price seeding started (Henry Hub daily from FRED)",
+    jobId,
+    statusUrl: `/api/admin/jobs/${jobId}`,
+    note: "Pulls DHHNGSP series from FRED API. Takes ~30 sec.",
+  });
+});
+
+// ── POST /api/admin/reseed-generators ────────────────────────────────────────
+// Inline seed of 31 ERCOT thermal generators + thermal_params (static reference data).
+// Safe to call multiple times — uses ON CONFLICT DO NOTHING.
+router.post("/admin/reseed-generators", requireAdminKey, async (req, res) => {
+  try {
+    const generators = [
+      { id: 1,  plant_name: "Midlothian Energy Center",     operator: "Luminant Energy",       asset_class: "THERMAL", technology: "CCGT",  fuel_primary: "NG",    nameplate_mw: 1080, summer_capacity_mw: 1035, commissioning_year: 2001, lat: 32.447, lng: -97.012, county: "Ellis",      state: "TX", iso: "ERCOT", load_zone: "LZ_NORTH" },
+      { id: 2,  plant_name: "Wolf Hollow Energy Center",     operator: "Luminant Energy",       asset_class: "THERMAL", technology: "CCGT",  fuel_primary: "NG",    nameplate_mw: 735,  summer_capacity_mw: 708,  commissioning_year: 2002, lat: 32.471, lng: -97.577, county: "Hood",       state: "TX", iso: "ERCOT", load_zone: "LZ_NORTH" },
+      { id: 3,  plant_name: "Bosque Energy Center",          operator: "Luminant Energy",       asset_class: "THERMAL", technology: "CCGT",  fuel_primary: "NG",    nameplate_mw: 420,  summer_capacity_mw: 404,  commissioning_year: 2001, lat: 31.952, lng: -97.563, county: "Bosque",     state: "TX", iso: "ERCOT", load_zone: "LZ_NORTH" },
+      { id: 4,  plant_name: "Forney Energy Center",          operator: "NRG Energy",            asset_class: "THERMAL", technology: "CCGT",  fuel_primary: "NG",    nameplate_mw: 1734, summer_capacity_mw: 1661, commissioning_year: 2002, lat: 32.737, lng: -96.459, county: "Kaufman",    state: "TX", iso: "ERCOT", load_zone: "LZ_NORTH" },
+      { id: 5,  plant_name: "Freestone Energy Center",       operator: "Calpine Corp",          asset_class: "THERMAL", technology: "CCGT",  fuel_primary: "NG",    nameplate_mw: 1084, summer_capacity_mw: 1040, commissioning_year: 2002, lat: 31.743, lng: -96.139, county: "Freestone",  state: "TX", iso: "ERCOT", load_zone: "LZ_NORTH" },
+      { id: 6,  plant_name: "Lamar Power Partners",          operator: "EthosEnergy Group",     asset_class: "THERMAL", technology: "CCGT",  fuel_primary: "NG",    nameplate_mw: 570,  summer_capacity_mw: 547,  commissioning_year: 2002, lat: 33.641, lng: -95.567, county: "Lamar",      state: "TX", iso: "ERCOT", load_zone: "LZ_NORTH" },
+      { id: 7,  plant_name: "Lost Pines Power Park",         operator: "LCRA",                  asset_class: "THERMAL", technology: "CCGT",  fuel_primary: "NG",    nameplate_mw: 505,  summer_capacity_mw: 484,  commissioning_year: 2003, lat: 30.196, lng: -97.238, county: "Bastrop",    state: "TX", iso: "ERCOT", load_zone: "LZ_SOUTH" },
+      { id: 8,  plant_name: "Guadalupe Power Partners",      operator: "Calpine Corp",          asset_class: "THERMAL", technology: "CCGT",  fuel_primary: "NG",    nameplate_mw: 1000, summer_capacity_mw: 960,  commissioning_year: 2000, lat: 29.687, lng: -98.082, county: "Guadalupe",  state: "TX", iso: "ERCOT", load_zone: "LZ_SOUTH" },
+      { id: 9,  plant_name: "Three Oaks Energy Center",      operator: "EDF Renewables",        asset_class: "THERMAL", technology: "CCGT",  fuel_primary: "NG",    nameplate_mw: 786,  summer_capacity_mw: 754,  commissioning_year: 2002, lat: 29.413, lng: -99.003, county: "Medina",     state: "TX", iso: "ERCOT", load_zone: "LZ_SOUTH" },
+      { id: 10, plant_name: "CPS Braunig Combined Cycle",    operator: "CPS Energy",            asset_class: "THERMAL", technology: "CCGT",  fuel_primary: "NG",    nameplate_mw: 825,  summer_capacity_mw: 792,  commissioning_year: 2003, lat: 29.312, lng: -98.353, county: "Bexar",      state: "TX", iso: "ERCOT", load_zone: "LZ_SOUTH" },
+      { id: 11, plant_name: "Corpus Christi Energy Center",  operator: "AEP Texas",             asset_class: "THERMAL", technology: "CCGT",  fuel_primary: "NG",    nameplate_mw: 1195, summer_capacity_mw: 1147, commissioning_year: 2001, lat: 27.857, lng: -97.556, county: "Nueces",     state: "TX", iso: "ERCOT", load_zone: "LZ_SOUTH" },
+      { id: 12, plant_name: "Frontera Power Plant",          operator: "InterGen Services",     asset_class: "THERMAL", technology: "CCGT",  fuel_primary: "NG",    nameplate_mw: 550,  summer_capacity_mw: 528,  commissioning_year: 2002, lat: 26.140, lng: -97.718, county: "Hidalgo",    state: "TX", iso: "ERCOT", load_zone: "LZ_SOUTH" },
+      { id: 13, plant_name: "Channel Energy Center",         operator: "NRG Energy",            asset_class: "THERMAL", technology: "CCGT",  fuel_primary: "NG",    nameplate_mw: 811,  summer_capacity_mw: 779,  commissioning_year: 2002, lat: 29.754, lng: -95.267, county: "Harris",     state: "TX", iso: "ERCOT", load_zone: "LZ_HOUSTON" },
+      { id: 14, plant_name: "WA Parish Combined Cycle",      operator: "NRG Energy",            asset_class: "THERMAL", technology: "CCGT",  fuel_primary: "NG",    nameplate_mw: 1200, summer_capacity_mw: 1152, commissioning_year: 2002, lat: 29.499, lng: -95.669, county: "Fort Bend",  state: "TX", iso: "ERCOT", load_zone: "LZ_HOUSTON" },
+      { id: 15, plant_name: "Colorado Bend Energy Center",   operator: "Calpine Corp",          asset_class: "THERMAL", technology: "CCGT",  fuel_primary: "NG",    nameplate_mw: 450,  summer_capacity_mw: 432,  commissioning_year: 2002, lat: 29.006, lng: -96.419, county: "Wharton",    state: "TX", iso: "ERCOT", load_zone: "LZ_HOUSTON" },
+      { id: 16, plant_name: "Quail Run Energy Center",       operator: "EDP Renewables",        asset_class: "THERMAL", technology: "CCGT",  fuel_primary: "NG",    nameplate_mw: 617,  summer_capacity_mw: 592,  commissioning_year: 2002, lat: 31.866, lng: -101.958, county: "Midland",  state: "TX", iso: "ERCOT", load_zone: "LZ_WEST" },
+      { id: 17, plant_name: "Odessa-Ector Power Partners",   operator: "J-W Power Company",    asset_class: "THERMAL", technology: "CCGT",  fuel_primary: "NG",    nameplate_mw: 560,  summer_capacity_mw: 538,  commissioning_year: 2003, lat: 31.841, lng: -102.368, county: "Ector",    state: "TX", iso: "ERCOT", load_zone: "LZ_WEST" },
+      { id: 18, plant_name: "Handley Energy Center",         operator: "Luminant Energy",       asset_class: "THERMAL", technology: "CT",    fuel_primary: "NG",    nameplate_mw: 1190, summer_capacity_mw: 1142, commissioning_year: 1958, lat: 32.742, lng: -97.196, county: "Tarrant",    state: "TX", iso: "ERCOT", load_zone: "LZ_NORTH" },
+      { id: 19, plant_name: "Mountain Creek Energy Center",  operator: "Luminant Energy",       asset_class: "THERMAL", technology: "CT",    fuel_primary: "NG",    nameplate_mw: 884,  summer_capacity_mw: 848,  commissioning_year: 1955, lat: 32.756, lng: -97.063, county: "Dallas",     state: "TX", iso: "ERCOT", load_zone: "LZ_NORTH" },
+      { id: 20, plant_name: "Graham Power Plant",            operator: "Luminant Energy",       asset_class: "THERMAL", technology: "CT",    fuel_primary: "NG",    nameplate_mw: 571,  summer_capacity_mw: 548,  commissioning_year: 1959, lat: 33.077, lng: -98.536, county: "Young",      state: "TX", iso: "ERCOT", load_zone: "LZ_NORTH" },
+      { id: 21, plant_name: "DFW Power Partners",            operator: "Multiple Operators",    asset_class: "THERMAL", technology: "CT",    fuel_primary: "NG",    nameplate_mw: 350,  summer_capacity_mw: 336,  commissioning_year: 2003, lat: 32.903, lng: -97.038, county: "Tarrant",    state: "TX", iso: "ERCOT", load_zone: "LZ_NORTH" },
+      { id: 22, plant_name: "Barney M Davis Power Plant",    operator: "AEP Texas",             asset_class: "THERMAL", technology: "CT",    fuel_primary: "NG",    nameplate_mw: 640,  summer_capacity_mw: 614,  commissioning_year: 1974, lat: 27.836, lng: -97.411, county: "Nueces",     state: "TX", iso: "ERCOT", load_zone: "LZ_SOUTH" },
+      { id: 23, plant_name: "JT Deely Power Plant",          operator: "CPS Energy",            asset_class: "THERMAL", technology: "CT",    fuel_primary: "NG",    nameplate_mw: 440,  summer_capacity_mw: 422,  commissioning_year: 1977, lat: 29.518, lng: -98.758, county: "Bexar",      state: "TX", iso: "ERCOT", load_zone: "LZ_SOUTH" },
+      { id: 24, plant_name: "Texas Cedar Port Power",        operator: "NRG Energy",            asset_class: "THERMAL", technology: "CT",    fuel_primary: "NG",    nameplate_mw: 420,  summer_capacity_mw: 403,  commissioning_year: 2006, lat: 29.733, lng: -95.029, county: "Harris",     state: "TX", iso: "ERCOT", load_zone: "LZ_HOUSTON" },
+      { id: 25, plant_name: "Permian Basin Energy Center",   operator: "Multiple Operators",    asset_class: "THERMAL", technology: "CT",    fuel_primary: "NG",    nameplate_mw: 400,  summer_capacity_mw: 384,  commissioning_year: 2005, lat: 31.985, lng: -102.077, county: "Ector",    state: "TX", iso: "ERCOT", load_zone: "LZ_WEST" },
+      { id: 26, plant_name: "West Texas Peaker",             operator: "Sharyland Utilities",   asset_class: "THERMAL", technology: "CT",    fuel_primary: "NG",    nameplate_mw: 300,  summer_capacity_mw: 288,  commissioning_year: 2004, lat: 32.458, lng: -100.408, county: "Nolan",    state: "TX", iso: "ERCOT", load_zone: "LZ_WEST" },
+      { id: 27, plant_name: "Limestone Electric Station",    operator: "NRG Energy",            asset_class: "THERMAL", technology: "STEAM", fuel_primary: "COAL",  nameplate_mw: 1650, summer_capacity_mw: 1584, commissioning_year: 1985, lat: 31.448, lng: -96.375, county: "Leon",       state: "TX", iso: "ERCOT", load_zone: "LZ_NORTH" },
+      { id: 28, plant_name: "Oak Grove Power Plant",         operator: "Luminant Energy",       asset_class: "THERMAL", technology: "STEAM", fuel_primary: "LIGNITE", nameplate_mw: 1600, summer_capacity_mw: 1536, commissioning_year: 2010, lat: 31.378, lng: -96.599, county: "Robertson", state: "TX", iso: "ERCOT", load_zone: "LZ_NORTH" },
+      { id: 29, plant_name: "Fayette Power Project",         operator: "LCRA",                  asset_class: "THERMAL", technology: "STEAM", fuel_primary: "COAL",  nameplate_mw: 1240, summer_capacity_mw: 1190, commissioning_year: 1979, lat: 29.800, lng: -97.081, county: "Fayette",    state: "TX", iso: "ERCOT", load_zone: "LZ_SOUTH" },
+      { id: 30, plant_name: "San Miguel Electric Station",   operator: "SMEC",                  asset_class: "THERMAL", technology: "STEAM", fuel_primary: "LIGNITE", nameplate_mw: 410, summer_capacity_mw: 394,  commissioning_year: 1982, lat: 29.025, lng: -98.476, county: "Atascosa",   state: "TX", iso: "ERCOT", load_zone: "LZ_SOUTH" },
+      { id: 31, plant_name: "WA Parish Steam Units",         operator: "NRG Energy",            asset_class: "THERMAL", technology: "STEAM", fuel_primary: "COAL",  nameplate_mw: 1274, summer_capacity_mw: 1223, commissioning_year: 1958, lat: 29.499, lng: -95.669, county: "Fort Bend",  state: "TX", iso: "ERCOT", load_zone: "LZ_HOUSTON" },
+    ] as const;
+
+    const thermalParams = [
+      { id: 1,  gen_id: 1,  heat_rate: 6.800, min_mw: 324,  max_mw: 1028, ramp: 9.0,  ramp_e: 12.0, sc_cold: 102600, sc_warm: 61560, sc_hot: 30780, st_cold: 8.0,  vom: 4.50, hub: "WAHA",                co2: 0.3950, for_rate: 0.0480, po_days: 25, ifc: null },
+      { id: 2,  gen_id: 2,  heat_rate: 7.100, min_mw: 221,  max_mw: 699,  ramp: 6.0,  ramp_e: 8.5,  sc_cold: 66150,  sc_warm: 39690, sc_hot: 19845, st_cold: 8.5,  vom: 4.75, hub: "WAHA",                co2: 0.4120, for_rate: 0.0510, po_days: 22, ifc: null },
+      { id: 3,  gen_id: 3,  heat_rate: 7.200, min_mw: 126,  max_mw: 399,  ramp: 3.5,  ramp_e: 5.0,  sc_cold: 37800,  sc_warm: 22680, sc_hot: 11340, st_cold: 9.0,  vom: 4.60, hub: "WAHA",                co2: 0.4180, for_rate: 0.0530, po_days: 20, ifc: null },
+      { id: 4,  gen_id: 4,  heat_rate: 6.650, min_mw: 520,  max_mw: 1648, ramp: 14.0, ramp_e: 19.0, sc_cold: 156060, sc_warm: 93636, sc_hot: 46818, st_cold: 7.5,  vom: 4.25, hub: "WAHA",                co2: 0.3860, for_rate: 0.0450, po_days: 28, ifc: null },
+      { id: 5,  gen_id: 5,  heat_rate: 6.900, min_mw: 325,  max_mw: 1030, ramp: 8.7,  ramp_e: 12.0, sc_cold: 97560,  sc_warm: 58536, sc_hot: 29268, st_cold: 8.2,  vom: 4.40, hub: "WAHA",                co2: 0.4005, for_rate: 0.0490, po_days: 24, ifc: null },
+      { id: 6,  gen_id: 6,  heat_rate: 7.300, min_mw: 171,  max_mw: 542,  ramp: 4.8,  ramp_e: 6.5,  sc_cold: 51300,  sc_warm: 30780, sc_hot: 15390, st_cold: 9.0,  vom: 4.80, hub: "WAHA",                co2: 0.4240, for_rate: 0.0550, po_days: 21, ifc: null },
+      { id: 7,  gen_id: 7,  heat_rate: 7.150, min_mw: 152,  max_mw: 480,  ramp: 4.2,  ramp_e: 5.5,  sc_cold: 45450,  sc_warm: 27270, sc_hot: 13635, st_cold: 8.8,  vom: 4.65, hub: "WAHA",                co2: 0.4150, for_rate: 0.0520, po_days: 22, ifc: null },
+      { id: 8,  gen_id: 8,  heat_rate: 6.950, min_mw: 300,  max_mw: 950,  ramp: 8.0,  ramp_e: 11.0, sc_cold: 90000,  sc_warm: 54000, sc_hot: 27000, st_cold: 8.0,  vom: 4.50, hub: "WAHA",                co2: 0.4035, for_rate: 0.0470, po_days: 25, ifc: null },
+      { id: 9,  gen_id: 9,  heat_rate: 7.050, min_mw: 236,  max_mw: 747,  ramp: 6.3,  ramp_e: 8.8,  sc_cold: 70740,  sc_warm: 42444, sc_hot: 21222, st_cold: 8.5,  vom: 4.65, hub: "WAHA",                co2: 0.4095, for_rate: 0.0500, po_days: 22, ifc: null },
+      { id: 10, gen_id: 10, heat_rate: 7.150, min_mw: 248,  max_mw: 784,  ramp: 6.9,  ramp_e: 9.5,  sc_cold: 74250,  sc_warm: 44550, sc_hot: 22275, st_cold: 8.5,  vom: 4.70, hub: "WAHA",                co2: 0.4150, for_rate: 0.0510, po_days: 23, ifc: null },
+      { id: 11, gen_id: 11, heat_rate: 6.850, min_mw: 359,  max_mw: 1136, ramp: 9.6,  ramp_e: 13.0, sc_cold: 107550, sc_warm: 64530, sc_hot: 32265, st_cold: 8.0,  vom: 4.35, hub: "WAHA",                co2: 0.3975, for_rate: 0.0470, po_days: 26, ifc: null },
+      { id: 12, gen_id: 12, heat_rate: 7.200, min_mw: 165,  max_mw: 523,  ramp: 4.6,  ramp_e: 6.2,  sc_cold: 49500,  sc_warm: 29700, sc_hot: 14850, st_cold: 9.0,  vom: 4.70, hub: "WAHA",                co2: 0.4180, for_rate: 0.0520, po_days: 21, ifc: null },
+      { id: 13, gen_id: 13, heat_rate: 7.000, min_mw: 243,  max_mw: 771,  ramp: 6.7,  ramp_e: 9.3,  sc_cold: 72990,  sc_warm: 43794, sc_hot: 21897, st_cold: 8.2,  vom: 4.55, hub: "HSC",                 co2: 0.4065, for_rate: 0.0490, po_days: 24, ifc: null },
+      { id: 14, gen_id: 14, heat_rate: 7.250, min_mw: 360,  max_mw: 1140, ramp: 9.0,  ramp_e: 12.5, sc_cold: 108000, sc_warm: 64800, sc_hot: 32400, st_cold: 9.0,  vom: 4.80, hub: "HSC",                 co2: 0.4210, for_rate: 0.0520, po_days: 26, ifc: null },
+      { id: 15, gen_id: 15, heat_rate: 7.100, min_mw: 135,  max_mw: 428,  ramp: 3.8,  ramp_e: 5.2,  sc_cold: 40500,  sc_warm: 24300, sc_hot: 12150, st_cold: 8.5,  vom: 4.55, hub: "HSC",                 co2: 0.4120, for_rate: 0.0500, po_days: 21, ifc: null },
+      { id: 16, gen_id: 16, heat_rate: 7.400, min_mw: 185,  max_mw: 586,  ramp: 5.1,  ramp_e: 7.0,  sc_cold: 55530,  sc_warm: 33318, sc_hot: 16659, st_cold: 9.5,  vom: 4.90, hub: "WAHA",                co2: 0.4295, for_rate: 0.0550, po_days: 20, ifc: null },
+      { id: 17, gen_id: 17, heat_rate: 7.500, min_mw: 168,  max_mw: 532,  ramp: 4.7,  ramp_e: 6.5,  sc_cold: 50400,  sc_warm: 30240, sc_hot: 15120, st_cold: 9.5,  vom: 5.00, hub: "WAHA",                co2: 0.4355, for_rate: 0.0560, po_days: 20, ifc: null },
+      { id: 18, gen_id: 18, heat_rate: 10.800, min_mw: 238, max_mw: 1131, ramp: 14.0, ramp_e: 20.0, sc_cold: 35700,  sc_warm: 21420, sc_hot: 10710, st_cold: 3.0,  vom: 7.00, hub: "WAHA",                co2: 0.6270, for_rate: 0.0680, po_days: 14, ifc: null },
+      { id: 19, gen_id: 19, heat_rate: 11.200, min_mw: 177, max_mw: 840,  ramp: 11.6, ramp_e: 16.5, sc_cold: 26520,  sc_warm: 15912, sc_hot: 7956,  st_cold: 3.5,  vom: 7.50, hub: "WAHA",                co2: 0.6500, for_rate: 0.0710, po_days: 13, ifc: null },
+      { id: 20, gen_id: 20, heat_rate: 11.500, min_mw: 114, max_mw: 543,  ramp: 7.4,  ramp_e: 10.8, sc_cold: 17130,  sc_warm: 10278, sc_hot: 5139,  st_cold: 4.0,  vom: 7.20, hub: "WAHA",                co2: 0.6675, for_rate: 0.0690, po_days: 12, ifc: null },
+      { id: 21, gen_id: 21, heat_rate: 9.800,  min_mw: 70,  max_mw: 333,  ramp: 8.8,  ramp_e: 13.5, sc_cold: 10500,  sc_warm: 6300,  sc_hot: 3150,  st_cold: 2.5,  vom: 5.80, hub: "WAHA",                co2: 0.5690, for_rate: 0.0620, po_days: 10, ifc: null },
+      { id: 22, gen_id: 22, heat_rate: 10.800, min_mw: 128, max_mw: 608,  ramp: 8.0,  ramp_e: 12.0, sc_cold: 19200,  sc_warm: 11520, sc_hot: 5760,  st_cold: 3.5,  vom: 6.80, hub: "WAHA",                co2: 0.6270, for_rate: 0.0670, po_days: 12, ifc: null },
+      { id: 23, gen_id: 23, heat_rate: 10.500, min_mw: 88,  max_mw: 418,  ramp: 5.8,  ramp_e: 8.5,  sc_cold: 13200,  sc_warm: 7920,  sc_hot: 3960,  st_cold: 3.5,  vom: 6.50, hub: "WAHA",                co2: 0.6095, for_rate: 0.0650, po_days: 11, ifc: null },
+      { id: 24, gen_id: 24, heat_rate: 10.200, min_mw: 84,  max_mw: 399,  ramp: 12.0, ramp_e: 18.0, sc_cold: 12600,  sc_warm: 7560,  sc_hot: 3780,  st_cold: 2.0,  vom: 6.20, hub: "HSC",                 co2: 0.5920, for_rate: 0.0600, po_days: 11, ifc: null },
+      { id: 25, gen_id: 25, heat_rate: 10.000, min_mw: 80,  max_mw: 380,  ramp: 12.0, ramp_e: 18.0, sc_cold: 12000,  sc_warm: 7200,  sc_hot: 3600,  st_cold: 2.0,  vom: 6.00, hub: "WAHA",                co2: 0.5805, for_rate: 0.0630, po_days: 10, ifc: null },
+      { id: 26, gen_id: 26, heat_rate: 10.500, min_mw: 60,  max_mw: 285,  ramp: 9.0,  ramp_e: 14.0, sc_cold: 9000,   sc_warm: 5400,  sc_hot: 2700,  st_cold: 2.5,  vom: 6.50, hub: "WAHA",                co2: 0.6095, for_rate: 0.0650, po_days: 10, ifc: null },
+      { id: 27, gen_id: 27, heat_rate: 10.800, min_mw: 743, max_mw: 1568, ramp: 3.0,  ramp_e: 4.5,  sc_cold: 297000, sc_warm: 148500, sc_hot: 74250, st_cold: 24.0, vom: 2.50, hub: "COAL_POWDER_RIVER",  co2: 1.0850, for_rate: 0.0950, po_days: 38, ifc: 2.20 },
+      { id: 28, gen_id: 28, heat_rate: 11.500, min_mw: 720, max_mw: 1520, ramp: 2.5,  ramp_e: 3.5,  sc_cold: 288000, sc_warm: 144000, sc_hot: 72000, st_cold: 36.0, vom: 2.20, hub: "COAL_LIGNITE_TX",    co2: 1.0500, for_rate: 0.0820, po_days: 32, ifc: 1.80 },
+      { id: 29, gen_id: 29, heat_rate: 11.200, min_mw: 558, max_mw: 1178, ramp: 2.5,  ramp_e: 3.5,  sc_cold: 223200, sc_warm: 111600, sc_hot: 55800, st_cold: 28.0, vom: 2.40, hub: "COAL_POWDER_RIVER",  co2: 1.0640, for_rate: 0.0910, po_days: 40, ifc: 2.10 },
+      { id: 30, gen_id: 30, heat_rate: 13.200, min_mw: 185, max_mw: 390,  ramp: 1.8,  ramp_e: 2.5,  sc_cold: 73800,  sc_warm: 36900, sc_hot: 18450, st_cold: 48.0, vom: 1.80, hub: "COAL_LIGNITE_TX",    co2: 1.0150, for_rate: 0.0880, po_days: 35, ifc: 1.50 },
+      { id: 31, gen_id: 31, heat_rate: 11.800, min_mw: 573, max_mw: 1211, ramp: 2.8,  ramp_e: 4.0,  sc_cold: 229320, sc_warm: 114660, sc_hot: 57330, st_cold: 30.0, vom: 2.30, hub: "COAL_POWDER_RIVER",  co2: 1.0950, for_rate: 0.0980, po_days: 42, ifc: 2.15 },
+    ] as const;
+
+    // Seed generators (TRUNCATE + re-insert for clean state)
+    await db.execute(sql.raw(`TRUNCATE generators RESTART IDENTITY CASCADE`));
+
+    for (const g of generators) {
+      await db.execute(sql`
+        INSERT INTO generators
+          (id, plant_name, operator, asset_class, technology, fuel_primary,
+           nameplate_mw, summer_capacity_mw, commissioning_year, lat, lng,
+           county, state, iso, load_zone, status)
+        VALUES (
+          ${g.id}, ${g.plant_name}, ${g.operator}, ${g.asset_class}, ${g.technology},
+          ${g.fuel_primary}, ${g.nameplate_mw}, ${g.summer_capacity_mw},
+          ${g.commissioning_year}, ${g.lat}, ${g.lng}, ${g.county},
+          ${g.state}, ${g.iso}, ${g.load_zone}, 'OPERATING'
+        )
+        ON CONFLICT (id) DO UPDATE SET
+          plant_name = EXCLUDED.plant_name, operator = EXCLUDED.operator,
+          technology = EXCLUDED.technology, nameplate_mw = EXCLUDED.nameplate_mw,
+          summer_capacity_mw = EXCLUDED.summer_capacity_mw, lat = EXCLUDED.lat, lng = EXCLUDED.lng
+      `);
+    }
+
+    // Seed thermal_params
+    await db.execute(sql.raw(`TRUNCATE thermal_params RESTART IDENTITY CASCADE`));
+
+    for (const t of thermalParams) {
+      await db.execute(sql`
+        INSERT INTO thermal_params
+          (id, generator_id, design_heat_rate, min_load_mw, max_load_mw,
+           ramp_rate_mw_min, ramp_rate_emergency_mw_min,
+           startup_cost_cold, startup_cost_warm, startup_cost_hot,
+           startup_time_cold_h, vom_per_mwh, fuel_hub, co2_rate_tons_mwh,
+           forced_outage_rate, planned_outage_days, implied_fuel_cost_per_mmb)
+        VALUES (
+          ${t.id}, ${t.gen_id}, ${t.heat_rate}, ${t.min_mw}, ${t.max_mw},
+          ${t.ramp}, ${t.ramp_e}, ${t.sc_cold}, ${t.sc_warm}, ${t.sc_hot},
+          ${t.st_cold}, ${t.vom}, ${t.hub}, ${t.co2}, ${t.for_rate},
+          ${t.po_days}, ${t.ifc}
+        )
+        ON CONFLICT (id) DO UPDATE SET
+          design_heat_rate = EXCLUDED.design_heat_rate,
+          vom_per_mwh = EXCLUDED.vom_per_mwh,
+          fuel_hub = EXCLUDED.fuel_hub,
+          co2_rate_tons_mwh = EXCLUDED.co2_rate_tons_mwh
+      `);
+    }
+
+    res.json({
+      message: "Generators and thermal_params seeded",
+      generators: generators.length,
+      thermalParams: thermalParams.length,
+    });
+  } catch (err) {
+    req.log.error({ err }, "admin/reseed-generators error");
+    res.status(500).json({ error: "internal_error", detail: String(err) });
+  }
 });
 
 export default router;
