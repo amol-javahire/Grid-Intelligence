@@ -87,6 +87,49 @@ function spawnScript(scriptName: string): string {
   return jobId;
 }
 
+// ── spawnPython: runs a Python script from scripts/src/ via pypsa venv ────────
+function spawnPython(scriptName: string): string {
+  const jobId = `job-${++jobCounter}-${Date.now()}`;
+  const wsRoot = WORKSPACE_ROOT;
+
+  const job: Job = {
+    script: scriptName,
+    status: "running",
+    exitCode: null,
+    output: [],
+    startedAt: new Date().toISOString(),
+  };
+  jobs.set(jobId, job);
+
+  const pyBin = path.join(wsRoot, "artifacts/pypsa-engine/.venv/bin/python3");
+  const scriptPath = path.join(wsRoot, "scripts/src", `${scriptName}.py`);
+  const pyCwd = path.join(wsRoot, "artifacts/pypsa-engine");
+
+  const proc = spawn(pyBin, [scriptPath], {
+    cwd: pyCwd,
+    env: { ...process.env },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  proc.stdout?.on("data", (d: Buffer) => {
+    const lines = d.toString().split("\n");
+    job.output.push(...lines.filter(l => l.trim()));
+    if (job.output.length > 500) job.output = job.output.slice(-500);
+  });
+  proc.stderr?.on("data", (d: Buffer) => {
+    const lines = d.toString().split("\n");
+    job.output.push(...lines.map(l => `[err] ${l}`).filter(l => l.trim() !== "[err] "));
+    if (job.output.length > 500) job.output = job.output.slice(-500);
+  });
+  proc.on("close", (code) => {
+    job.exitCode = code;
+    job.status = code === 0 ? "completed" : "failed";
+    job.finishedAt = new Date().toISOString();
+  });
+
+  return jobId;
+}
+
 // ── GET /api/admin/status ─────────────────────────────────────────────────────
 router.get("/admin/status", requireAdminKey, async (req, res) => {
   try {
@@ -105,6 +148,11 @@ router.get("/admin/status", requireAdminKey, async (req, res) => {
       UNION ALL SELECT 'gas_prices', COUNT(*)::int FROM gas_prices
       UNION ALL SELECT 'generators', COUNT(*)::int FROM generators
       UNION ALL SELECT 'thermal_params', COUNT(*)::int FROM thermal_params
+      UNION ALL SELECT 'hourly_temperatures', COUNT(*)::int FROM hourly_temperatures
+      UNION ALL SELECT 'regulatory_items', COUNT(*)::int FROM regulatory_items
+      UNION ALL SELECT 'load_forecasts', COUNT(*)::int FROM load_forecasts
+      UNION ALL SELECT 'datacenters', COUNT(*)::int FROM datacenters
+      UNION ALL SELECT 'temperature_forecasts', COUNT(*)::int FROM temperature_forecasts
     `);
 
     const activeJobs = Array.from(jobs.entries())
@@ -1050,6 +1098,48 @@ router.post("/admin/reseed-generators", requireAdminKey, async (req, res) => {
     req.log.error({ err }, "admin/reseed-generators error");
     res.status(500).json({ error: "internal_error", detail: String(err) });
   }
+});
+
+// ── POST /api/admin/reseed-regulatory ────────────────────────────────────────
+// Spawns seed-regulatory.py — seeds 30 curated PPA-relevant regulatory items.
+router.post("/admin/reseed-regulatory", requireAdminKey, (req, res) => {
+  const jobId = spawnPython("seed-regulatory");
+  res.json({ jobId, statusUrl: `/api/admin/jobs/${jobId}`, message: "Seeding 30 regulatory_items rows via seed-regulatory.py" });
+});
+
+// ── POST /api/admin/reseed-datacenters ────────────────────────────────────────
+// Spawns seed-datacenters.py — seeds ~55 hyperscale datacenter facilities.
+router.post("/admin/reseed-datacenters", requireAdminKey, (req, res) => {
+  const jobId = spawnPython("seed-datacenters");
+  res.json({ jobId, statusUrl: `/api/admin/jobs/${jobId}`, message: "Seeding ~55 datacenter rows via seed-datacenters.py" });
+});
+
+// ── POST /api/admin/reseed-temperatures ──────────────────────────────────────
+// Spawns seed-temperatures.py — seeds hourly_temperatures for 8 ERCOT zones.
+router.post("/admin/reseed-temperatures", requireAdminKey, (req, res) => {
+  const jobId = spawnPython("seed-temperatures");
+  res.json({ jobId, statusUrl: `/api/admin/jobs/${jobId}`, message: "Seeding hourly_temperatures (8 ERCOT zones) via seed-temperatures.py" });
+});
+
+// ── POST /api/admin/reseed-temperatures-completion ───────────────────────────
+// Spawns seed-temperatures-completion.py — adds ERCOT WEST + 3 CAISO zones.
+router.post("/admin/reseed-temperatures-completion", requireAdminKey, (req, res) => {
+  const jobId = spawnPython("seed-temperatures-completion");
+  res.json({ jobId, statusUrl: `/api/admin/jobs/${jobId}`, message: "Seeding hourly_temperatures completion (ERCOT WEST + NP15/SP15/ZP26) via seed-temperatures-completion.py" });
+});
+
+// ── POST /api/admin/reseed-temperature-forecasts ──────────────────────────────
+// Spawns seed-temperature-forecast.py — seeds temperature_forecasts (12k rows).
+router.post("/admin/reseed-temperature-forecasts", requireAdminKey, (req, res) => {
+  const jobId = spawnPython("seed-temperature-forecast");
+  res.json({ jobId, statusUrl: `/api/admin/jobs/${jobId}`, message: "Seeding temperature_forecasts via seed-temperature-forecast.py" });
+});
+
+// ── POST /api/admin/reseed-load-forecasts ────────────────────────────────────
+// Spawns compute-load-forecast.py — seeds load_forecasts (8k rows).
+router.post("/admin/reseed-load-forecasts", requireAdminKey, (req, res) => {
+  const jobId = spawnPython("compute-load-forecast");
+  res.json({ jobId, statusUrl: `/api/admin/jobs/${jobId}`, message: "Seeding load_forecasts via compute-load-forecast.py" });
 });
 
 export default router;

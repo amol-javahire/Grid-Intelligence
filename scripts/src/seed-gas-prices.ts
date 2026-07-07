@@ -15,10 +15,10 @@ import { parse } from "csv-parse/sync";
 
 // ── helpers ────────────────────────────────────────────────────────────────
 
-function curlGet(url: string, timeoutSec = 30): string {
+function curlGet(url: string, timeoutSec = 45): string {
   return execSync(
-    `curl -s --max-time ${timeoutSec} --compressed -L "${url}"`,
-    { maxBuffer: 50 * 1024 * 1024 }
+    `curl -s --connect-timeout 15 --max-time ${timeoutSec} --compressed -L "${url}"`,
+    { maxBuffer: 50 * 1024 * 1024, timeout: (timeoutSec + 15) * 1000 }
   ).toString("utf8");
 }
 
