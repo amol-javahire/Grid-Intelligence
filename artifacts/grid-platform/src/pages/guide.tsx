@@ -5,7 +5,9 @@ import {
   Target, Wrench, ArrowRight, CheckCircle2, Clock, AlertCircle,
   Building2, Bolt, TrendingUp, ShieldCheck, Cpu, Network,
   Brain, Flame, MapPin, FlaskConical, BookMarked, Leaf,
-  BookOpen,
+  BookOpen, Thermometer, Car, Server, Globe, Calculator,
+  FileText, TrendingDown, Fuel, Battery, Gauge, Wind, Sun,
+  Search,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -313,6 +315,180 @@ const TABS = [
     ],
   },
   {
+    group: "PyPSA Scenarios",
+    items: [
+      {
+        title: "Curtailment Analysis",
+        href: "/pypsa-curtailment",
+        icon: Wind,
+        color: C.indigo,
+        status: "live",
+        summary:
+          "Curtailment risk scoring for ERCOT and CAISO candidates. Combines zone-level historical curtailment rates from real CDR and OASIS data with asset-type adjustments (wind/solar/storage) and a penalty multiplier for high-congestion nodes. Output is a 0–100 score displayed alongside all other scoring dimensions in Rankings.",
+        dataSource: "Real ERCOT CDR + CAISO OASIS monthly data; zone curtailment rates derived from DA–RT spreads",
+        useCases: ["origination", "siting"],
+      },
+      {
+        title: "TX Relief Simulator",
+        href: "/pypsa-tx-relief",
+        icon: Network,
+        color: C.indigo,
+        status: "live",
+        summary:
+          "Simulates the LMP impact of upgrading a specific ERCOT transmission line. Choose a target corridor, set its thermal limit uplift, then run OPF to see before/after nodal prices and congestion rent. Useful for evaluating whether a proposed transmission upgrade would materially change basis for a candidate node.",
+        dataSource: "PyPSA 340-bus ERCOT network; HiGHS LP solver",
+        useCases: ["siting"],
+      },
+      {
+        title: "Scarcity Events",
+        href: "/pypsa-scarcity",
+        icon: Flame,
+        color: C.indigo,
+        status: "live",
+        summary:
+          "Models supply-shock scenarios: gas derate %, renewable CF drop, load surge. The OPF solver dispatches the stressed network and returns total load shed (MW), zone-level scarcity risk scores, and scarcity adder prices. Useful for stress-testing PPA delivery reliability assumptions.",
+        dataSource: "PyPSA 340-bus ERCOT network; EIA 860 generator fleet",
+        useCases: ["origination", "siting"],
+      },
+      {
+        title: "Battery Storage",
+        href: "/pypsa-battery",
+        icon: Battery,
+        color: C.indigo,
+        status: "live",
+        summary:
+          "Simulates adding a utility-scale battery at any ERCOT bus. Configure capacity (MW/MWh), round-trip efficiency, and charging/discharging hours, then run OPF to see how storage arbitrages basis and reduces peak congestion. Shows dispatch schedule and LMP delta versus baseline.",
+        dataSource: "PyPSA 340-bus ERCOT network; synthetic storage parameters",
+        useCases: ["origination", "siting"],
+      },
+    ],
+  },
+  {
+    group: "Market Intelligence",
+    items: [
+      {
+        title: "Generator Stack",
+        href: "/generators",
+        icon: Fuel,
+        color: C.green,
+        status: "live",
+        summary:
+          "Merit-order dispatch model for ERCOT's thermal fleet (31 CCGT, CT, and steam units). Set system demand (5–30 GW thermal-only) and gas price, then view the resulting dispatch stack and system marginal price. Includes real heat rates, capacities, and start costs from EIA 860 / EIA 923. Useful for understanding when gas price changes push wind/solar into the money.",
+        dataSource: "EIA 860/923 generator data; generators + thermal_params DB tables (31 ERCOT thermal units)",
+        useCases: ["origination", "siting"],
+      },
+      {
+        title: "ERCOT Gas Prices",
+        href: "/ercot-gas",
+        icon: TrendingDown,
+        color: C.green,
+        status: "live",
+        summary:
+          "Henry Hub natural gas spot price history (2024–2026) sourced from FRED (St. Louis Fed). Monthly and daily views, YoY comparison, and correlation with ERCOT hub prices. Since gas sets the marginal clearing price in most ERCOT hours, gas price trends are a leading indicator of renewable capture value.",
+        dataSource: "FRED DHHNGSP — Henry Hub daily spot prices, 651 rows, public (no key required)",
+        useCases: ["origination", "siting"],
+      },
+      {
+        title: "ERCOT Dispatch (SCED)",
+        href: "/ercot-dispatch",
+        icon: Gauge,
+        color: C.green,
+        status: "live",
+        summary:
+          "Real ERCOT 5-minute SCED dispatch and offer curves from NP3-965-ER 60-day disclosure data, aggregated to hourly. Browse dispatch by resource, zone, and time period. Shows dispatch quantity, offer price, and offer curve shape (with sentinel removal for [-250, 5000] MW extremes). 1,215 resources, Jan 2024–May 2026.",
+        dataSource: "Real ERCOT NP3-965-ER SCED disclosure — ~13M rows, 1,215 resources, Jan 2024–May 2026",
+        useCases: ["origination", "siting"],
+      },
+      {
+        title: "CAISO Hourly",
+        href: "/caiso-hourly",
+        icon: Activity,
+        color: C.green,
+        status: "live",
+        summary:
+          "Hourly DA and RT LMP explorer for CAISO hubs (NP15, SP15, ZP26). Select node, year, and month to view 24-hour price profiles, hourly basis bar chart, and monthly summary stats. Includes HASP (Hour-Ahead Scheduling Process) RT prices alongside DAM prices for intra-day spread analysis.",
+        dataSource: "Real CAISO OASIS PRC_LMP (DAM) + PRC_HASP_LMP (HASP) — 63,495 rows, 3 nodes, 29 months",
+        useCases: ["origination", "siting"],
+      },
+    ],
+  },
+  {
+    group: "Load & Infrastructure",
+    items: [
+      {
+        title: "Temperature & Load Forecast",
+        href: "/weather",
+        icon: Thermometer,
+        color: C.blue,
+        status: "live",
+        summary:
+          "Three-year (Jul 2026–Jun 2029) temperature and load forecasts for all 8 ERCOT zones and 3 CAISO zones. Historical hourly temperature data (232k+ rows) feeds an OLS regression model (R²=0.88–0.92 in major zones) to project daily peak load. Includes EV adoption increments and datacenter load growth layered on base. Toggle between zones and view CDDs/HDDs by year.",
+        dataSource: "Historical: NOAA climate baselines (11 zones). Forecast: OLS Load~Temp+Temp²+seasonality. EV/DC increments layered.",
+        useCases: ["origination", "siting"],
+      },
+      {
+        title: "EV Charging",
+        href: "/ev-charging",
+        icon: Car,
+        color: C.blue,
+        status: "live",
+        summary:
+          "Models EV fleet growth impact on ERCOT load by zone (2024–2029). Shows base ERCOT load profile from real EIA-930 hourly data alongside projected EV charging curves at different adoption scenarios. Peak shifting analysis shows how managed charging (TOU rates) vs unmanaged charging changes evening demand ramps by zone.",
+        dataSource: "Real EIA-930 ERCOT load (174k rows, 8 zones). EV curves: S-curve adoption model by zone.",
+        useCases: ["siting"],
+      },
+      {
+        title: "AI & Datacenters",
+        href: "/datacenters",
+        icon: Server,
+        color: C.blue,
+        status: "live",
+        summary:
+          "Database of 55 hyperscaler and colocation facilities across ERCOT, CAISO, and PJM. Each record shows operator, capacity (MW), zone, commissioning year, and status. The page aggregates total load by zone and operator, showing where AI infrastructure buildout is concentrating grid demand. NCEN (North Central Texas) is the fastest-growing zone.",
+        dataSource: "55 curated datacenter records from public announcements (Microsoft, Meta, Google, Oracle, Amazon, etc.)",
+        useCases: ["siting"],
+      },
+    ],
+  },
+  {
+    group: "Financial & ESG",
+    items: [
+      {
+        title: "REC Analysis",
+        href: "/recs",
+        icon: Leaf,
+        color: C.green,
+        status: "live",
+        summary:
+          "Renewable Energy Certificate portfolio analysis across ERCOT, CAISO, and PJM. Calculates gross annual REC production from EIA 860 capacity and technology-specific capacity factors. Uses assumed market prices (TRC $2.50/MWh ERCOT, WREGIS $3.00/MWh CAISO, SREC/ERC $4.00/MWh PJM) to show gross REC value by project, zone, and technology. Filter by market or technology to build a targeted REC procurement shortlist.",
+        dataSource: "EIA 860 2024 capacity × assumed capacity factors. REC prices: assumed market levels (not live quotes).",
+        useCases: ["origination"],
+      },
+      {
+        title: "PPA / NPV Calculator",
+        href: "/ppa",
+        icon: Calculator,
+        color: C.green,
+        status: "live",
+        summary:
+          "Virtual PPA (VPPA) net-present-value calculator with P10/P50/P90 price distributions. Configure strike price, contract term (years), hedge volume (MWh/yr), discount rate, and price escalator. Cashflow model uses real nodal price distributions from 28 months of ERCOT/CAISO data to simulate forward price uncertainty. Output shows annual cashflows, NPV by percentile, and breakeven strike price.",
+        dataSource: "Real nodal price distributions from ercot_node_stats + caiso_node_stats. User-configured assumptions.",
+        useCases: ["origination"],
+      },
+      {
+        title: "Regulatory Tracker",
+        href: "/regulatory",
+        icon: FileText,
+        color: C.purple,
+        status: "live",
+        summary:
+          "Curated database of 30 regulatory and policy items across ERCOT (10), CAISO (8), and Federal/IRA (12). Each item shows status (Active/Proposed/Enacted/Under Review), effective date, and impact description. Covers IRA ITC/PTC adders, ERCOT RTCO reform, CAISO PTB interconnection changes, and key FERC orders. Filtered view by market. Monthly scraper maintains currency.",
+        dataSource: "30 manually curated items. Covers IRA (Aug 2022+), FERC, ERCOT, and CAISO rulemaking through mid-2026.",
+        useCases: ["origination", "siting"],
+      },
+    ],
+  },
+  {
     group: "Assistance",
     items: [
       {
@@ -320,12 +496,11 @@ const TABS = [
         href: "/qa",
         icon: MessageSquare,
         color: C.purple,
-        status: "planned",
+        status: "live",
         summary:
-          "AI assistant that answers natural-language questions about projects, price history, queue depth, and risk scores. Ask things like 'Which ERCOT wind projects have the lowest congestion risk?' or 'What is the average DA–RT spread at LZ_WEST in 2024?' Will use the full platform database as context via structured SQL + RAG.",
-        dataSource: "All platform data — planned OpenAI integration",
+          "AI assistant with four capabilities: (1) SQL queries against the full platform database — ask 'Which ERCOT wind projects have the lowest congestion risk?' and it writes and runs the SQL; (2) PyPSA simulation — 'Run a high-wind OPF for ERCOT' triggers the live solver and renders LMP results inline; (3) Web search — 'What are current TRC REC prices?' fetches live data via web; (4) Deep-link navigation — responses embed clickable buttons that jump you to the relevant tab with filters pre-applied. Full context across all platform tabs and DB schemas.",
+        dataSource: "All platform DB tables + PyPSA engine + DuckDuckGo web search. OpenAI GPT-4o.",
         useCases: ["origination", "siting"],
-        roadmap: "Connect OpenAI to the platform DB for structured Q&A against all tables",
       },
     ],
   },
@@ -429,7 +604,7 @@ export default function PlatformGuide() {
       <div className="flex items-center gap-2 flex-wrap text-sm text-muted-foreground">
         <TrendingUp className="h-4 w-4 text-primary shrink-0" />
         <span className="font-medium text-foreground">Suggested Workflow:</span>
-        {["Map Workspace", "Rankings", "Congestion Intelligence", "PyPSA Engine", "Queue", "Export"].map((step, i, arr) => (
+        {["Map Workspace", "Rankings", "Congestion Intelligence", "Nodal Analysis", "PyPSA Engine", "Queue", "PPA Calculator", "Export", "Q&A Copilot"].map((step, i, arr) => (
           <span key={step} className="flex items-center gap-2">
             <span className="px-2 py-0.5 rounded bg-card border border-border text-xs">{step}</span>
             {i < arr.length - 1 && <ArrowRight className="h-3 w-3 shrink-0" />}
@@ -548,13 +723,53 @@ export default function PlatformGuide() {
               },
               {
                 label: "Q&A Copilot",
-                status: "planned",
-                detail: "OpenAI integration planned. Will answer questions from platform DB via SQL + RAG.",
+                status: "real",
+                detail: "Live: SQL query tool, PyPSA simulation tool, web search (DuckDuckGo), deep-link navigation. GPT-4o with full platform DB context.",
               },
               {
                 label: "REC Analysis",
-                status: "planned",
-                detail: "Renewable Energy Certificate pricing, vintage analysis, and buyer-seller matching. Roadmap item.",
+                status: "partial",
+                detail: "EIA 860 capacity × assumed CFs → gross REC production. Prices assumed (TRC $2.50, WREGIS $3.00, SREC $4.00). Not live market quotes.",
+              },
+              {
+                label: "PPA / NPV Calculator",
+                status: "real",
+                detail: "P10/P50/P90 VPPA NPV using real nodal price distributions from 28 months ERCOT/CAISO data. User-configured assumptions.",
+              },
+              {
+                label: "Temperature & Load Forecast",
+                status: "real",
+                detail: "232k+ hourly temp rows (11 zones). 3yr load forecast (8,768 rows). OLS R²=0.88–0.92. EV/DC increments layered.",
+              },
+              {
+                label: "ERCOT Gas Prices",
+                status: "real",
+                detail: "651 rows Henry Hub daily spot from FRED DHHNGSP. Public, no API key. Gaps forward-filled from prior trading day.",
+              },
+              {
+                label: "Generator Stack (Thermal)",
+                status: "real",
+                detail: "31 ERCOT thermal units with real heat rates/capacities from EIA 860/923. Merit-order dispatch model.",
+              },
+              {
+                label: "ERCOT Dispatch (SCED)",
+                status: "real",
+                detail: "Real 5-min SCED dispatch from NP3-965-ER. ~13M rows, 1,215 resources, Jan 2024–May 2026.",
+              },
+              {
+                label: "AI & Datacenters",
+                status: "seeded",
+                detail: "55 curated hyperscaler/colo facilities (ERCOT/CAISO/PJM) from public announcements. No live feed.",
+              },
+              {
+                label: "Regulatory Tracker",
+                status: "seeded",
+                detail: "30 manually curated policy items (ERCOT ×10, CAISO ×8, Federal/IRA ×12). Monthly scraper maintains currency.",
+              },
+              {
+                label: "CAISO Hourly Prices",
+                status: "real",
+                detail: "63,495 rows. Real OASIS PRC_LMP (DAM) + PRC_HASP_LMP (HASP). NP15/SP15/ZP26 × 29 months.",
               },
             ].map(item => (
               <div key={item.label} className="flex gap-2 p-2.5 rounded-md bg-card border border-border">
