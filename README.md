@@ -95,6 +95,49 @@ Analyze the interconnection queue across all three ISOs to find regions where a 
 
 ---
 
+## AESO Market Modelling Platform
+
+A companion module for the Alberta electricity market — live pool price tracking, regulatory intelligence, and an interactive PyPSA congestion model of the Alberta grid.
+
+### Congestion & OPF Engine
+
+Alberta's transmission network is dominated by a north-south constraint: renewable generation (predominantly wind and solar) sits in the **South zone**, while load centres are in the Central and North zones. When wind output is high, the SOUTH–CENTRAL corridor (2,800 MW cap) saturates — prices collapse in the South while Northern prices spike, generating congestion rent and forcing curtailment.
+
+The platform models this with a **3-zone PyPSA DC optimal power flow** engine:
+
+| Corridor | Capacity | Behaviour at saturation |
+|----------|----------|------------------------|
+| SOUTH → CENTRAL | 2,800 MW | Binds at wind CF ≥ 0.55 — South LMP collapses, curtailment rises |
+| CENTRAL → NORTH | 1,400 MW | Secondary constraint — bottleneck for re-dispatch northward |
+
+**Interactive controls** let users drag two sliders — *South Wind Capacity Factor* and *Alberta Internal Load (AIL)* — and recompute nodal LMPs across all three zones in real time using the HiGHS LP solver. The engine returns:
+
+- **Nodal LMP per zone** ($/MWh) with shadow prices on binding line constraints
+- **Wind curtailment volume** (MW) in the South zone
+- **Congestion rent spread** — actual Pool Price vs unconstrained System Marginal Price (SMP)
+- **Corridor loading** as a percentage of thermal limit
+
+This makes it possible to quantify how a new renewable project at a given location will be affected by the existing transmission bottleneck — before committing development capital.
+
+### AESO Platform Features
+
+| Feature | Description |
+|---------|-------------|
+| **Live Pool Price** | Real-time AESO API feed — pool price, AIL, reserve margin, active outages |
+| **3-Zone OPF Model** | PyPSA DC OPF (SOUTH / CENTRAL / NORTH) · HiGHS LP solver · interactive sliders |
+| **Congestion Rent Chart** | Pool Price vs unconstrained SMP spread with corridor loading heatmap |
+| **Intertie Flows** | Hourly imports/exports — BC and Saskatchewan interties |
+| **Interconnection Queue** | Alberta pipeline by fuel type (Solar, Wind, Gas, Storage, Hydro) |
+| **7-Day Capacity Heatmap** | Available capability as % of Maximum Capability by fuel type and hour |
+| **Outage Report** | Daily and monthly forecast generation outages across the fleet |
+| **REM / LMP Overview** | 2027 restructuring — Locational Marginal Pricing, scarcity cap ($3,000/MWh), FTRs |
+| **AUC Regulatory Portal** | Rule 007 (power plants), Rule 028 (micro-gen), rate-setting, news feed |
+| **MSA Market Surveillance** | Compliance notices, market power metrics (Lerner Index, Pivotality), monitor reports |
+| **LTA Adequacy** | Quarterly supply adequacy assessments, Energy Not Served (TENS) metrics |
+| **Market Copilot** | OpenAI-powered natural-language interface — executes SQL against the live DB |
+
+---
+
 ## Architecture
 
 ```
