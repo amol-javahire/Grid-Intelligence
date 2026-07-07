@@ -1150,4 +1150,86 @@ router.post("/admin/reseed-temperatures-fast", requireAdminKey, (req, res) => {
   res.json({ jobId, statusUrl: `/api/admin/jobs/${jobId}`, message: "Seeding hourly_temperatures (all 11 zones, synthetic, fast) via seed-temperatures-fast.py" });
 });
 
+// ── Node.js async job runner ───────────────────────────────────────────────────
+function runNodeJob(name: string, fn: (job: Job) => Promise<void>): string {
+  const jobId = `job-${++jobCounter}-${Date.now()}`;
+  const job: Job = { script: name, status: "running", exitCode: null, output: [], startedAt: new Date().toISOString() };
+  jobs.set(jobId, job);
+  setImmediate(async () => {
+    try {
+      await fn(job);
+      job.status = "completed"; job.exitCode = 0; job.finishedAt = new Date().toISOString();
+    } catch (e: any) {
+      job.status = "failed"; job.exitCode = 1; job.output.push(`ERROR: ${e?.message ?? e}`); job.finishedAt = new Date().toISOString();
+    }
+  });
+  return jobId;
+}
+
+// ── POST /api/admin/seed-temperatures-node ────────────────────────────────────
+// Pure Node.js synthetic temperature seeder — all 11 zones, ~30s, no Python.
+// Uses TRUNCATE + 3000-row batch inserts via Drizzle raw SQL.
+router.post("/admin/seed-temperatures-node", requireAdminKey, (req, res) => {
+  const jobId = runNodeJob("seed-temperatures-node", async (job) => {
+    const CLIMATES: Array<{ iso: string; zone: string; mean: number; seasonal: number; diurnal: number }> = [
+      { iso: "ERCOT", zone: "COAS", mean: 68, seasonal: 18, diurnal: 12 },
+      { iso: "ERCOT", zone: "NCEN", mean: 65, seasonal: 22, diurnal: 14 },
+      { iso: "ERCOT", zone: "NRTH", mean: 63, seasonal: 22, diurnal: 14 },
+      { iso: "ERCOT", zone: "EAST", mean: 67, seasonal: 20, diurnal: 13 },
+      { iso: "ERCOT", zone: "SCEN", mean: 69, seasonal: 19, diurnal: 12 },
+      { iso: "ERCOT", zone: "SOUT", mean: 71, seasonal: 16, diurnal: 11 },
+      { iso: "ERCOT", zone: "FWES", mean: 67, seasonal: 21, diurnal: 14 },
+      { iso: "ERCOT", zone: "WEST", mean: 62, seasonal: 20, diurnal: 14 },
+      { iso: "CAISO", zone: "NP15", mean: 58, seasonal: 14, diurnal: 10 },
+      { iso: "CAISO", zone: "SP15", mean: 64, seasonal: 12, diurnal: 11 },
+      { iso: "CAISO", zone: "ZP26", mean: 68, seasonal: 14, diurnal: 12 },
+    ];
+    const MONTHS: Array<[number, number]> = [];
+    for (let y = 2024; y <= 2026; y++)
+      for (let m = 1; m <= (y === 2026 ? 5 : 12); m++)
+        MONTHS.push([y, m]);
+
+    function daysInMonth(y: number, m: number) { return new Date(y, m, 0).getDate(); }
+
+    await db.execute(sql.raw("TRUNCATE TABLE hourly_temperatures"));
+    job.output.push("Truncated hourly_temperatures — generating synthetic data...");
+
+    let totalInserted = 0;
+    const BATCH = 3000;
+
+    for (const c of CLIMATES) {
+      job.output.push(`Seeding ${c.zone} (${c.iso})...`);
+      let rows: string[] = [];
+
+      for (const [year, month] of MONTHS) {
+        const days = daysInMonth(year, month);
+        for (let day = 1; day <= days; day++) {
+          for (let hour = 0; hour <= 23; hour++) {
+            const seasonal = c.seasonal * Math.sin(2 * Math.PI * (month - 1) / 12);
+            const diurnal  = c.diurnal  * Math.sin(2 * Math.PI * (hour - 4)  / 24);
+            const tf = Math.round((c.mean + seasonal + diurnal) * 10) / 10;
+            const tc = Math.round(((tf - 32) * 5 / 9) * 100) / 100;
+            rows.push(`('${c.iso}','${c.zone}',${year},${month},${day},${hour},${tf},${tc})`);
+            if (rows.length >= BATCH) {
+              await db.execute(sql.raw(
+                `INSERT INTO hourly_temperatures (iso,zone,year,month,day,hour,temp_f,temp_c) VALUES ${rows.join(",")} ON CONFLICT (iso,zone,year,month,day,hour) DO NOTHING`
+              ));
+              totalInserted += rows.length; rows = [];
+            }
+          }
+        }
+      }
+      if (rows.length > 0) {
+        await db.execute(sql.raw(
+          `INSERT INTO hourly_temperatures (iso,zone,year,month,day,hour,temp_f,temp_c) VALUES ${rows.join(",")} ON CONFLICT (iso,zone,year,month,day,hour) DO NOTHING`
+        ));
+        totalInserted += rows.length;
+      }
+      job.output.push(`  ${c.zone}: done`);
+    }
+    job.output.push(`✅ Done — ${totalInserted} rows inserted across 11 zones`);
+  });
+  res.json({ jobId, statusUrl: `/api/admin/jobs/${jobId}`, message: "Seeding hourly_temperatures via Node.js (11 zones, no Python, ~30s)" });
+});
+
 export default router;
