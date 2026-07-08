@@ -226,8 +226,6 @@ def seed_dispatch_full(start_date: datetime.date | None = None) -> None:
     hourly aggregates in ercot_hourly_dispatch.  Gap-fill safe: skips
     dates already recorded in ercot_dispatch_seed_log.
     """
-    from gridstatus.ercot_api.ercot_api import ErcotAPI
-
     effective_start = start_date or START_DATE
 
     status = dispatch_seed_status
@@ -240,6 +238,7 @@ def seed_dispatch_full(start_date: datetime.date | None = None) -> None:
     status["errors"]      = 0
 
     try:
+        from gridstatus.ercot_api.ercot_api import ErcotAPI
         api = ErcotAPI(
             username            = os.environ.get("ERCOT_USERNAME"),
             password            = os.environ.get("ERCOT_PASSWORD"),

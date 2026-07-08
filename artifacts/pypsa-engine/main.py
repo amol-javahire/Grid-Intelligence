@@ -525,8 +525,18 @@ async def admin_seed_dispatch(
     def _run() -> None:
         global _dispatch_seeding
         try:
-            from dispatch_seeder import seed_dispatch_full
+            from dispatch_seeder import seed_dispatch_full, dispatch_seed_status
             seed_dispatch_full(start_date=parsed_start)
+        except Exception as exc:
+            import traceback
+            try:
+                from dispatch_seeder import dispatch_seed_status
+                dispatch_seed_status["phase"] = "error"
+                dispatch_seed_status["error"] = traceback.format_exc()
+                dispatch_seed_status["running"] = False
+            except Exception:
+                pass
+            raise
         finally:
             _dispatch_seeding = False
 
