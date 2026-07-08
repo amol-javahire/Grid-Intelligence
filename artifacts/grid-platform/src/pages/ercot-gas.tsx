@@ -181,7 +181,7 @@ export default function ErcotGasPage() {
   const wahaBasisLatest = (hhLatest && wahaLatest)
     ? (wahaLatest.price - hhLatest.price).toFixed(2) : null;
 
-  const latestSpread = spreadRows.at(-1);
+  const latestSpread = [...spreadRows].reverse().find(r => r.sparkSpread != null) ?? spreadRows.at(-1);
 
   const noData = !gasLoading && (!gasPrices || gasPrices.length === 0);
 

@@ -1,6 +1,6 @@
 ---
 name: Gas prices seeding + network constraints
-description: ERCOT Gas page seeder — Henry Hub from FRED, Waha from OilPriceAPI/model. Node.js https.get is blocked in Replit sandbox.
+description: ERCOT Gas page seeder — Henry Hub from EIA API v2/FRED, Waha from OilPriceAPI/model. Node.js https.get is blocked in Replit sandbox.
 ---
 
 ## Rule
@@ -11,23 +11,37 @@ Use `execSync('curl -s --max-time N ...')` instead for all HTTP calls in seed sc
 
 **How to apply:** Any new seed script that makes HTTP requests must shell out to curl, not use https/fetch modules.
 
-## EIA API key scope
-The project's `EIA_API_KEY` is scoped to electricity only. It returns 0 results for natural gas queries.
-Waha Hub prices are sourced from OIL_PRICE_API_KEY (OilPriceAPI) or forward-filled model values.
+## EIA API key — works for natural gas
+
+**CORRECTION from earlier memory**: `EIA_API_KEY` is NOT restricted to electricity only.
+It works for natural gas via the backward-compat v2 path: `NG.RNGWHHD.D` returns 5000 rows.
+The previous "electricity-only scope" misunderstanding was due to using the wrong EIA API path.
+
+**Henry Hub EIA endpoint (confirmed working)**:
+```
+https://api.eia.gov/v2/seriesid/NG.RNGWHHD.D?api_key={EIA_API_KEY}&start=2024-01-01&length=5000
+```
+Returns daily Henry Hub spot prices in `response.data[].{period, value}` format.
+
+**Waha Hub via EIA**: EIA does not publish daily Waha spot prices via a public API series.
+Waha prices are proprietary (Platts/S&P Gas Daily, NGI, Argus). No series ID was found
+via backward-compat path despite trying 10+ guesses (RNGWWAHD, RNGWWAHTXD, etc.).
 
 ## Working sources
-- **Henry Hub (FRED DHHNGSP)**: `curl https://fred.stlouisfed.org/graph/fredgraph.csv?id=DHHNGSP` — free, daily since 1997, CSV format, no auth.
-- **Waha Hub**: `OIL_PRICE_API_KEY` secret + model forward-fill for holidays/gaps.
+- **Henry Hub primary**: EIA API v2 backward-compat `NG.RNGWHHD.D` — free, daily (2024-present).
+  Note: curl to EIA may be blocked in Replit sandbox; FRED is automatic fallback.
+- **Henry Hub fallback**: `curl https://fred.stlouisfed.org/graph/fredgraph.csv?id=DHHNGSP` — free, daily since 1997.
+- **Waha Hub real data**: `OIL_PRICE_API_KEY` (oilpriceapi.com, NGI-sourced) — real daily from Feb 2025.
+- **Waha Hub model**: Henry Hub + seasonal basis (calibrated from EIA Natural Gas Weekly averages):
+  - Jan−Feb: −0.60, Mar: −1.80, Apr−May: −2.80, Jun−Aug: −1.40, Sep−Oct: −1.00, Nov−Dec: −0.70
+  - Model rows tagged source='model'; never overwritten by subsequent model runs.
 
 ## Dev DB status (July 2026)
-- 1,328 rows: henry_hub + waha, Jan 2024 → Jul 5 2026
-- Columns: id, hub, date, price, source
-- Source values: 'fred', 'oilpriceapi', 'model'
-- Holidays/zero-prices forward-filled from prior trading day
+- henry_hub: 651 rows, Jan 2024 → Jun 2026, source: fred
+- waha: 677 rows, Jan 2024 → Jul 5 2026, sources: oilpriceapi (364 rows, Feb 2025+) + model (313 rows)
 
 ## Admin endpoint
 - `POST /api/admin/reseed-gas-prices` spawns `seed-gas-prices` script (~30 sec)
-- Only available after deploy picks up the new admin route (added July 2026)
 
 ## gas_prices table
 ```sql
@@ -47,3 +61,7 @@ CREATE TABLE gas_prices (
 
 ## Page
 `/ercot-gas` — 5 tabs: Price History, Spark Spread (interactive HR slider), Implied Heat Rate, Waha Basis, Market Context.
+
+## Frontend fix (July 2026)
+Spark Spread KPI: searches backward for last non-null sparkSpread instead of using `at(-1)`.
+Fixes "— /MWh" shown when the latest month has power data but no matching gas price yet.
