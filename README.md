@@ -1,6 +1,9 @@
 # Grid Origination Intelligence Platform
 
-[![Live Demo](https://img.shields.io/badge/Live%20Demo-origination--intelligence--platform.replit.app-14b8a6?style=for-the-badge&logo=replit&logoColor=white)](https://origination-intelligence-platform.replit.app)
+[![AESO Live Demo](https://img.shields.io/badge/AESO%20Live%20Demo-origination--intelligence--platform.replit.app%2Faeso-14b8a6?style=for-the-badge&logo=replit&logoColor=white)](https://origination-intelligence-platform.replit.app/aeso/)
+[![Full Platform](https://img.shields.io/badge/Full%20Platform-origination--intelligence--platform.replit.app-8b5cf6?style=for-the-badge&logo=replit&logoColor=white)](https://origination-intelligence-platform.replit.app)
+
+> **AESO Live Demo:** https://origination-intelligence-platform.replit.app/aeso/
 
 A power market siting and PPA origination intelligence tool built for energy procurement teams. Identifies renewable energy projects and greenfield siting opportunities across **ERCOT**, **CAISO**, and **PJM** using real market data, PyPSA optimal power flow, and an 8-dimension scoring engine.
 
@@ -9,6 +12,27 @@ A power market siting and PPA origination intelligence tool built for energy pro
 ![Grid Origination Dashboard](docs/screenshots/dashboard.jpg)
 
 > **Dashboard** — 3,875 EIA 860 projects screened in real time across three ISO markets, 407 GW total capacity tracked.
+
+---
+
+## AESO — Alberta Congestion Modelling
+
+> **Live:** https://origination-intelligence-platform.replit.app/aeso/
+
+The AESO module models congestion and pool price dynamics on the Alberta electricity grid. It includes:
+
+| Feature | Description |
+|---------|-------------|
+| **Pool Price Dashboard** | Real Alberta pool prices — hourly/daily/monthly views with peak analysis |
+| **Congestion Analysis** | Path-level congestion frequency, DA-RT spreads, and import/export binding |
+| **3-Node PyPSA OPF** | SOUTH · CENTRAL · NORTH network with DC optimal power flow; nodal LMPs under wind/load scenarios |
+| **Transmission Stress** | Upgrade scenario comparison — baseline vs. upgraded corridor capacity |
+| **Scarcity Events** | High-price event detection, load shed risk by zone |
+| **Market Copilot** | Natural-language interface for Alberta market questions |
+| **Supply Stack** | Merit-order view of Alberta generation fleet |
+| **Regulatory Feed** | Live Alberta regulatory items and policy changes |
+
+Data sources: AESO apimgw.aeso.ca API (seeded) · PyPSA HiGHS LP solver · 21,000+ pool price rows (Jan 2024 – May 2026).
 
 ---
 
