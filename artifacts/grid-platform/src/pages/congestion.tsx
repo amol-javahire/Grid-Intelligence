@@ -88,10 +88,11 @@ const SORT_OPTIONS: { value: SortMetric; label: string; icon: React.ReactNode; d
 ];
 
 const RANK_MONTHS: { value: string; label: string }[] = [
-  { value: "2024-12", label: "Dec 2024" },
-  { value: "2025-6",  label: "Jun 2025" },
-  { value: "2025-12", label: "Dec 2025" },
+  { value: "2026-6",  label: "Jun 2026" },
   { value: "2026-4",  label: "Apr 2026" },
+  { value: "2025-12", label: "Dec 2025" },
+  { value: "2025-6",  label: "Jun 2025" },
+  { value: "2024-12", label: "Dec 2024" },
 ];
 
 // ── ISO Toggle ──────────────────────────────────────────────────────────────────
@@ -123,7 +124,7 @@ export default function CongestionAnalysis() {
 
   // ERCOT resource node ranking
   const [rankSort, setRankSort]   = useState<SortMetric>("neg_price_percent");
-  const [rankPeriod, setRankPeriod] = useState("2024-12");
+  const [rankPeriod, setRankPeriod] = useState("2026-6");
   const [showTop, setShowTop]     = useState(200);
 
   const [rankYear, rankMonth] = rankPeriod.split("-").map(Number);
@@ -168,19 +169,22 @@ export default function CongestionAnalysis() {
     return Object.entries(nodeMap)
       .map(([node, { da, rt }]) => {
         const avgDa = da.reduce((s,v)=>s+v,0)/da.length;
-        const avgRt = rt.length ? rt.reduce((s,v)=>s+v,0)/rt.length : avgDa;
-        return { node, avgDa, avgRt, spread: avgDa - avgRt, type: ERCOT_NODE_TYPE[node] ?? "other" };
+        const hasRt = rt.length > 0;
+        const avgRt = hasRt ? rt.reduce((s,v)=>s+v,0)/rt.length : null;
+        return { node, avgDa, avgRt, hasRt, spread: hasRt ? avgDa - (avgRt ?? avgDa) : null, type: ERCOT_NODE_TYPE[node] ?? "other" };
       })
-      .sort((a, b) => b.spread - a.spread);
+      .sort((a, b) => (b.spread ?? 0) - (a.spread ?? 0));
   }, [allErcotStats]);
 
+  const ercotRtAvailable = useMemo(() => ercotSpreadByNode.some(n => n.hasRt), [ercotSpreadByNode]);
+
   const ercotHeatmap = useMemo(() => {
-    const nodeMonthMap: Record<string, Record<number, number>> = {};
+    const nodeMonthMap: Record<string, Record<number, number | null>> = {};
     for (const row of allErcotStats) {
       if (!nodeMonthMap[row.settlementPoint]) nodeMonthMap[row.settlementPoint] = {};
-      const da = Number(row.avgDaPrice);
-      const rt = row.avgRtPrice != null ? Number(row.avgRtPrice) : da;
-      nodeMonthMap[row.settlementPoint][row.month] = da - rt;
+      if (row.avgRtPrice != null) {
+        nodeMonthMap[row.settlementPoint][row.month] = Number(row.avgDaPrice) - Number(row.avgRtPrice);
+      }
     }
     return ercotSpreadByNode
       .filter(n => nodeMonthMap[n.node])
@@ -312,6 +316,14 @@ export default function CongestionAnalysis() {
         <span className="ml-auto italic">Positive spread = DA &gt; RT (curtailment / congestion).</span>
       </div>
 
+      {/* DA-only notice when RT prices haven't been seeded */}
+      {iso === "ERCOT" && !ercotLoading && allErcotStats.length > 0 && !ercotRtAvailable && (
+        <div className="flex items-start gap-2 text-xs bg-amber-950/20 border border-amber-800/30 rounded-md px-3 py-2.5">
+          <span className="text-amber-400 font-semibold shrink-0">⚠ DA prices only —</span>
+          <span className="text-muted-foreground">Real-time (RT) prices are still loading in this environment. DA–RT spread will appear once the RT seed job completes. Heatmap cells will fill in automatically on next load.</span>
+        </div>
+      )}
+
       {/* ── Spread bar chart ── */}
       <Card>
         <CardHeader className="pb-2">
@@ -344,8 +356,11 @@ export default function CongestionAnalysis() {
                   tickFormatter={(v: string) => iso === "CAISO" ? (CAISO_NODE_LABEL[v] ?? v) : v}
                   tick={{ fill:C.mutedFg, fontSize:11, fontFamily:"monospace" }}
                 />
-                <RechartsTooltip contentStyle={TS} formatter={(v:number,_:string, p:{payload:{node:string;avgDa:number;avgRt:number}}) => [
-                  `$${v.toFixed(2)}/MWh  (DA $${p.payload.avgDa.toFixed(2)} · RT $${p.payload.avgRt.toFixed(2)})`, "DA–RT Spread"
+                <RechartsTooltip contentStyle={TS} formatter={(v: number, _: string, p: {payload:{node:string;avgDa:number;avgRt:number|null;hasRt:boolean}}) => [
+                  p.payload.hasRt
+                    ? `$${v.toFixed(2)}/MWh  (DA $${p.payload.avgDa.toFixed(2)} · RT $${p.payload.avgRt?.toFixed(2) ?? "—"})`
+                    : `DA $${p.payload.avgDa.toFixed(2)}/MWh (RT not yet loaded)`,
+                  "DA–RT Spread"
                 ]} />
                 <ReferenceLine x={0} stroke={C.border} />
                 <Bar dataKey="spread" name="DA–RT Spread" radius={[0,4,4,0]} cursor="pointer">
@@ -475,13 +490,13 @@ export default function CongestionAnalysis() {
       {/* ── Spread KPI summary ── */}
       {!isLoading && spreadByNode.length > 0 && (() => {
         const kpis = iso === "ERCOT" ? [
-          { label: "Most Congested",        value: spreadByNode[0].node,                      sub: `$${spreadByNode[0].spread.toFixed(2)}/MWh spread`,      color: C.red },
-          { label: "Least Congested",       value: spreadByNode[spreadByNode.length-1].node,  sub: `$${spreadByNode[spreadByNode.length-1].spread.toFixed(2)}/MWh spread`, color: C.green },
-          { label: "Avg Wind Curtailment",  value: `$${(spreadByNode.filter(r=>r.type==="wind").reduce((s,r)=>s+r.spread,0)/Math.max(1,spreadByNode.filter(r=>r.type==="wind").length)).toFixed(2)}/MWh`,  sub: `${spreadByNode.filter(r=>r.type==="wind").length} wind nodes`,  color: C.amber },
-          { label: "Avg Solar Curtailment", value: `$${(spreadByNode.filter(r=>r.type==="solar").reduce((s,r)=>s+r.spread,0)/Math.max(1,spreadByNode.filter(r=>r.type==="solar").length)).toFixed(2)}/MWh`, sub: `${spreadByNode.filter(r=>r.type==="solar").length} solar nodes`, color: C.orange },
+          { label: "Most Congested",        value: spreadByNode[0].node,                      sub: `$${(spreadByNode[0].spread??0).toFixed(2)}/MWh spread`,      color: C.red },
+          { label: "Least Congested",       value: spreadByNode[spreadByNode.length-1].node,  sub: `$${(spreadByNode[spreadByNode.length-1].spread??0).toFixed(2)}/MWh spread`, color: C.green },
+          { label: "Avg Wind Curtailment",  value: `$${(spreadByNode.filter(r=>r.type==="wind").reduce((s,r)=>s+(r.spread??0),0)/Math.max(1,spreadByNode.filter(r=>r.type==="wind").length)).toFixed(2)}/MWh`,  sub: `${spreadByNode.filter(r=>r.type==="wind").length} wind nodes`,  color: C.amber },
+          { label: "Avg Solar Curtailment", value: `$${(spreadByNode.filter(r=>r.type==="solar").reduce((s,r)=>s+(r.spread??0),0)/Math.max(1,spreadByNode.filter(r=>r.type==="solar").length)).toFixed(2)}/MWh`, sub: `${spreadByNode.filter(r=>r.type==="solar").length} solar nodes`, color: C.orange },
         ] : [
-          { label: "Highest Spread", value: spreadByNode[0].node,                     sub: `$${spreadByNode[0].spread.toFixed(2)}/MWh avg DA–RT`,                                        color: C.red },
-          { label: "Lowest Spread",  value: spreadByNode[spreadByNode.length-1].node, sub: `$${spreadByNode[spreadByNode.length-1].spread.toFixed(2)}/MWh avg DA–RT`,                     color: C.green },
+          { label: "Highest Spread", value: spreadByNode[0].node,                     sub: `$${(spreadByNode[0].spread??0).toFixed(2)}/MWh avg DA–RT`,                                        color: C.red },
+          { label: "Lowest Spread",  value: spreadByNode[spreadByNode.length-1].node, sub: `$${(spreadByNode[spreadByNode.length-1].spread??0).toFixed(2)}/MWh avg DA–RT`,                     color: C.green },
           { label: "NP15 Avg DA",    value: `$${caisoSpreadByNode.find(n=>n.node==="NP15")?.avgDa.toFixed(2) ?? "—"}/MWh`, sub: "N. California hub", color: C.teal },
           { label: "SP15 Avg DA",    value: `$${caisoSpreadByNode.find(n=>n.node==="SP15")?.avgDa.toFixed(2) ?? "—"}/MWh`, sub: "S. California hub", color: C.purple },
         ];

@@ -230,8 +230,23 @@ async function seedWaha() {
 async function main() {
   console.log("=== Gas Price Seeder ===\n");
 
-  const hhRows = await seedHenryHub();
-  console.log(`Henry Hub: ${hhRows} rows upserted\n`);
+  let hhRows = 0;
+  try {
+    hhRows = await seedHenryHub();
+    console.log(`Henry Hub: ${hhRows} rows upserted\n`);
+  } catch (e) {
+    console.warn("Henry Hub FRED fetch failed:", (e as Error).message.slice(0, 120));
+    const existing = await db.execute<{ cnt: string }>(
+      sql`SELECT COUNT(*)::text AS cnt FROM gas_prices WHERE hub = 'henry_hub'`
+    );
+    hhRows = Number(existing.rows[0]?.cnt ?? 0);
+    if (hhRows > 0) {
+      console.log(`  Using ${hhRows} existing Henry Hub rows from DB — continuing to Waha seed\n`);
+    } else {
+      console.error("  No existing Henry Hub data in DB — cannot seed Waha. Exiting.");
+      process.exit(1);
+    }
+  }
 
   const wahaRows = await seedWaha();
   console.log(`Waha: ${wahaRows} rows upserted\n`);

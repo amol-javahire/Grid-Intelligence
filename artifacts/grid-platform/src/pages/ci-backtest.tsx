@@ -42,8 +42,24 @@ export default function CIBacktest() {
   );
 
   if (!data || !data.n) return (
-    <div className="flex-1 flex items-center justify-center h-full text-muted-foreground text-sm">
-      No 2026 actuals found to backtest against
+    <div className="flex-1 flex items-center justify-center h-full p-8">
+      <div className="max-w-md text-center space-y-3">
+        <FlaskConical className="h-10 w-10 text-muted-foreground/40 mx-auto" />
+        <h2 className="text-base font-semibold">Backtest Unavailable</h2>
+        {data ? (
+          <>
+            <p className="text-sm text-muted-foreground">
+              No overlapping nodes found between the training period ({data.trainingPeriod}) and test year ({data.testYear}).
+              The backtest requires resource node data for <strong className="text-foreground">both</strong> the training years and the test year.
+            </p>
+            <p className="text-xs text-muted-foreground/70">
+              This environment is missing 2024–2025 resource node data. Once the ERCOT bundle seeder runs and backfills historical months, the backtest will populate automatically.
+            </p>
+          </>
+        ) : (
+          <p className="text-sm text-muted-foreground">Could not load backtest data.</p>
+        )}
+      </div>
     </div>
   );
 

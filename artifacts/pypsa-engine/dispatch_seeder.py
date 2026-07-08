@@ -61,7 +61,7 @@ START_DATE = datetime.date(2024, 1, 1)
 
 
 def _end_date() -> datetime.date:
-    return datetime.date.today() - datetime.timedelta(days=62)
+    return datetime.date.today() - datetime.timedelta(days=1)
 
 
 def _safe_float(val) -> float | None:
@@ -158,11 +158,16 @@ def _insert_batch(cur, rows: list[tuple]) -> int:
 
 def _seed_one_day(api, conn, date: datetime.date) -> int:
     """Pull, aggregate, and insert one operational day. Returns rows inserted, or -1 on error."""
+    import concurrent.futures
+
     next_day = date + datetime.timedelta(days=1)
     try:
-        data = api.get_60_day_sced_disclosure(
-            date=str(date), end=str(next_day)
-        )
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+            fut = ex.submit(api.get_60_day_sced_disclosure, date=str(date), end=str(next_day))
+            data = fut.result(timeout=90)
+    except concurrent.futures.TimeoutError:
+        logger.warning("  %s: API call timed out after 90s — skipping", date)
+        return -1
     except Exception as e:
         logger.warning("  %s: API error — %s", date, e)
         return -1
@@ -215,13 +220,15 @@ def _get_seeded_dates(conn) -> set[datetime.date]:
         return {r[0] for r in cur.fetchall()}
 
 
-def seed_dispatch_full() -> None:
+def seed_dispatch_full(start_date: datetime.date | None = None) -> None:
     """
-    Pull all ERCOT SCED data from START_DATE to _end_date() and store
+    Pull all ERCOT SCED data from start_date (default START_DATE) to _end_date() and store
     hourly aggregates in ercot_hourly_dispatch.  Gap-fill safe: skips
     dates already recorded in ercot_dispatch_seed_log.
     """
     from gridstatus.ercot_api.ercot_api import ErcotAPI
+
+    effective_start = start_date or START_DATE
 
     status = dispatch_seed_status
     status["running"]     = True
@@ -246,7 +253,7 @@ def seed_dispatch_full() -> None:
         already = _get_seeded_dates(conn)
 
         dates_needed = []
-        d = START_DATE
+        d = effective_start
         while d <= end:
             if d not in already:
                 dates_needed.append(d)
@@ -254,7 +261,7 @@ def seed_dispatch_full() -> None:
 
         status["days_total"] = len(dates_needed)
         status["phase"]      = "seeding"
-        logger.info("Dispatch seeder: %d days to pull (%s → %s)", len(dates_needed), START_DATE, end)
+        logger.info("Dispatch seeder: %d days to pull (%s → %s)", len(dates_needed), effective_start, end)
 
         for i, date in enumerate(dates_needed):
             status["current_date"] = str(date)
