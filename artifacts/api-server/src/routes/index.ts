@@ -17,6 +17,7 @@ import gasPricesRouter from "./gas_prices";
 import generatorsRouter from "./generators";
 import ercotDispatchRouter from "./ercot_dispatch";
 import aucMsaRouter from "./auc_msa";
+import caisoCapacityRouter from "./caiso_capacity";
 
 const router: IRouter = Router();
 
@@ -38,5 +39,6 @@ router.use(gasPricesRouter);
 router.use(generatorsRouter);
 router.use(ercotDispatchRouter);
 router.use(aucMsaRouter);
+router.use(caisoCapacityRouter);
 
 export default router;

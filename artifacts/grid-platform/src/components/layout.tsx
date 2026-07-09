@@ -6,7 +6,7 @@ import {
   TerminalSquare, GitBranch, BookOpen, Leaf, Cpu, Flame,
   MapPin, FlaskConical, ShieldCheck, BookMarked, ChevronDown,
   Brain, Clock, Network, Wind, Battery, Thermometer, Calculator,
-  Scale, Factory,
+  Scale, Factory, TrendingUp,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -85,6 +85,7 @@ const sidebarEntries: NavEntry[] = [
   { title: "AI & Datacenters",      href: "/datacenters", icon: Cpu },
   { title: "Regulatory & Tax",      href: "/regulatory",  icon: Scale },
   { title: "Temperature Data",      href: "/weather",     icon: Thermometer },
+  { title: "Load Forecast Stress",  href: "/load-forecast-stress", icon: TrendingUp },
   { title: "NPV Calculator",        href: "/ppa",         icon: Calculator },
   { title: "REC Analysis",          href: "/recs",        icon: Leaf },
   { title: "Q&A Copilot",           href: "/qa",         icon: MessageSquare },

@@ -41,6 +41,7 @@ import RegulatoryPage from "@/pages/regulatory";
 import ErcotGasPage from "@/pages/ercot-gas";
 import GeneratorsPage from "@/pages/generators";
 import ErcotDispatch from "@/pages/ercot-dispatch";
+import LoadForecastStress from "@/pages/load-forecast-stress";
 import NotFound from "@/pages/not-found";
 
 const queryClient = new QueryClient();
@@ -86,6 +87,7 @@ function Router() {
         <Route path="/ercot-gas" component={ErcotGasPage} />
         <Route path="/generators" component={GeneratorsPage} />
         <Route path="/ercot-dispatch" component={ErcotDispatch} />
+        <Route path="/load-forecast-stress" component={LoadForecastStress} />
         {/* Legacy / spec-documented aliases */}
         <Route path="/rec"><Redirect to="/recs" /></Route>
         <Route path="/ci/heatmap"><Redirect to="/ci-heatmap" /></Route>
