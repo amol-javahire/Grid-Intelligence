@@ -139,32 +139,7 @@ def _precompute_ercot_opf():
         logger.warning("Startup OPF failed (non-fatal): %s", e)
 
 
-def _autostart_dispatch_seeder() -> None:
-    """Auto-resume dispatch seeding on startup if gap days remain. Gap-fill safe."""
-    import datetime as _dt
-    global _dispatch_seeding
-    try:
-        import psycopg2 as _pg2
-        conn = _pg2.connect(os.environ["DATABASE_URL"])
-        cur = conn.cursor()
-        end_date = _dt.date.today() - _dt.timedelta(days=60)
-        start_date = _dt.date(2024, 1, 1)
-        cur.execute("SELECT COUNT(*) FROM ercot_dispatch_seed_log")
-        seeded = cur.fetchone()[0]
-        expected = (end_date - start_date).days + 1
-        conn.close()
-        if seeded >= expected:
-            logger.info("Dispatch seeder: all %d days already seeded — skipping auto-start", seeded)
-            return
-        logger.info("Dispatch seeder auto-start: %d/%d days seeded — resuming gap-fill", seeded, expected)
-        from dispatch_seeder import dispatch_seed_status, seed_dispatch_full
-        _dispatch_seeding = True
-        try:
-            seed_dispatch_full(start_date=None)
-        finally:
-            _dispatch_seeding = False
-    except Exception as e:
-        logger.warning("Dispatch seeder auto-start failed (non-fatal): %s", e)
+# SCED dispatch seeder removed — seeding disabled
 
 
 @app.on_event("startup")
@@ -522,88 +497,7 @@ async def admin_seed(
 
 
 # ---------------------------------------------------------------------------
-# Admin: ERCOT Hourly Dispatch Seed (NP3-965-ER SCED 60-day disclosure)
-# ---------------------------------------------------------------------------
-_dispatch_seeding = False
-
-
-@app.get("/admin/seed-dispatch-status")
-def admin_dispatch_seed_status():
-    """Return current dispatch seed job progress. Safe to poll repeatedly."""
-    from dispatch_seeder import dispatch_seed_status
-    return dict(dispatch_seed_status)
-
-
-@app.post("/admin/seed-dispatch-reset")
-def admin_dispatch_seed_reset(key: str = ""):
-    """Force-clear the dispatch seeding lock."""
-    global _dispatch_seeding
-    _require_admin_key(key)
-    from dispatch_seeder import dispatch_seed_status
-    was_running = _dispatch_seeding or dispatch_seed_status.get("running", False)
-    _dispatch_seeding = False
-    dispatch_seed_status["running"] = False
-    dispatch_seed_status["phase"] = "reset"
-    dispatch_seed_status["completed"] = False
-    return {"reset": True, "was_running": was_running}
-
-
-@app.post("/admin/seed-dispatch")
-async def admin_seed_dispatch(
-    background_tasks: BackgroundTasks,
-    key: str = "",
-    start_date: str = "",
-):
-    """
-    Trigger ERCOT SCED hourly dispatch seed in the background.
-
-    Pulls NP3-965-ER SCED 60-day disclosure data.
-    Gap-fill safe — skips dates already in ercot_dispatch_seed_log.
-    Requires ?key=<ERCOT_PASSWORD> for auth.
-    Optional: ?start_date=YYYY-MM-DD to override the default start (2024-01-01).
-    Poll GET /pypsa/admin/seed-dispatch-status for progress.
-    """
-    import datetime as dt
-    global _dispatch_seeding
-    _require_admin_key(key)
-
-    from dispatch_seeder import dispatch_seed_status
-    if _dispatch_seeding or dispatch_seed_status.get("running"):
-        return {"status": "already_running", "seed_status": dict(dispatch_seed_status)}
-
-    parsed_start: dt.date | None = None
-    if start_date:
-        try:
-            parsed_start = dt.date.fromisoformat(start_date)
-        except ValueError:
-            return {"status": "error", "message": f"Invalid start_date: {start_date!r} — use YYYY-MM-DD"}
-
-    _dispatch_seeding = True
-
-    def _run() -> None:
-        global _dispatch_seeding
-        try:
-            from dispatch_seeder import seed_dispatch_full, dispatch_seed_status
-            seed_dispatch_full(start_date=parsed_start)
-        except Exception as exc:
-            import traceback
-            try:
-                from dispatch_seeder import dispatch_seed_status
-                dispatch_seed_status["phase"] = "error"
-                dispatch_seed_status["error"] = traceback.format_exc()
-                dispatch_seed_status["running"] = False
-            except Exception:
-                pass
-            raise
-        finally:
-            _dispatch_seeding = False
-
-    background_tasks.add_task(_run)
-    return {
-        "status": "started",
-        "start_date": str(parsed_start or "2024-01-01"),
-        "message": "Dispatch seed running in background — poll GET /pypsa/admin/seed-dispatch-status",
-    }
+# SCED dispatch seeding endpoints removed — seeding disabled
 
 
 # ---------------------------------------------------------------------------
