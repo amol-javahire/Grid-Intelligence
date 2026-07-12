@@ -29,5 +29,6 @@ export * from "./load_forecasts";
 export * from "./datacenters";
 export * from "./regulatory";
 export * from "./gas_prices";
+export * from "./gas_forwards";
 export * from "./generators";
 export * from "./ercot_hourly_dispatch";

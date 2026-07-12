@@ -272,4 +272,154 @@ router.get("/gas-prices/summary", async (req, res) => {
   }
 });
 
+// ── Forward curve: NYMEX HH strip + historical overlay + spark sensitivity ─
+
+router.get("/gas-prices/forward-curve", async (req, res) => {
+  try {
+    const {
+      node      = "HB_HOUSTON",
+      heat_rate = "8.5",
+    } = req.query as Record<string, string | undefined>;
+
+    const hr = parseFloat(heat_rate);
+
+    // Latest forward curve (most recent as_of_date)
+    const curveRows = await db.execute<{
+      as_of_date: string; delivery_month: string; settle_price: string; source: string;
+    }>(sql`
+      SELECT as_of_date::text, delivery_month::text, settle_price::float8, source
+      FROM gas_forwards
+      WHERE as_of_date = (SELECT MAX(as_of_date) FROM gas_forwards)
+      ORDER BY delivery_month ASC
+    `);
+
+    // Historical HH spot — monthly averages for last 30 months
+    const spotRows = await db.execute<{
+      year: string; month: string; avg_price: string;
+    }>(sql`
+      SELECT
+        EXTRACT(YEAR  FROM date)::int AS year,
+        EXTRACT(MONTH FROM date)::int AS month,
+        AVG(price::float8) AS avg_price
+      FROM gas_prices
+      WHERE hub = 'henry_hub' AND price IS NOT NULL
+        AND date >= (CURRENT_DATE - INTERVAL '30 months')
+      GROUP BY 1, 2
+      ORDER BY 1, 2
+    `);
+
+    // Monthly average DA power price for selected ERCOT node (last 30 months + all available)
+    const powerRows = await db.execute<{
+      year: string; month: string; avg_da: string;
+    }>(sql`
+      SELECT year, month, AVG(avg_da_price)::float8 AS avg_da
+      FROM ercot_node_stats
+      WHERE node = ${node} AND avg_da_price IS NOT NULL
+      GROUP BY year, month
+      ORDER BY year, month
+    `);
+
+    // Build power map
+    const powerMap = new Map(
+      powerRows.rows.map(r => [`${r.year}-${r.month}`, Number(r.avg_da)])
+    );
+
+    // Format historical spot series
+    const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+    const fmtLabel = (y: number, m: number) => `${MONTHS[m-1]} '${String(y).slice(2)}`;
+
+    const historicalSpot = spotRows.rows.map(r => {
+      const year = Number(r.year);
+      const month = Number(r.month);
+      const gasPrice = Number(r.avg_price);
+      const powerPrice = powerMap.get(`${year}-${month}`);
+      return {
+        label:       fmtLabel(year, month),
+        dateKey:     `${year}-${String(month).padStart(2,"0")}-01`,
+        type:        "historical" as const,
+        spotPrice:   gasPrice,
+        powerPrice:  powerPrice ?? null,
+        sparkSpread: powerPrice != null ? powerPrice - gasPrice * hr : null,
+      };
+    });
+
+    // Format forward curve series
+    const forwardStrip = curveRows.rows.map(r => {
+      const d = new Date(r.delivery_month);
+      const year  = d.getUTCFullYear();
+      const month = d.getUTCMonth() + 1;
+      const gasPrice = Number(r.settle_price);
+      // For future months we don't have historical power — use latest available power avg
+      // as baseline and apply seasonal adjustment
+      return {
+        label:        fmtLabel(year, month),
+        dateKey:      r.delivery_month,
+        type:         "forward" as const,
+        forwardPrice: gasPrice,
+        source:       r.source,
+        // Sensitivity: base, +$1, -$1
+        sparkBase:    null as number | null,  // filled below if power data available
+        sparkHigh:    null as number | null,  // gas +$1
+        sparkLow:     null as number | null,  // gas -$1
+      };
+    });
+
+    // Use the latest 3-month average power price as forward power proxy
+    const recentPower = powerRows.rows.slice(-3);
+    const avgPowerFwd = recentPower.length
+      ? recentPower.reduce((sum, r) => sum + Number(r.avg_da), 0) / recentPower.length
+      : null;
+
+    if (avgPowerFwd != null) {
+      for (const row of forwardStrip) {
+        const gasBase = row.forwardPrice;
+        row.sparkBase = avgPowerFwd - gasBase * hr;
+        // sparkHigh = gas -$1/MMBtu scenario → higher spark spread (bull)
+        row.sparkHigh = avgPowerFwd - (gasBase - 1) * hr;
+        // sparkLow  = gas +$1/MMBtu scenario → lower spark spread (bear)
+        row.sparkLow  = avgPowerFwd - (gasBase + 1) * hr;
+      }
+    }
+
+    // Contango/backwardation analysis — guard against empty strip
+    let curveShape: "contango" | "backwardation" | "flat" = "flat";
+    let curveSteepness = 0;
+    if (forwardStrip.length >= 12) {
+      const first6    = forwardStrip.slice(0, 6).map(r => r.forwardPrice);
+      const last6     = forwardStrip.slice(-6).map(r => r.forwardPrice);
+      const avgFirst6 = first6.reduce((a, b) => a + b, 0) / first6.length;
+      const avgLast6  = last6.reduce((a, b) => a + b, 0) / last6.length;
+      curveSteepness  = Math.round((avgLast6 - avgFirst6) * 100) / 100;
+      curveShape      = curveSteepness > 0.10 ? "contango" : curveSteepness < -0.10 ? "backwardation" : "flat";
+    }
+
+    // Source breakdown for UI labeling
+    const sourceCounts = forwardStrip.reduce<Record<string, number>>((acc, r) => {
+      acc[r.source] = (acc[r.source] ?? 0) + 1;
+      return acc;
+    }, {});
+
+    // Latest spot for display
+    const latestSpot     = spotRows.rows.at(-1);
+    const promptMonthFwd = forwardStrip[0] ?? null;
+
+    res.json({
+      asOfDate:        curveRows.rows[0]?.as_of_date ?? null,
+      node,
+      heatRate:        hr,
+      latestSpot:      latestSpot ? Number(latestSpot.avg_price) : null,
+      promptForward:   promptMonthFwd ? promptMonthFwd.forwardPrice : null,
+      avgPowerFwd,
+      curveShape,
+      curveSteepness,
+      sourceCounts,
+      historicalSpot,
+      forwardStrip:    forwardStrip,
+    });
+  } catch (err) {
+    req.log.error({ err }, "forward-curve error");
+    res.status(500).json({ error: "internal_error" });
+  }
+});
+
 export default router;

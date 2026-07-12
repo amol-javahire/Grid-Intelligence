@@ -48,6 +48,28 @@ interface HeatRateRow {
   year: number; month: number;
   powerPrice: number; gasPrice: number | null; impliedHeatRate: number | null;
 }
+interface ForwardRow {
+  label: string; dateKey: string; type: "forward";
+  forwardPrice: number; source: string;
+  sparkBase: number | null; sparkHigh: number | null; sparkLow: number | null;
+}
+interface HistoricalSpotRow {
+  label: string; dateKey: string; type: "historical";
+  spotPrice: number; powerPrice: number | null; sparkSpread: number | null;
+}
+interface ForwardCurveResponse {
+  asOfDate: string | null;
+  node: string;
+  heatRate: number;
+  latestSpot: number | null;
+  promptForward: number | null;
+  avgPowerFwd: number | null;
+  curveShape: "contango" | "backwardation" | "flat";
+  curveSteepness: number;
+  sourceCounts: Record<string, number>;
+  historicalSpot: HistoricalSpotRow[];
+  forwardStrip: ForwardRow[];
+}
 interface BasisRow {
   year: number; month: number;
   hhAvg: number | null; wahaAvg: number | null; wahaBasis: number | null;
@@ -119,6 +141,12 @@ export default function ErcotGasPage() {
     queryKey: ["gas-summary"],
     queryFn: () => apiFetch("/api/gas-prices/summary"),
     staleTime: 5 * 60_000,
+  });
+
+  const { data: fwdData, isLoading: fwdLoading } = useQuery<ForwardCurveResponse>({
+    queryKey: ["forward-curve", node, heatRate],
+    queryFn: () => apiFetch(`/api/gas-prices/forward-curve?node=${node}&heat_rate=${heatRate}`),
+    staleTime: 30 * 60_000,
   });
 
   // ── Derived data ─────────────────────────────────────────────────────────
@@ -293,6 +321,7 @@ export default function ErcotGasPage() {
           <TabsTrigger value="heatrate">Implied Heat Rate</TabsTrigger>
           <TabsTrigger value="basis">Waha Basis</TabsTrigger>
           <TabsTrigger value="context">Market Context</TabsTrigger>
+          <TabsTrigger value="forward">Forward Curve</TabsTrigger>
         </TabsList>
 
         {/* ── Tab 1: Price History ───────────────────────────────────────── */}
@@ -845,6 +874,274 @@ export default function ErcotGasPage() {
               </CardContent>
             </Card>
           </div>
+        </TabsContent>
+
+        {/* ── Tab 6: Forward Curve ────────────────────────────────────── */}
+        <TabsContent value="forward" className="space-y-4">
+          {/* Controls bar */}
+          <div className="flex flex-wrap gap-3 items-center">
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-muted-foreground">Node:</span>
+              <Select value={node} onValueChange={setNode}>
+                <SelectTrigger className="w-36 h-8 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {HUB_NODES.map(n => (
+                    <SelectItem key={n} value={n} className="text-xs">{n}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex items-center gap-3">
+              <span className="text-xs text-muted-foreground">Heat Rate:</span>
+              <Slider
+                min={6} max={15} step={0.5}
+                value={[heatRate]}
+                onValueChange={([v]) => setHeatRate(v)}
+                className="w-28"
+              />
+              <span className="text-xs font-mono text-teal-400">{heatRate} MMBtu/MWh</span>
+            </div>
+            {fwdData?.asOfDate && (
+              <Badge variant="outline" className="text-xs text-muted-foreground ml-auto">
+                Curve as of {fwdData.asOfDate}
+              </Badge>
+            )}
+          </div>
+
+          {/* KPI row */}
+          {fwdData && (
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <Card className="bg-card border-border">
+                <CardContent className="pt-3 pb-3">
+                  <p className="text-xs text-muted-foreground">HH Spot (latest)</p>
+                  <p className="text-xl font-bold text-teal-400">
+                    {fwdData.latestSpot != null ? `$${fwdData.latestSpot.toFixed(2)}` : "—"}
+                    <span className="text-xs font-normal text-muted-foreground ml-1">/MMBtu</span>
+                  </p>
+                </CardContent>
+              </Card>
+              <Card className="bg-card border-border">
+                <CardContent className="pt-3 pb-3">
+                  <p className="text-xs text-muted-foreground">Prompt Month Forward</p>
+                  <p className="text-xl font-bold text-amber-400">
+                    {fwdData.promptForward != null ? `$${fwdData.promptForward.toFixed(2)}` : "—"}
+                    <span className="text-xs font-normal text-muted-foreground ml-1">/MMBtu</span>
+                  </p>
+                </CardContent>
+              </Card>
+              <Card className="bg-card border-border">
+                <CardContent className="pt-3 pb-3">
+                  <p className="text-xs text-muted-foreground">Curve Shape</p>
+                  <p className={`text-xl font-bold capitalize ${
+                    fwdData.curveShape === "contango" ? "text-blue-400" :
+                    fwdData.curveShape === "backwardation" ? "text-red-400" : "text-muted-foreground"
+                  }`}>
+                    {fwdData.curveShape}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    {fwdData.curveSteepness > 0 ? "+" : ""}{fwdData.curveSteepness.toFixed(2)} $/MMBtu (5Y slope)
+                  </p>
+                </CardContent>
+              </Card>
+              <Card className="bg-card border-border">
+                <CardContent className="pt-3 pb-3">
+                  <p className="text-xs text-muted-foreground">{node} Fwd Spark (HR {heatRate})</p>
+                  {(() => {
+                    const fwdSpark = fwdData.forwardStrip[0]?.sparkBase;
+                    return (
+                      <p className={`text-xl font-bold ${fwdSpark == null ? "text-muted-foreground" : fwdSpark > 10 ? "text-green-400" : fwdSpark < 0 ? "text-red-400" : "text-amber-400"}`}>
+                        {fwdSpark != null ? `$${fwdSpark.toFixed(1)}` : "—"}
+                        <span className="text-xs font-normal text-muted-foreground ml-1">/MWh</span>
+                      </p>
+                    );
+                  })()}
+                </CardContent>
+              </Card>
+            </div>
+          )}
+
+          {/* Main chart: historical spot + forward strip overlay */}
+          <Card className="bg-card border-border">
+            <CardHeader>
+              <CardTitle className="text-base">Henry Hub: Historical Spot vs Forward Strip</CardTitle>
+              <CardDescription>
+                Last 30 months of realized spot prices overlaid with the current 5-year forward strip.
+                Contango = back months priced above prompt; backwardation = market expects supply relief.
+                {fwdData && (
+                  <span className="ml-2">
+                    Data: {Object.entries(fwdData.sourceCounts).map(([src, n]) => (
+                      <span key={src} className={`ml-1 text-[10px] px-1 rounded ${src === "model" ? "bg-slate-700 text-slate-400" : "bg-teal-900 text-teal-300"}`}>
+                        {src === "eia_steo" ? "EIA STEO" : src === "fred" ? "FRED" : "model"} {n}mo
+                      </span>
+                    ))}
+                    {(fwdData.sourceCounts["model"] ?? 0) > 0 && (
+                      <span className="ml-1 text-[10px] text-muted-foreground">
+                        (model months: seasonal NYMEX shape + EIA AEO $3.50 mean-reversion)
+                      </span>
+                    )}
+                  </span>
+                )}
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {fwdLoading ? (
+                <div className="flex justify-center py-16"><Loader2 className="h-8 w-8 animate-spin text-teal-400" /></div>
+              ) : fwdData ? (() => {
+                // Merge historical + forward into single timeline
+                const histData = fwdData.historicalSpot.map(r => ({
+                  label: r.label,
+                  spot: r.spotPrice,
+                  forward: undefined as number | undefined,
+                }));
+                const fwdChartData = fwdData.forwardStrip.map(r => ({
+                  label: r.label,
+                  spot: undefined as number | undefined,
+                  forward: r.forwardPrice,
+                }));
+                // Stitch: last hist point shared as first forward point for visual continuity
+                const stitchPrice = fwdData.historicalSpot.at(-1)?.spotPrice;
+                const stitchLabel = fwdData.historicalSpot.at(-1)?.label ?? "";
+                const allData = [
+                  ...histData,
+                  // bridge point connecting the two series
+                  { label: stitchLabel, spot: stitchPrice, forward: stitchPrice },
+                  ...fwdChartData,
+                ];
+                return (
+                  <ResponsiveContainer width="100%" height={340}>
+                    <ComposedChart data={allData} margin={{ top: 5, right: 20, bottom: 5, left: 0 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                      <XAxis dataKey="label" tick={{ fontSize: 9, fill: "#64748b" }} interval={3} angle={-30} textAnchor="end" height={40} />
+                      <YAxis tick={{ fontSize: 11, fill: "#64748b" }} tickFormatter={v => `$${v}`} domain={["auto","auto"]} />
+                      <RechartsTooltip content={<CustomTooltip unit="/MMBtu" />} />
+                      <Legend />
+                      <Line dataKey="spot"    name="HH Spot (historical)" stroke={C.teal}  dot={false} strokeWidth={2} connectNulls />
+                      <Line dataKey="forward" name="HH Forward Strip"     stroke={C.amber} dot={false} strokeWidth={2} strokeDasharray="6 3" connectNulls />
+                      {/* Reference line at $3.50 LT equilibrium */}
+                      <ReferenceLine y={3.50} stroke="#64748b" strokeDasharray="4 4" label={{ value: "$3.50 LT avg", position: "right", fontSize: 9, fill: "#64748b" }} />
+                    </ComposedChart>
+                  </ResponsiveContainer>
+                );
+              })() : (
+                <p className="text-muted-foreground text-sm py-8 text-center">
+                  No forward curve data. Run{" "}
+                  <code className="font-mono bg-muted px-1 rounded">pnpm --filter @workspace/scripts run seed-gas-forwards</code>
+                  {" "}to seed the strip.
+                </p>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Forward spark spread with sensitivity */}
+          <Card className="bg-card border-border">
+            <CardHeader>
+              <CardTitle className="text-base">Forward Spark Spread Sensitivity — {node} (HR {heatRate})</CardTitle>
+              <CardDescription>
+                Implied spark spread = {node} power price − (gas price × {heatRate} heat rate).
+                Power proxy = trailing 3-month average DA price. Sensitivity shows ±$1/MMBtu gas shock.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {fwdLoading ? (
+                <div className="flex justify-center py-12"><Loader2 className="h-6 w-6 animate-spin text-teal-400" /></div>
+              ) : fwdData?.forwardStrip.length ? (
+                <ResponsiveContainer width="100%" height={280}>
+                  <ComposedChart data={fwdData.forwardStrip} margin={{ top: 5, right: 20, bottom: 5, left: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                    <XAxis dataKey="label" tick={{ fontSize: 9, fill: "#64748b" }} interval={3} angle={-30} textAnchor="end" height={40} />
+                    <YAxis tick={{ fontSize: 11, fill: "#64748b" }} tickFormatter={v => `$${v}`} />
+                    <RechartsTooltip content={<CustomTooltip unit="/MWh" />} />
+                    <Legend />
+                    <ReferenceLine y={0} stroke="#ef4444" strokeDasharray="3 3" />
+                    <Line dataKey="sparkHigh" name="Gas −$1 (bull)"  stroke={C.green}  dot={false} strokeWidth={1.5} strokeDasharray="4 2" connectNulls />
+                    <Line dataKey="sparkBase" name="Base case"       stroke={C.teal}   dot={false} strokeWidth={2} connectNulls />
+                    <Line dataKey="sparkLow"  name="Gas +$1 (bear)"  stroke={C.red}    dot={false} strokeWidth={1.5} strokeDasharray="4 2" connectNulls />
+                  </ComposedChart>
+                </ResponsiveContainer>
+              ) : (
+                <p className="text-muted-foreground text-sm text-center py-8">No data</p>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Forward strip table */}
+          <Card className="bg-card border-border">
+            <CardHeader>
+              <CardTitle className="text-base">Forward Strip Detail — Monthly Settlements</CardTitle>
+              <CardDescription>
+                NYMEX Henry Hub model strip. Settle price and implied {node} spark spread at HR {heatRate}.
+                Power proxy = trailing 3-month average {node} DA price
+                {fwdData?.avgPowerFwd ? ` ($${fwdData.avgPowerFwd.toFixed(2)}/MWh)` : ""}.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="overflow-x-auto max-h-72 overflow-y-auto">
+                <table className="w-full text-xs">
+                  <thead className="sticky top-0 bg-card">
+                    <tr className="border-b border-border text-muted-foreground">
+                      <th className="text-left py-2 pr-3">Month</th>
+                      <th className="text-right py-2 pr-3">HH Settle</th>
+                      <th className="text-right py-2 pr-3">Gas −$1</th>
+                      <th className="text-right py-2 pr-3">Base Spark</th>
+                      <th className="text-right py-2">Gas +$1</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(fwdData?.forwardStrip ?? []).map((r, i) => (
+                      <tr key={i} className="border-b border-border/30 hover:bg-muted/20">
+                        <td className="py-1 pr-3 font-mono">{r.label}</td>
+                        <td className="py-1 pr-3 text-right text-amber-400">${r.forwardPrice.toFixed(3)}</td>
+                        <td className={`py-1 pr-3 text-right ${r.sparkHigh != null && r.sparkHigh > 0 ? "text-green-400" : "text-red-400"}`}>
+                          {r.sparkHigh != null ? `$${r.sparkHigh.toFixed(1)}` : "—"}
+                        </td>
+                        <td className={`py-1 pr-3 text-right font-semibold ${r.sparkBase == null ? "" : r.sparkBase > 10 ? "text-green-400" : r.sparkBase < 0 ? "text-red-400" : "text-amber-400"}`}>
+                          {r.sparkBase != null ? `$${r.sparkBase.toFixed(1)}` : "—"}
+                        </td>
+                        <td className={`py-1 text-right ${r.sparkLow != null && r.sparkLow > 0 ? "text-amber-400" : "text-red-400"}`}>
+                          {r.sparkLow != null ? `$${r.sparkLow.toFixed(1)}` : "—"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Methodology note */}
+          <Card className="bg-card border-border border-blue-500/20">
+            <CardHeader><CardTitle className="text-sm text-blue-400">Methodology & PPA Deal Team Guidance</CardTitle></CardHeader>
+            <CardContent>
+              <div className="grid md:grid-cols-2 gap-4 text-xs text-muted-foreground">
+                <div className="space-y-2">
+                  <p><strong className="text-foreground">Forward Strip Construction</strong></p>
+                  <p>The seeder fetches real data in priority order: (1) EIA Short-Term Energy Outlook
+                  (STEO) monthly Henry Hub forecast (~24 months, same API key as electricity data);
+                  (2) FRED DHHFXED forward price series. Months not covered by real data use a
+                  calibrated model extension: seasonal NYMEX shape from 2020–2025 settlement patterns
+                  + mean reversion toward EIA AEO $3.50/MMBtu long-run reference.
+                  Badges in the chart header show how many months come from each source.
+                  Run <code className="bg-muted px-1 rounded">seed-gas-forwards</code> to refresh.</p>
+                  <p><strong className="text-foreground">Spark Spread Interpretation</strong></p>
+                  <p>Spark spread {">"} $10/MWh = gas plants profitable → power prices may compress.
+                  Spark spread {"<"} $0 = gas plants uneconomic → renewable generation dominant.</p>
+                </div>
+                <div className="space-y-2">
+                  <p><strong className="text-foreground">VPPA Pricing Implications</strong></p>
+                  <p>A 10-year VPPA fixed price must be above the projected settlement price (DA LMP at
+                  delivery node) to be in-the-money for Walmart. If the forward curve implies sustained
+                  low spark spreads (gas surplus / renewable penetration), merchant power prices may
+                  stay depressed — reducing PPA counterparty risk but also reducing the hedge value.</p>
+                  <p><strong className="text-foreground">High Implied Heat Rate Signal</strong></p>
+                  <p>Current 10–14 implied HRs signal scarcity pricing. If the forward strip shows
+                  gas prices rising (contango), that scarcity is expected to persist — supporting higher
+                  PPA floor prices and stronger counterparty creditworthiness.</p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
         </TabsContent>
       </Tabs>
     </div>
