@@ -3,7 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
-import { Loader2, Zap, Network, TrendingUp, Info, Calendar, Settings2 } from "lucide-react";
+import { Loader2, Zap, Network, TrendingUp, Info, Calendar, Settings2, BookOpen, Target, FlaskConical } from "lucide-react";
 import { useState, useMemo, useEffect } from "react";
 import { MapContainer, TileLayer, CircleMarker, Polyline, Tooltip, useMap } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
@@ -257,6 +257,83 @@ export default function PypsaNetwork() {
           </Badge>
           <Badge variant="outline" className="border-amber-500/40 text-amber-400 text-xs">DC OPF</Badge>
         </div>
+      </div>
+
+      {/* Explainer panel */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <Card className="bg-card border-border">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm flex items-center gap-1.5">
+              <BookOpen className="h-4 w-4 text-amber-400" />
+              What This Tool Does
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="text-xs text-muted-foreground space-y-2">
+            <p>
+              Runs a <span className="text-foreground font-medium">340-bus ERCOT DC Optimal Power Flow</span> using real
+              transmission topology from ERCOT CDR 10008 (345kV backbone) and generator parameters from EIA 860. Solved
+              via HiGHS LP in ~0.3 seconds per scenario.
+            </p>
+            <p>
+              Outputs <span className="text-foreground font-medium">nodal LMPs</span> at every bus (colour-coded on the map),
+              line flow and loading % on each corridor, congestion rent ($k/hr), and a generation dispatch breakdown by fuel
+              type. The map lets you visually trace congestion from cheap generation zones to expensive load centres.
+            </p>
+            <p>
+              Toggle <span className="text-foreground font-medium">Historical mode</span> to replay real monthly ERCOT average
+              conditions (Jan 2024–Dec 2025) rather than running a synthetic scenario.
+            </p>
+          </CardContent>
+        </Card>
+
+        <Card className="bg-card border-border">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm flex items-center gap-1.5">
+              <Target className="h-4 w-4 text-teal-400" />
+              Use Cases
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="text-xs text-muted-foreground space-y-2">
+            <ul className="space-y-1.5 list-none">
+              {[
+                ["Developer / Siting", "Which transmission corridors are binding limits for a West Texas wind project? → Increase wind CF slider → watch CREZ line loading turn red."],
+                ["IPP", "What is the LMP spread between my generation bus and the load-centre hub? → Inspect bus colour: teal = cheap gen zone, red = congested load zone."],
+                ["PE / Due Diligence", "How does new solar capacity on the Panhandle affect CREZ corridor loading? → Raise solar CF → congestion rent column in the line table."],
+                ["Investor", "Is transmission the binding constraint limiting PPA value in my target zone? → Compare bus LMP to hub DA price from the Nodal Analysis tab."],
+              ].map(([role, a]) => (
+                <li key={role} className="border-l-2 border-amber-500/30 pl-2">
+                  <p className="text-foreground font-medium leading-tight">{role}</p>
+                  <p className="text-muted-foreground mt-0.5">{a}</p>
+                </li>
+              ))}
+            </ul>
+          </CardContent>
+        </Card>
+
+        <Card className="bg-card border-border">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm flex items-center gap-1.5">
+              <FlaskConical className="h-4 w-4 text-purple-400" />
+              Key Assumptions
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="text-xs text-muted-foreground space-y-1.5">
+            {[
+              ["Power flow model", "DC OPF (linearised). No reactive power, voltage magnitudes, or N-1 security constraints."],
+              ["Topology", "340 real ERCOT 345kV buses from CDR 10008 bus mapping; 1,807 line corridors with real thermal limits."],
+              ["Bus locations", "804 resource nodes with exact geo-coordinates from CDR 10008; remaining 15 mapped to zone centroids."],
+              ["Generator dispatch", "Merit-order by marginal cost (HH × heat rate + $2/MWh VOM). Wind/solar dispatched at CF up to p_nom."],
+              ["Shift factors", "DC PTDF-derived B-matrix; 340 buses mapped to 5 EIA sub-BA zones (EAST has no buses in the 345kV model)."],
+              ["Solver", "HiGHS LP, typically 2,000–3,000 simplex iterations. Solve time ~0.2s (Tier-2) or ~0.05s (Tier-1)."],
+              ["Historical mode", "Uses real monthly DA averages from ercot_hub_hourly (CDR 13060/13061) — not re-solving OPF with actuals."],
+            ].map(([k, v]) => (
+              <div key={k}>
+                <span className="text-foreground font-medium">{k}: </span>
+                <span>{v}</span>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
       </div>
 
       {/* Mode toggle + controls */}

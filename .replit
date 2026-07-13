@@ -9,24 +9,6 @@ args = ["pnpm", "store", "prune"]
 env = { "CI" = "true" }
 
 [workflows]
-runButton = "Project"
-
-[[workflows.workflow]]
-name = "Project"
-mode = "parallel"
-author = "agent"
-
-[[workflows.workflow.tasks]]
-task = "workflow.run"
-args = "artifacts/pypsa-engine: PyPSA Engine"
-
-[[workflows.workflow]]
-name = "artifacts/pypsa-engine: PyPSA Engine"
-author = "agent"
-
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "cd artifacts/pypsa-engine && PORT=8083 .venv/bin/python main.py"
 
 [agent]
 stack = "PNPM_WORKSPACE"

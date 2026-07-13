@@ -162,7 +162,7 @@ export default function PypsaBattery() {
           <CardHeader className="pb-2">
             <CardTitle className="text-sm flex items-center gap-1.5">
               <Target className="h-4 w-4 text-amber-400" />
-              Use Cases for Walmart Energy
+              Use Cases
             </CardTitle>
           </CardHeader>
           <CardContent className="text-xs text-muted-foreground space-y-2">

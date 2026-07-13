@@ -7,8 +7,9 @@ import {
 } from "recharts";
 import {
   TrendingUp, TrendingDown, Minus, DollarSign, AlertCircle, Loader2,
-  ChevronDown, ChevronUp, Leaf, Zap, Shield, Calculator,
+  ChevronDown, ChevronUp, Leaf, Zap, Shield, Calculator, BookOpen, Target, FlaskConical,
 } from "lucide-react";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 // ─── CAPEX benchmarks (NREL ATB 2024 · EIA AEO 2024 · Lazard v17 · BNEF 1H2024) ───
 
@@ -456,6 +457,85 @@ export default function PpaCalculator() {
           All 8 ranking dimensions feed the model — basis, curtailment, shape, availability, and REC revenue
           are editable for stress testing; market price spread auto-derives from the financial quality score.
         </p>
+      </div>
+
+      {/* Explainer panel */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <Card className="bg-slate-800/50 border-slate-700/50">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm flex items-center gap-1.5 text-white">
+              <BookOpen className="h-4 w-4 text-teal-400" />
+              What This Tool Does
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="text-xs text-slate-400 space-y-2">
+            <p>
+              Builds a <span className="text-slate-200 font-medium">Virtual PPA / VPPA NPV model</span> with
+              P10/P50/P90 scenario distributions. Select any of the 3,875 EIA 860 candidates — all 8 risk dimension
+              scores from the Rankings engine auto-populate as financial adjustments (basis, curtailment, capture
+              price, shape, REC revenue).
+            </p>
+            <p>
+              The <span className="text-slate-200 font-medium">real Henry Hub gas forward strip</span> (from FRED
+              DHHNGSP) powers a synthetic power price benchmark for comparison against your PPA strike. A full
+              annual cashflow waterfall breaks out every revenue and cost line over the contract term.
+            </p>
+            <p>
+              The <span className="text-slate-200 font-medium">Project Development Cost Reference</span> section
+              below provides NREL ATB 2024 benchmarks (CAPEX, O&amp;M, land, interconnection) for all major
+              technology types to anchor project cost assumptions.
+            </p>
+          </CardContent>
+        </Card>
+
+        <Card className="bg-slate-800/50 border-slate-700/50">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm flex items-center gap-1.5 text-white">
+              <Target className="h-4 w-4 text-amber-400" />
+              Use Cases
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="text-xs text-slate-400 space-y-2">
+            <ul className="space-y-1.5 list-none">
+              {[
+                ["Developer", "At what PPA strike price does a 200 MW West Texas wind project generate a positive P50 NPV? → Select project, set WACC and term, sweep strike slider."],
+                ["PE / Underwriter", "What is the P10/P90 NPV spread — how wide is the distribution? → High spread indicates high curtailment or basis uncertainty in that zone."],
+                ["Investor / LP", "Which project among three ERCOT solar candidates offers the best risk-adjusted NPV? → Run NPV on each with the same WACC and compare P50."],
+                ["Originator", "What ITC vs PTC election maximises project NPV? → Toggle between solar (ITC 30%+10% DC) and wind (PTC $27.50/MWh × 10yr) — tax credit KPIs auto-update."],
+              ].map(([role, a]) => (
+                <li key={role} className="border-l-2 border-teal-500/30 pl-2">
+                  <p className="text-slate-200 font-medium leading-tight">{role}</p>
+                  <p className="text-slate-400 mt-0.5">{a}</p>
+                </li>
+              ))}
+            </ul>
+          </CardContent>
+        </Card>
+
+        <Card className="bg-slate-800/50 border-slate-700/50">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm flex items-center gap-1.5 text-white">
+              <FlaskConical className="h-4 w-4 text-purple-400" />
+              Key Assumptions
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="text-xs text-slate-400 space-y-1.5">
+            {[
+              ["Contract structure", "VPPA: buyer pays fixed strike, receives floating hub DA settlement. Net cashflow = (DA − strike) × MWh."],
+              ["Capture price", "CDR hub DA monthly averages × technology timing ratio (solar=0.724, wind=1.010, storage=1.797 for ERCOT) from ercot_hub_hourly."],
+              ["P10/P50/P90", "Monte Carlo over price volatility, curtailment uncertainty, and basis risk. P10 = adverse 10th percentile; P90 = favourable."],
+              ["Tax credits", "ITC: 30% base + 10% domestic content adder (solar, storage). PTC: $27.50/MWh base (2024) × 10yr for qualifying wind."],
+              ["WACC", "Project-level real WACC (equity/debt blended). Nominal cashflows discounted at real WACC + inflation."],
+              ["Gas forward", "Henry Hub daily spot from FRED DHHNGSP × 8.5 MMBtu/MWh heat rate → synthetic power price benchmark."],
+              ["Score linkage", "All 8 dimension scores from Rankings feed directly: curtailment adj → output haircut; basis adj → price haircut; etc."],
+            ].map(([k, v]) => (
+              <div key={k}>
+                <span className="text-slate-200 font-medium">{k}: </span>
+                <span>{v}</span>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
       </div>
 
       {/* ── Forward curve banner ── */}

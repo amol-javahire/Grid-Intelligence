@@ -18,8 +18,9 @@ import { Progress } from "@/components/ui/progress";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   Loader2, Search, Download, Save, Trash2, ArrowUpDown,
-  Wind, Sun, Zap, Flame, Droplets, Atom, Leaf, Info,
+  Wind, Sun, Zap, Flame, Droplets, Atom, Leaf, Info, BookOpen, Target, FlaskConical,
 } from "lucide-react";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
 
 // ─── Investment objectives ────────────────────────────────────────────────────
@@ -348,6 +349,82 @@ export default function Rankings() {
             {activeObjective.desc}.{" "}
             ERCOT: real neg-price %, DA prices, and volatility from ercot_node_stats DB (52 months CDR). CAISO: real OASIS data. Queue depth by zone powers Interconnect Risk. Capture Price = hub DA × technology timing ratio. Mkt Revenue = MW × CF × capture price × 8,760h. RECs/Yr = annual MWh × market REC price.
           </span>
+        </div>
+
+        {/* Explainer panel */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 shrink-0">
+          <Card className="bg-card border-border">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm flex items-center gap-1.5">
+                <BookOpen className="h-4 w-4 text-teal-400" />
+                What This Tool Does
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="text-xs text-muted-foreground space-y-2">
+              <p>
+                Scores all <span className="text-foreground font-medium">3,875 EIA 860 2024 operating plants</span> across
+                ERCOT, CAISO, and PJM on 8 real-data dimensions drawn from actual market databases — not synthetic estimates.
+              </p>
+              <p>
+                Six pre-built <span className="text-foreground font-medium">investment objective weight sets</span> instantly
+                rerank the universe to match your mandate: risk-adjusted value, lowest LCOE, corporate load hedge,
+                decarbonisation, capacity value, or merchant/developer upside.
+              </p>
+              <p>
+                Filter by ISO, technology, and location, then export to CSV or save the screening for future reference. Click
+                any row to open the NPV Calculator pre-loaded with that project's scores.
+              </p>
+            </CardContent>
+          </Card>
+
+          <Card className="bg-card border-border">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm flex items-center gap-1.5">
+                <Target className="h-4 w-4 text-amber-400" />
+                Use Cases
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="text-xs text-muted-foreground space-y-2">
+              <ul className="space-y-1.5 list-none">
+                {[
+                  ["Developer / Originator", "Which ERCOT wind projects have the lowest curtailment and congestion combined? → Select Risk-Adjusted objective, filter ISO=ERCOT + Wind."],
+                  ["PE / Fund Manager", "Which CAISO solar projects offer the best capture price and lowest basis risk? → Lowest LCOE objective, filter ISO=CAISO + Solar."],
+                  ["IPP", "What is the queue depth in my target zone and how does it affect interconnect scores? → Filter zone, sort by Congestion dimension."],
+                  ["Investor / Analyst", "Which projects combine high REC production with low curtailment for an ESG mandate? → Decarbonisation objective, filter by RECs/Yr score."],
+                ].map(([role, a]) => (
+                  <li key={role} className="border-l-2 border-teal-500/30 pl-2">
+                    <p className="text-foreground font-medium leading-tight">{role}</p>
+                    <p className="text-muted-foreground mt-0.5">{a}</p>
+                  </li>
+                ))}
+              </ul>
+            </CardContent>
+          </Card>
+
+          <Card className="bg-card border-border">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm flex items-center gap-1.5">
+                <FlaskConical className="h-4 w-4 text-purple-400" />
+                Key Assumptions
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="text-xs text-muted-foreground space-y-1.5">
+              {[
+                ["Universe", "EIA 860 2024 operable generators >1 MW across ERCOT (ERCO), CAISO (CISO), and PJM balancing authorities."],
+                ["Curtailment", "Real neg-price % from ERCOT CDR 13060/13061 (28 months) and CAISO OASIS PRC_LMP. PJM from pjm_node_stats (<0.5% neg-price historically)."],
+                ["Congestion", "DA price basis vs hub from real monthly CDR/OASIS data. Queue assignment: haversine nearest-neighbour from EIA plant to queue project."],
+                ["Capture price", "CDR hub DA monthly averages × technology timing ratio (solar diurnal, wind nocturnal, storage spread)."],
+                ["Interconnect risk", "Real queue depth (MW of competing projects) in EIA sub-BA zone from ERCOT GIS Report + CAISO public ISO data."],
+                ["RECs/Yr", "Annual MWh (nameplate × CF) × regional REC market price ($3–7/MWh ERCOT, $10–15/MWh CAISO)."],
+                ["Scores", "0–100 per dimension (100 = best). Composite = weighted sum by active objective. Weights shown in objective badge."],
+              ].map(([k, v]) => (
+                <div key={k}>
+                  <span className="text-foreground font-medium">{k}: </span>
+                  <span>{v}</span>
+                </div>
+              ))}
+            </CardContent>
+          </Card>
         </div>
 
         {/* Filters + stats */}

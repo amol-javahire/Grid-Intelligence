@@ -2,14 +2,14 @@ import { useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   Flame, Zap, Wind, Sun, Battery, AlertTriangle, TrendingDown,
-  Info, BarChart3, Settings2, Activity,
+  Info, BarChart3, Settings2, Activity, BookOpen, Target, FlaskConical,
 } from "lucide-react";
 import {
   ComposedChart, Area, Line, Bar, XAxis, YAxis, CartesianGrid,
   Tooltip, Legend, ResponsiveContainer, ReferenceLine, Cell,
   BarChart, PieChart, Pie,
 } from "recharts";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Slider } from "@/components/ui/slider";
 import { Badge } from "@/components/ui/badge";
 
@@ -294,6 +294,83 @@ export default function GeneratorsPage() {
           <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
           {meritData?.units.length ?? 0} thermal units · {Math.round((meritData?.total_thermal_mw ?? 0) / 1000)} GW available
         </div>
+      </div>
+
+      {/* Explainer panel */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <Card className="bg-slate-800/50 border-slate-700/50">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm flex items-center gap-1.5 text-slate-100">
+              <BookOpen className="h-4 w-4 text-orange-400" />
+              What This Tool Does
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="text-xs text-slate-400 space-y-2">
+            <p>
+              Visualises the <span className="text-slate-200 font-medium">ERCOT thermal merit-order dispatch stack</span> using
+              real heat rates and capacities from EIA Form 860 (2024) and EIA 923. Drag the system load slider to see which
+              units are dispatched at any net demand level and what the marginal clearing price is.
+            </p>
+            <p>
+              Covers 31 ERCOT thermal plants across CCGT, combustion turbine, and steam technologies.
+              The <span className="text-slate-200 font-medium">gas price slider</span> adjusts every unit's marginal cost
+              in real time, showing how fuel shocks shift the dispatch order and spark spreads.
+            </p>
+            <p>
+              Browse by fuel type (Gas, Wind, Solar, Storage, Nuclear, Hydro, Biomass) to explore technology economics,
+              capacity factors, and CO₂ intensity across the full EIA 860 fleet.
+            </p>
+          </CardContent>
+        </Card>
+
+        <Card className="bg-slate-800/50 border-slate-700/50">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm flex items-center gap-1.5 text-slate-100">
+              <Target className="h-4 w-4 text-amber-400" />
+              Use Cases
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="text-xs text-slate-400 space-y-2">
+            <ul className="space-y-1.5 list-none">
+              {[
+                ["Trader / Analyst", "What is the clearing price at 22 GW net load with $5 gas? → Drag both sliders — read clearing price KPI and marginal unit name."],
+                ["Developer / New Entrant", "Which retiring steam plants create headroom for new capacity? → Identify high-HR steam units at the top of the merit stack."],
+                ["IPP", "Where does a new 800 MW CCGT sit in the merit order vs the existing fleet? → Match its heat rate to the stack to see when it would be marginal."],
+                ["PE / Credit Analyst", "What are real EIA-reported heat rates and CO₂ rates for ERCOT thermal benchmark plants? → Browse the plant detail table."],
+              ].map(([role, a]) => (
+                <li key={role} className="border-l-2 border-orange-500/30 pl-2">
+                  <p className="text-slate-200 font-medium leading-tight">{role}</p>
+                  <p className="text-slate-400 mt-0.5">{a}</p>
+                </li>
+              ))}
+            </ul>
+          </CardContent>
+        </Card>
+
+        <Card className="bg-slate-800/50 border-slate-700/50">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm flex items-center gap-1.5 text-slate-100">
+              <FlaskConical className="h-4 w-4 text-purple-400" />
+              Key Assumptions
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="text-xs text-slate-400 space-y-1.5">
+            {[
+              ["Fleet", "31 real ERCOT thermal plants from EIA 860 (2024) — CCGT, CT, steam. Real design heat rates from EIA 923."],
+              ["Demand slider", "Net thermal load = total system demand minus variable renewable (wind + solar) output at selected CF."],
+              ["Dispatch model", "Pure merit-order (economic dispatch). No unit commitment, ramp constraints, or minimum run times."],
+              ["Marginal cost", "MC = HH price × design heat rate + $2/MWh VOM. Start-up costs shown separately but not in dispatch."],
+              ["Wind / Solar", "Zero marginal cost must-run in merit-order model. Output = nameplate × CF slider (wind 0–75%, solar 0–50%)."],
+              ["Coal at risk", "Steam / lignite units with heat rates >12 MMBtu/MWh are flagged — most are uneconomic vs CCGT at >$3 gas."],
+              ["CO₂ rate", "From EIA 923 reported emissions ÷ net generation (lbs/MWh), converted to short tons/MWh."],
+            ].map(([k, v]) => (
+              <div key={k}>
+                <span className="text-slate-200 font-medium">{k}: </span>
+                <span>{v}</span>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
       </div>
 
       {/* KPI Row */}
