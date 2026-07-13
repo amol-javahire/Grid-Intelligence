@@ -71,7 +71,6 @@ const sidebarEntries: NavEntry[] = [
       items: [
         { title: "OPF Network",     href: "/pypsa-network",     icon: Zap },
         { title: "ML Model",        href: "/pypsa-ml",          icon: Brain },
-        { title: "Hourly Data",     href: "/pypsa-hourly",      icon: Clock },
         { title: "Curtailment Sim", href: "/pypsa-curtailment", icon: Wind },
         { title: "TX Relief Sim",   href: "/pypsa-tx-relief",   icon: GitBranch },
         { title: "Scarcity Sim",    href: "/pypsa-scarcity",    icon: Flame },

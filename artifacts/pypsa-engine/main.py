@@ -103,6 +103,7 @@ class OPFRequest(BaseModel):
     wind_cf: float              = 0.35
     solar_cf: float             = 0.22
     gas_price_mmbtu: float      = 3.50
+    gas_derate_pct: float       = 0.0    # % of gas capacity offline (outages/derating)
     simulation_datetime: str | None = None   # ISO8601 e.g. "2024-08-20T15:00:00"
 
 
@@ -115,6 +116,7 @@ def run_opf(req: OPFRequest):
             wind_cf=req.wind_cf,
             solar_cf=req.solar_cf,
             gas_price_mmbtu=req.gas_price_mmbtu,
+            gas_derate_pct=req.gas_derate_pct,
             simulation_datetime=req.simulation_datetime,
         )
         if "error" in result:

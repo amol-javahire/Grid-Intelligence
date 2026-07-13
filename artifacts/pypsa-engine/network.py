@@ -590,6 +590,7 @@ def run_opf(
     wind_cf: float = 0.35,
     solar_cf: float = 0.22,
     gas_price_mmbtu: float = 3.50,
+    gas_derate_pct: float = 0.0,
     simulation_datetime: str | None = None,
 ) -> dict[str, Any]:
     """Run DC OPF. If simulation_datetime (ISO8601) is provided, real hourly
@@ -632,6 +633,7 @@ def run_opf(
     n = build_network(
         system_load_mw, wind_cf, solar_cf, gas_price_mmbtu,
         zone_loads=actual_zone_loads,
+        gas_derate_pct=gas_derate_pct,
     )
 
     try:

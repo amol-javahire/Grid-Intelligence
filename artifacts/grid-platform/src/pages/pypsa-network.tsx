@@ -125,11 +125,12 @@ const CARRIER_COLORS: Record<string, string> = {
 
 // ── Main page ─────────────────────────────────────────────────────────────────
 export default function PypsaNetwork() {
-  const [windCf,   setWindCf]   = useState(55);
-  const [solarCf,  setSolarCf]  = useState(25);
-  const [gasPrice, setGasPrice] = useState(350);
-  const [loadMw,   setLoadMw]   = useState(55000);
-  const [dirty,    setDirty]    = useState(false);
+  const [windCf,    setWindCf]    = useState(55);
+  const [solarCf,   setSolarCf]   = useState(25);
+  const [gasPrice,  setGasPrice]  = useState(350);
+  const [loadMw,    setLoadMw]    = useState(55000);
+  const [gasDerate, setGasDerate] = useState(0);
+  const [dirty,     setDirty]     = useState(false);
   const [selectedBus, setSelectedBus] = useState<OPFBus | null>(null);
 
   // Historical mode
@@ -345,8 +346,8 @@ export default function PypsaNetwork() {
               </div>
             </div>
           ) : (
-            /* Scenario mode: 4 sliders */
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
+            /* Scenario mode: 5 sliders */
+            <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-6">
               <div>
                 <div className="flex justify-between text-xs mb-1">
                   <span className="text-muted-foreground">System Load</span>
@@ -379,6 +380,14 @@ export default function PypsaNetwork() {
                 <Slider min={50} max={1300} step={25} value={[gasPrice]}
                   onValueChange={([v]) => { setGasPrice(v); setDirty(true); }} />
               </div>
+              <div>
+                <div className="flex justify-between text-xs mb-1">
+                  <span className="text-muted-foreground">Gas Fleet Outage</span>
+                  <span className="font-mono text-rose-400">{gasDerate}%</span>
+                </div>
+                <Slider min={0} max={30} step={1} value={[gasDerate]}
+                  onValueChange={([v]) => { setGasDerate(v); setDirty(true); }} />
+              </div>
             </div>
           )}
 
@@ -387,9 +396,10 @@ export default function PypsaNetwork() {
               <Info className="h-3.5 w-3.5 text-slate-400 shrink-0 mt-0.5" />
               <span>
                 <span className="text-slate-300 font-medium">How LMPs respond to sliders: </span>
-                <span className="text-orange-400 font-medium">Gas Price</span> is the primary avg LMP driver — it shifts all gas generator marginal costs and is directly visible in the "Gas Ref MC" card.{" "}
-                <span className="text-teal-400 font-medium">Wind/Solar CF</span> affects dispatch mix and LMP spread (congestion) but not the system average when gas is still the marginal unit.{" "}
-                <span className="text-sky-400 font-medium">System Load</span> drives congestion at high levels (≥75 GW) and pushes peakers into dispatch at $499/MWh.
+                <span className="text-orange-400 font-medium">Gas Price</span> is the primary avg LMP driver.{" "}
+                <span className="text-teal-400 font-medium">Wind/Solar CF</span> affects LMP spread (congestion) but not the system average when gas is still marginal.{" "}
+                <span className="text-sky-400 font-medium">System Load</span> drives congestion at ≥75 GW and pushes peakers to $499/MWh.{" "}
+                <span className="text-rose-400 font-medium">Gas Fleet Outage</span> derate removes % of gas CC/CT capacity — simulates unplanned outages or summer heat derating; forces peakers earlier.
               </span>
             </div>
           )}
@@ -404,9 +414,10 @@ export default function PypsaNetwork() {
                 onClick={() => {
                   opfMut.mutate({
                     gas_price_mmbtu: gasPrice / 100,
-                    system_load_mw: loadMw,
-                    wind_cf:        windCf  / 100,
-                    solar_cf:       solarCf / 100,
+                    system_load_mw:  loadMw,
+                    wind_cf:         windCf   / 100,
+                    solar_cf:        solarCf  / 100,
+                    gas_derate_pct:  gasDerate,
                   });
                   setDirty(false);
                 }}>
