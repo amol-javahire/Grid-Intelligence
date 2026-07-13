@@ -417,7 +417,7 @@ export default function ErcotDispatch() {
   const { data: status } = useQuery<SeedStatus>({
     queryKey: ["ercot-dispatch-seed-status"],
     queryFn:  () => apiFetch("/api/ercot/dispatch/seed-status"),
-    refetchInterval: 30_000,
+    staleTime: 60 * 60_000,
   });
 
   const { data: dates } = useQuery<string[]>({
