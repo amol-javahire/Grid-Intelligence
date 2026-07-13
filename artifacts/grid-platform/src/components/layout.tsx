@@ -6,7 +6,7 @@ import {
   TerminalSquare, GitBranch, BookOpen, Leaf, Cpu, Flame,
   MapPin, FlaskConical, ShieldCheck, BookMarked, ChevronDown,
   Brain, Clock, Network, Wind, Battery, Thermometer, Calculator,
-  Scale, Factory, TrendingUp,
+  Scale, Factory, TrendingUp, Sigma,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -33,6 +33,7 @@ const sidebarEntries: NavEntry[] = [
   { title: "Map Workspace",        href: "/map",        icon: MapIcon },
   { title: "ERCOT Historical",     href: "/ercot",           icon: Activity },
   { title: "ERCOT Gas & Power",   href: "/ercot-gas",       icon: Flame },
+  { title: "Heat Rate Options",    href: "/heat-rate-options", icon: Sigma },
   { title: "ERCOT Dispatch / SCED", href: "/ercot-dispatch", icon: Zap },
   {
     group: {
