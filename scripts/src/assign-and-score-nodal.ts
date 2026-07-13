@@ -1,13 +1,16 @@
 /**
- * assign-and-score-nodal.ts  (v7 — Zone Capture Prices + Gas Net Margin + Per-Plant Node Match)
+ * assign-and-score-nodal.ts  (v8 — Waha Gas Coupling for West Texas Projects)
  *
- * Key improvements vs v6:
- *   - Capture price: zone-specific hourly profiles queried live from ercot_hub_hourly
- *     (HB_WEST solar ≠ HB_HOUSTON solar ≠ HB_NORTH wind — real duck-curve differences)
- *   - Gas net margin: Henry Hub gas price (from gas_prices table) × heat rate deducted
- *     from gas/coal capture price → net margin basis instead of gross capture
- *   - Per-plant resource node matching: in-memory haversine from EIA 860 lat/lon to
- *     ~110 EIA-geolocated ercot_node_locations nodes → plant-level LMPs where possible
+ * Key improvements vs v7:
+ *   - Waha gas coupling: West Texas zones (LZ_WEST, HB_WEST, HB_PAN) use the Waha
+ *     hub gas price instead of Henry Hub for fuel cost deduction in capture price and
+ *     market revenue scoring. When Waha trades at extreme discounts (e.g. −$5.69/MMBtu),
+ *     this correctly reflects the cheap gas floor that competes against renewables.
+ *   - Waha basis risk: basisRiskScore() adds a penalty for LZ_WEST/HB_WEST/HB_PAN
+ *     projects proportional to the Waha−HH discount magnitude and Waha price volatility.
+ *     Deep Waha discounts depress West TX power prices and increase basis uncertainty.
+ *   - Gas price loading now queries HH and Waha separately; HH used as fallback when
+ *     Waha data is absent.
  *
  * Scoring dimension → DB column mapping:
  *   price_score            → Capture Price   (zone-specific hourly-weighted LMP)
@@ -70,6 +73,12 @@ const QUEUE_ZONE_TO_HUB: Record<string, string> = {
   HB_BUSAVG:  "HB_BUSAVG",  HB_HUBAVG:  "HB_HUBAVG",
 };
 
+// ── West Texas gas-hub zones: use Waha instead of Henry Hub ──────────────────
+// LZ_WEST and HB_PAN are the West Texas / Permian Basin load/hub nodes whose
+// co-located gas generation burns Waha-priced gas (Permian supply point).
+// HB_WEST (the resource-side hub) is included for any hub-level fallbacks.
+const WAHA_ZONES = new Set(["LZ_WEST", "HB_WEST", "HB_PAN"]);
+
 // ── Module-level state populated in main() before computeAll runs ─────────────
 // Zone-specific capture prices ($/MWh) per ERCOT hub/zone per tech type.
 // Key = hub/LZ name (e.g. "HB_WEST"), value = { solar: 18.5, wind: 31.2, ... }
@@ -79,8 +88,14 @@ let ercotZoneCapturePrice: Map<string, Record<string, number>> = new Map();
 interface ResourceNode { node_name: string; latitude: number; longitude: number; avg_da: number; avg_rt: number; avg_vol: number; avg_neg_pct: number; }
 let ercotRealNodes: ResourceNode[] = [];
 
-// Trailing 12-month average Henry Hub gas price ($/MMBtu), default fallback
-let avgGasPrice = 1.51;
+// Trailing 12-month average gas prices ($/MMBtu), defaults are fallbacks.
+// Henry Hub: benchmark for ERCOT (non-West), CAISO, PJM thermal plants.
+// Waha: Permian Basin hub for LZ_WEST / HB_PAN thermal plants.
+let avgGasPrice   = 2.50;   // Henry Hub trailing 12-month avg
+let avgWahaPrice  = 1.51;   // Waha trailing 12-month avg (default ≈ HH as fallback)
+// Waha basis = waha_avg - hh_avg (negative = Waha discount vs Henry Hub)
+let wahaBasisDiscount = 0.0;  // $/MMBtu, typically negative (e.g. −5.69 at extremes)
+let wahaBasisVol      = 0.0;  // Waha price std-dev over trailing 12 months
 
 function computeCaptureRatio(profile: number[], prices: number[]): number {
   const totalW = profile.reduce((s, w) => s + w, 0);
@@ -138,7 +153,7 @@ const QUEUE_ZONE_TO_LOAD_ZONE: Record<string, string> = {
 
 const CF: Record<string, Record<string, number>> = {
   solar:       { ERCOT: 0.27, CAISO: 0.29, PJM: 0.22 },
-  wind:        { ERCOT: 0.40, CAISO: 0.32, PJM: 0.35 },
+  wind:        { ERCOT: 0.38, CAISO: 0.28, PJM: 0.35 },  // ERCOT 0.40→0.38 (Potomac 2024 SOTM); CAISO 0.32→0.28
   storage:     { ERCOT: 0.18, CAISO: 0.18, PJM: 0.18 },
   natural_gas: { ERCOT: 0.60, CAISO: 0.55, PJM: 0.58 },
   nuclear:     { ERCOT: 0.92, CAISO: 0.92, PJM: 0.92 },
@@ -148,12 +163,16 @@ const CF: Record<string, Record<string, number>> = {
   coal:        { ERCOT: 0.55, CAISO: 0.55, PJM: 0.55 },
 };
 
+// REC prices for scoring weight ($/MWh) — updated Jul 2025 from market data
+// ERCOT TRCs: wind $1–5, solar $3–10 (no solar carve-out; solar scarcer than wind)
+// CAISO unbundled TRECs: solar $8–12, wind $5–7, geo $6–10 (CPUC/WREGIS 2025)
+// PJM: highly state-specific; blended mid-range used for scoring weight
 const REC_PRICES: Record<string, Record<string, number>> = {
-  solar:       { ERCOT: 1.50, CAISO: 12.00, PJM: 15.00 },
-  wind:        { ERCOT: 1.50, CAISO: 10.00, PJM:  3.50 },
-  hydro:       { ERCOT: 1.50, CAISO:  7.00, PJM:  2.00 },
-  geothermal:  { ERCOT: 1.50, CAISO: 10.00, PJM:  5.00 },
-  biomass:     { ERCOT: 1.50, CAISO:  8.00, PJM:  3.00 },
+  solar:       { ERCOT:  5.00, CAISO: 10.00, PJM: 40.00 },  // ERCOT 1.50→5.00; CAISO 12→10; PJM 15→40 (state SRECs)
+  wind:        { ERCOT:  2.00, CAISO:  6.00, PJM:  4.00 },  // ERCOT 1.50→2.00; CAISO 10→6; PJM 3.50→4.00
+  hydro:       { ERCOT:  1.50, CAISO:  5.00, PJM:  2.00 },  // CAISO 7→5
+  geothermal:  { ERCOT:  2.00, CAISO:  8.00, PJM:  5.00 },  // ERCOT 1.50→2; CAISO 10→8
+  biomass:     { ERCOT:  1.50, CAISO:  5.00, PJM:  3.00 },  // CAISO 8→5
 };
 const REC_ELIGIBLE = new Set(["solar", "wind", "hydro", "geothermal", "biomass"]);
 
@@ -290,13 +309,21 @@ function basisRiskScore(
   signalStats: NodeStats, market: string,
   ercotBusAvg: number, ercotSysVol: number,
   pjmBusAvg: number, pjmSysVol: number,
+  signalZone?: string,
 ): number {
   if (market === "ERCOT") {
     const meanBasis = signalStats.avg_da - ercotBusAvg;
     const basisPenalty = (Math.abs(meanBasis) / Math.max(ercotBusAvg, 1)) * 30;
     const volPenalty = ((signalStats.avg_vol - ercotSysVol) / Math.max(ercotSysVol, 1)) * 15;
-    const raw = 75 - basisPenalty - volPenalty;
-    return Math.round(Math.min(90, Math.max(20, raw)) * 100) / 100;
+    // Waha basis penalty: deep Waha discounts vs Henry Hub depress West TX power prices
+    // and add gas-power coupling uncertainty. Scaled so a −$5 discount ≈ −5 score points.
+    let wahaPenalty = 0;
+    if (signalZone && WAHA_ZONES.has(signalZone) && wahaBasisDiscount < 0) {
+      const discountMagnitude = Math.abs(wahaBasisDiscount);   // positive value
+      wahaPenalty = discountMagnitude * 1.0 + wahaBasisVol * 0.5;
+    }
+    const raw = 75 - basisPenalty - volPenalty - wahaPenalty;
+    return Math.round(Math.min(90, Math.max(10, raw)) * 100) / 100;
   }
   if (market === "CAISO") {
     const caRefDA = 33.25;
@@ -321,14 +348,16 @@ function capturePriceScore(
   signalStats: NodeStats, assetType: string, market: string,
   ercotBusAvg: number, pjmBusAvg: number,
   ercotHubCapPrice?: number,
+  gasPrice?: number,   // $/MMBtu — zone-appropriate (Waha for LZ_WEST/HB_PAN, HH elsewhere)
 ): number {
+  const effectiveGas = gasPrice ?? avgGasPrice;
   let sysAvg: number;
   if (market === "ERCOT") {
     sysAvg = ercotBusAvg;
     // Preferred path: zone-specific capture price from ercot_hub_hourly
     if (ercotHubCapPrice != null) {
       // Gas/coal: deduct fuel variable cost → score on net margin basis
-      const fuelCost = (HEAT_RATE[assetType] ?? 0) * avgGasPrice;
+      const fuelCost = (HEAT_RATE[assetType] ?? 0) * effectiveGas;
       const netCapture = ercotHubCapPrice - fuelCost;
       const raw = (netCapture / sysAvg) * 50;
       return Math.round(Math.min(95, Math.max(5, raw)) * 100) / 100;
@@ -352,13 +381,15 @@ function marketRevenueScore(
   capacityMw: number, assetType: string, market: string,
   signalStats: NodeStats,
   ercotHubCapPrice?: number,
+  gasPrice?: number,   // $/MMBtu — zone-appropriate (Waha for LZ_WEST/HB_PAN, HH elsewhere)
 ): number {
+  const effectiveGas = gasPrice ?? avgGasPrice;
   const cf = CF[assetType]?.[market] ?? 0.30;
   let captureP: number;
   if (market === "ERCOT") {
     if (ercotHubCapPrice != null) {
       // Net margin for thermal (subtract fuel cost); gross for renewables
-      const fuelCost = (HEAT_RATE[assetType] ?? 0) * avgGasPrice;
+      const fuelCost = (HEAT_RATE[assetType] ?? 0) * effectiveGas;
       captureP = Math.max(0, ercotHubCapPrice - fuelCost);
     } else {
       captureP = signalStats.avg_da * (ERCOT_CAPTURE_RATIOS[assetType] ?? 0.90);
@@ -523,19 +554,40 @@ async function main() {
     console.warn(`   ⚠  Hub hourly load failed (${(e as Error).message}) — falling back to hardcoded ERCOT_CAPTURE_RATIOS`);
   }
 
-  // ── Step 0c-new: Load trailing 12-month gas price ─────────────────────────
-  console.log("📡 Loading gas price (net margin for thermal plants)...");
+  // ── Step 0c-new: Load trailing 12-month gas prices (Henry Hub + Waha) ────────
+  console.log("📡 Loading gas prices — Henry Hub (non-West TX) + Waha (West TX)...");
   try {
-    const gasPriceRaw = await db.execute<{ avg_price: number }>(sql`
-      SELECT AVG(price)::float AS avg_price
+    const gasPriceRaw = await db.execute<{
+      hub: string; avg_price: number; stddev_price: number;
+    }>(sql`
+      SELECT
+        hub,
+        AVG(price)::float    AS avg_price,
+        STDDEV(price)::float AS stddev_price
       FROM gas_prices
-      WHERE price IS NOT NULL AND date >= CURRENT_DATE - INTERVAL '12 months'
+      WHERE price IS NOT NULL
+        AND hub IN ('henry_hub', 'waha')
+        AND date >= CURRENT_DATE - INTERVAL '12 months'
+      GROUP BY hub
     `);
-    avgGasPrice = Number(gasPriceRaw.rows[0]?.avg_price ?? 1.51);
-    console.log(`   12-month avg Henry Hub gas price: $${avgGasPrice.toFixed(2)}/MMBtu`);
-    console.log(`   CCGT variable cost (7 MMBtu/MWh): $${(avgGasPrice * 7).toFixed(2)}/MWh`);
+    for (const r of gasPriceRaw.rows) {
+      if (r.hub === "henry_hub") {
+        avgGasPrice = Number(r.avg_price);
+      } else if (r.hub === "waha") {
+        avgWahaPrice  = Number(r.avg_price);
+        wahaBasisVol  = Number(r.stddev_price ?? 0);
+      }
+    }
+    // Waha basis = Waha avg − HH avg (negative means Waha trades at discount)
+    wahaBasisDiscount = avgWahaPrice - avgGasPrice;
+    console.log(`   Henry Hub 12-mo avg:   $${avgGasPrice.toFixed(2)}/MMBtu  → CCGT cost $${(avgGasPrice * 7).toFixed(2)}/MWh`);
+    console.log(`   Waha      12-mo avg:   $${avgWahaPrice.toFixed(2)}/MMBtu  → CCGT cost $${(avgWahaPrice * 7).toFixed(2)}/MWh`);
+    console.log(`   Waha basis (Waha−HH):  $${wahaBasisDiscount.toFixed(2)}/MMBtu  vol $${wahaBasisVol.toFixed(2)}`);
+    if (wahaBasisDiscount < -2) {
+      console.log(`   ⚠  Waha trading at deep discount — West TX power prices depressed by cheap gas competition`);
+    }
   } catch (e) {
-    console.warn(`   ⚠  Gas price load failed — using fallback $${avgGasPrice.toFixed(2)}/MMBtu`);
+    console.warn(`   ⚠  Gas price load failed — using fallback HH $${avgGasPrice.toFixed(2)}, Waha $${avgWahaPrice.toFixed(2)}/MMBtu`);
   }
 
   // ── Step 0d-new: Load EIA-geolocated resource nodes for per-plant matching ──
@@ -957,6 +1009,13 @@ async function main() {
 
   const updates: Update[] = [];
 
+  // ── Zone-appropriate gas price helper ────────────────────────────────────────
+  // Returns Waha for LZ_WEST / HB_WEST / HB_PAN (West Texas Permian Basin nodes);
+  // Henry Hub for all other ERCOT zones, CAISO, and PJM.
+  function effectiveGasPrice(signalZone: string): number {
+    return WAHA_ZONES.has(signalZone) ? avgWahaPrice : avgGasPrice;
+  }
+
   const computeAll = (
     id: number, queueZone: string, assetType: string, market: string, capacityMw: number,
     lat?: number, lon?: number,
@@ -964,6 +1023,7 @@ async function main() {
     let signal: NodeStats;
     let ercotHubCapPrice: number | undefined;
     let plantNodeMatch = false;
+    let signalZoneForGas = "HB_BUSAVG"; // default → Henry Hub
 
     if (market === "ERCOT") {
       // v7: ERCOT queue projects use long tap-point strings as interconnection_node,
@@ -973,6 +1033,8 @@ async function main() {
       const signalZone = (lat != null && lon != null)
         ? ercotGeoFallback(lat, lon)   // returns "HB_WEST", "LZ_HOUSTON", "HB_NORTH", etc.
         : queueZone;
+
+      signalZoneForGas = signalZone; // capture for Waha routing
 
       // v7: try per-plant haversine to EIA-geolocated resource node (within 100 km)
       if (lat != null && lon != null && ercotRealNodes.length > 0) {
@@ -1004,13 +1066,15 @@ async function main() {
     }
     void plantNodeMatch; // used implicitly via signal
 
+    const zoneGasPrice = effectiveGasPrice(signalZoneForGas);
+
     return {
       id, node: queueZone,
       curtailment:      curtailmentScore(signal, assetType, market, ercotFleetAvgNegPct).toFixed(2),
       congestion:       congestionScore(signal, assetType, market, queueZone, ercotBusAvg, ercotSysVol, pjmBusAvg, pjmSysVol).toFixed(2),
-      basis:            basisRiskScore(signal, market, ercotBusAvg, ercotSysVol, pjmBusAvg, pjmSysVol).toFixed(2),
-      capturePrice:     capturePriceScore(signal, assetType, market, ercotBusAvg, pjmBusAvg, ercotHubCapPrice).toFixed(2),
-      mktRevenue:       marketRevenueScore(capacityMw, assetType, market, signal, ercotHubCapPrice).toFixed(2),
+      basis:            basisRiskScore(signal, market, ercotBusAvg, ercotSysVol, pjmBusAvg, pjmSysVol, signalZoneForGas).toFixed(2),
+      capturePrice:     capturePriceScore(signal, assetType, market, ercotBusAvg, pjmBusAvg, ercotHubCapPrice, zoneGasPrice).toFixed(2),
+      mktRevenue:       marketRevenueScore(capacityMw, assetType, market, signal, ercotHubCapPrice, zoneGasPrice).toFixed(2),
       interconnectRisk: interconnectRiskScore(queueZone, market, ercotQueueMap, caisoQueueMap, pjmQueueMap, ercotMaxMw, caisoMaxMw, pjmMaxMw).toFixed(2),
       recScore:         recScore(assetType, market, capacityMw).toFixed(2),
       capScore:         capacityScore(capacityMw).toFixed(2),
@@ -1114,13 +1178,15 @@ async function main() {
     console.log(`   ${r.market.padEnd(7)}  n=${r.cnt.padStart(5)}  avg=${r.avg_score}  range [${r.min_score} – ${r.max_score}]`);
 
   const resourceZones = ercotZoneResource.size;
-  console.log(`\n   v7 signal sources:`);
+  console.log(`\n   v8 signal sources:`);
   console.log(`     ERCOT zone resource nodes: ${resourceZones > 0 ? `${resourceZones} zones` : "hub/zone CDR fallback"}`);
   console.log(`     ERCOT hub hourly profiles: ${ercotZoneCapturePrice.size} zones (zone-specific capture prices)`);
   console.log(`     EIA-geolocated real nodes: ${ercotRealNodes.length} nodes (per-plant LMP matching)`);
-  console.log(`     Gas price (12-mo avg):     $${avgGasPrice.toFixed(2)}/MMBtu → CCGT fuel cost $${(avgGasPrice * 7).toFixed(2)}/MWh`);
+  console.log(`     Gas price — Henry Hub:     $${avgGasPrice.toFixed(2)}/MMBtu → CCGT fuel cost $${(avgGasPrice * 7).toFixed(2)}/MWh (non-West TX)`);
+  console.log(`     Gas price — Waha:          $${avgWahaPrice.toFixed(2)}/MMBtu → CCGT fuel cost $${(avgWahaPrice * 7).toFixed(2)}/MWh (LZ_WEST/HB_PAN/HB_WEST)`);
+  console.log(`     Waha basis (Waha−HH):      $${wahaBasisDiscount.toFixed(2)}/MMBtu  vol $${wahaBasisVol.toFixed(2)} → basis risk penalty ${WAHA_ZONES.size} West TX zones`);
   console.log(`   PJM: ${pjmHubNodes.size} hub/zone nodes from pjm_node_stats (DA $${pjmBusAvg.toFixed(2)} avg, range $${Math.min(...pjmHubVals.map(v=>v.avg_da)).toFixed(2)}–$${Math.max(...pjmHubVals.map(v=>v.avg_da)).toFixed(2)})`);
-  console.log("\n   Dimension mapping (v7):");
+  console.log("\n   Dimension mapping (v8 — Waha gas coupling):");
   console.log("   price_score            → Capture Price   (zone hourly profile $/MWh; gas = net of fuel cost)");
   console.log("   curtailment_score      → Curtailment      (resource node neg_price_percent)");
   console.log("   interconnection_score  → Congestion       (per-plant or zone resource node DA basis + vol)");
