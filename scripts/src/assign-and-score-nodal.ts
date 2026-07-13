@@ -153,7 +153,7 @@ const QUEUE_ZONE_TO_LOAD_ZONE: Record<string, string> = {
 
 const CF: Record<string, Record<string, number>> = {
   solar:       { ERCOT: 0.27, CAISO: 0.29, PJM: 0.22 },
-  wind:        { ERCOT: 0.40, CAISO: 0.32, PJM: 0.35 },
+  wind:        { ERCOT: 0.38, CAISO: 0.28, PJM: 0.35 },  // ERCOT 0.40→0.38 (Potomac 2024 SOTM); CAISO 0.32→0.28
   storage:     { ERCOT: 0.18, CAISO: 0.18, PJM: 0.18 },
   natural_gas: { ERCOT: 0.60, CAISO: 0.55, PJM: 0.58 },
   nuclear:     { ERCOT: 0.92, CAISO: 0.92, PJM: 0.92 },
@@ -163,12 +163,16 @@ const CF: Record<string, Record<string, number>> = {
   coal:        { ERCOT: 0.55, CAISO: 0.55, PJM: 0.55 },
 };
 
+// REC prices for scoring weight ($/MWh) — updated Jul 2025 from market data
+// ERCOT TRCs: wind $1–5, solar $3–10 (no solar carve-out; solar scarcer than wind)
+// CAISO unbundled TRECs: solar $8–12, wind $5–7, geo $6–10 (CPUC/WREGIS 2025)
+// PJM: highly state-specific; blended mid-range used for scoring weight
 const REC_PRICES: Record<string, Record<string, number>> = {
-  solar:       { ERCOT: 1.50, CAISO: 12.00, PJM: 15.00 },
-  wind:        { ERCOT: 1.50, CAISO: 10.00, PJM:  3.50 },
-  hydro:       { ERCOT: 1.50, CAISO:  7.00, PJM:  2.00 },
-  geothermal:  { ERCOT: 1.50, CAISO: 10.00, PJM:  5.00 },
-  biomass:     { ERCOT: 1.50, CAISO:  8.00, PJM:  3.00 },
+  solar:       { ERCOT:  5.00, CAISO: 10.00, PJM: 40.00 },  // ERCOT 1.50→5.00; CAISO 12→10; PJM 15→40 (state SRECs)
+  wind:        { ERCOT:  2.00, CAISO:  6.00, PJM:  4.00 },  // ERCOT 1.50→2.00; CAISO 10→6; PJM 3.50→4.00
+  hydro:       { ERCOT:  1.50, CAISO:  5.00, PJM:  2.00 },  // CAISO 7→5
+  geothermal:  { ERCOT:  2.00, CAISO:  8.00, PJM:  5.00 },  // ERCOT 1.50→2; CAISO 10→8
+  biomass:     { ERCOT:  1.50, CAISO:  5.00, PJM:  3.00 },  // CAISO 8→5
 };
 const REC_ELIGIBLE = new Set(["solar", "wind", "hydro", "geothermal", "biomass"]);
 

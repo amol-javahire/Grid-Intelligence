@@ -7,62 +7,76 @@
  *
  * Capacity factors: EIA / ISO annual reports (2024 averages).
  *
- * REC benchmark prices (2024):
- *   ERCOT → Texas Renewable Energy Credits (TRCs): $1.00–2.00/MWh by fuel type
- *   CAISO → CA WREGIS RPS compliance RECs: $6–13/MWh by fuel type
+ * REC benchmark prices (updated Jul 2025):
+ *   ERCOT → Texas Renewable Energy Credits (TRCs): $2–5/MWh by fuel type
+ *            Wind TRCs $1–5/MWh (oversupplied); solar TRCs $3–10/MWh (no carve-out but scarcer).
+ *            Sources: ERCOT REC program, Green-e Certification data, broker surveys 2025.
+ *   CAISO → CA WREGIS voluntary/unbundled RECs (PCC3 TRECs): $5–10/MWh
+ *            Solar commands highest demand from CA utilities; geothermal valued for baseload.
+ *            Sources: CPUC/CEC WREGIS reports, voluntary market broker data 2025.
  *   PJM   → State-specific: SRECs (solar), ORECs (offshore), Class I/II RECs (wind/other)
- *            Sources: PJM GATS, state PUC filings, SREC Trade (2024)
+ *            NJ legacy SREC near SACP ceiling (~$200/MWh); MD $45–70/MWh (2025);
+ *            PA $40–50/MWh; DC Tier 1 very constrained ($400+).
+ *            Sources: PJM GATS, NJBPU, MEA, SREC Trade, state PUC filings (2025)
  */
 
+// Capacity factors: EIA / ISO annual reports (2024 actuals).
+// ERCOT wind 38% confirmed by Potomac Economics 2024 SOTM (Table 2, pub. Jun 2025).
+// ERCOT solar 27% consistent with ERCOT generation reports 2024.
+// CAISO solar 29% from CAISO 2024 annual statistics; wind 28% system average.
 const CAPACITY_FACTORS: Record<string, Record<string, number>> = {
   solar:        { ERCOT: 0.27, CAISO: 0.29, PJM: 0.22 },
-  wind:         { ERCOT: 0.40, CAISO: 0.32, PJM: 0.35 },
+  wind:         { ERCOT: 0.38, CAISO: 0.28, PJM: 0.35 },  // ERCOT ↓ from 0.40 (Potomac 2024); CAISO ↓ from 0.32
   offshore_wind:{ ERCOT: 0.42, CAISO: 0.42, PJM: 0.45 },
   hydro:        { ERCOT: 0.40, CAISO: 0.42, PJM: 0.38 },
   geothermal:   { ERCOT: 0.88, CAISO: 0.88, PJM: 0.88 },
   biomass:      { ERCOT: 0.65, CAISO: 0.65, PJM: 0.65 },
   hybrid:       { ERCOT: 0.27, CAISO: 0.29, PJM: 0.22 },
   solar_storage:{ ERCOT: 0.27, CAISO: 0.29, PJM: 0.22 },
-  wind_storage: { ERCOT: 0.40, CAISO: 0.32, PJM: 0.35 },
+  wind_storage: { ERCOT: 0.38, CAISO: 0.28, PJM: 0.35 },
 };
 
-// ERCOT TRC prices by fuel type ($/MWh) — Texas Renewable Energy Credits
-// Wind dominates TRC supply → lower price; solar slightly scarcer → premium
+// ERCOT TRC prices by fuel type ($/MWh) — Texas Renewable Energy Credits (2025)
+// Wind TRCs: $1–5/MWh (heavily oversupplied by CREZ buildout; voluntary market only)
+// Solar TRCs: $3–10/MWh (no solar carve-out but less abundant than wind → premium)
+// Source: Green-e, ERCOT REC program, broker surveys 2025
 const ERCOT_PRICES: Record<string, number> = {
-  solar:         2.00,
-  wind:          1.00,
-  offshore_wind: 1.00,
-  hydro:         1.25,
-  geothermal:    1.25,
-  biomass:       1.25,
-  hybrid:        2.00,
-  solar_storage: 2.00,
-  wind_storage:  1.00,
+  solar:         5.00,  // was 2.00 — updated to 2025 solar TRC premium range midpoint
+  wind:          2.00,  // was 1.00 — updated to 2025 range midpoint ($1–5)
+  offshore_wind: 2.00,
+  hydro:         1.50,  // was 1.25
+  geothermal:    2.00,  // was 1.25 — rare baseload premium
+  biomass:       1.50,  // was 1.25
+  hybrid:        5.00,  // was 2.00 — follows solar component
+  solar_storage: 5.00,  // was 2.00
+  wind_storage:  2.00,  // was 1.00
 };
 
-// CAISO WREGIS RPS prices by fuel type ($/MWh)
-// Solar has highest demand from CA utilities; geothermal valued for baseload
+// CAISO WREGIS voluntary/unbundled REC prices by fuel type ($/MWh) — 2025
+// PCC3 (unbundled TRECs): tradeable separately from power delivery — lowest tier
+// Solar: $8–12/MWh; wind: $5–7/MWh; geothermal: $6–10/MWh (baseload premium)
+// Source: CPUC/CEC WREGIS reports, voluntary market broker surveys 2025
 const CAISO_PRICES: Record<string, number> = {
-  solar:         13.00,
-  wind:           8.00,
-  offshore_wind:  8.00,
-  hydro:          6.00,
-  geothermal:    10.00,
-  biomass:        6.00,
-  hybrid:        13.00,
-  solar_storage: 13.00,
-  wind_storage:   8.00,
+  solar:         10.00,  // was 13.00 — updated to unbundled voluntary range
+  wind:           6.00,  // was 8.00  — oversupply continues to weigh on prices
+  offshore_wind:  6.00,  // was 8.00
+  hydro:          5.00,  // was 6.00  — large hydro has limited RPS eligibility
+  geothermal:     8.00,  // was 10.00 — baseload premium, fewer projects
+  biomass:        5.00,  // was 6.00
+  hybrid:        10.00,  // was 13.00 — follows solar component
+  solar_storage: 10.00,  // was 13.00
+  wind_storage:   6.00,  // was 8.00
 };
 
 // PJM solar SREC prices by state ($/MWh) — from PJM GATS / state PUC data (2024)
 // DC, NJ, IL, MD, PA have active SREC markets; others have generic Class I RECs
 export const PJM_SOLAR_SREC_BY_STATE: Record<string, number> = {
-  DC: 430,  // DC SRECs — solar Tier 1 carve-out, very limited supply; DOEE (2024)
-  NJ: 185,  // NJ SRECs — active spot market; NJBPU (2024)
-  IL:  80,  // IL Shines ADRECs — adjusted delivery payments; IPA (2024)
-  MD:  75,  // MD SREC II — MEA data (2024)
-  PA:  45,  // PA SRECs — AEPS Act; SREC Trade (2024)
-  DE:  20,  // DE SRECs — DESRP; DPUC (2024)
+  DC: 430,  // DC SRECs — solar Tier 1 carve-out, very limited supply; DOEE (2025)
+  NJ: 200,  // NJ SRECs — SACP ceiling was $218 (2024)→$208 (2025); spot near ceiling; NJBPU (2025)
+  IL:  80,  // IL Shines ADRECs — adjusted delivery payments; IPA (2025)
+  MD:  65,  // MD SREC — MEA data (2025): range $45–70; ACP declining to $22.50 by 2030
+  PA:  45,  // PA SRECs — AEPS Act; SREC Trade (2025)
+  DE:  20,  // DE SRECs — DESRP; DPUC (2025)
   VA:   5,  // VA — VCEA, bundled REC only, no solar carve-out
   NC:   3,  // NC REPS — modest solar REC premium
   OH:   2,  // OH — limited RPS after 2014 freeze
@@ -74,13 +88,13 @@ export const PJM_SOLAR_SREC_BY_STATE: Record<string, number> = {
   TN:   1,  // TN — no state RPS
 };
 
-// PJM non-solar REC prices by state ($/MWh) — Class I wind / hydro / biomass
+// PJM non-solar REC prices by state ($/MWh) — Class I wind / hydro / biomass (2025)
 export const PJM_NONSOLAR_REC_BY_STATE: Record<string, number> = {
   DC:   8,
   NJ:   7,  // NJ Class I REC
   IL:   2,
   MD:   6,
-  PA:   8,  // PA AEPS Tier I
+  PA:  10,  // PA AEPS Tier I — updated to $8–12 range midpoint (2025)
   DE:   5,
   VA:   5,
   NC:   3,
