@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
 import { candidatesTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 
 const router = Router();
 
@@ -33,6 +33,7 @@ const PJM_CAPTURE: Record<string, number> = {
 };
 
 // Market DA reference prices ($/MWh, 2024 avg from real data)
+// Used as fallback when no forward curve is available
 const MARKET_REF_DA: Record<string, number> = {
   ERCOT: 31.42, CAISO: 33.25, PJM: 38.50,
 };
@@ -51,17 +52,15 @@ function getCaptureRatio(assetType: string, market: string): number {
 /**
  * Convert all ranking dimension scores into financial adjustments.
  * All scores are 0–100 (higher = better / lower risk).
- *
- * Returns defaults that can be overridden by caller query params.
  */
 function scoreToRiskDefaults(scores: {
-  locationScore:       number;  // basis risk     → basisAdjMwh
-  curtailmentScore:    number;  // curtailment    → curtailmentHaircut
-  gridStabilityScore:  number;  // shape/timing   → shapeDiscount
-  interconnectionScore: number; // transmission   → availabilityFactor (joint w/ devRisk)
-  developmentRiskScore: number; // interconnect   → availabilityFactor (joint w/ interconnect)
-  environmentalScore:  number;  // REC value      → recRevenueMwh
-  financialScore:      number;  // mkt revenue    → P10/P90 spread width
+  locationScore:       number;
+  curtailmentScore:    number;
+  gridStabilityScore:  number;
+  interconnectionScore: number;
+  developmentRiskScore: number;
+  environmentalScore:  number;
+  financialScore:      number;
   market:              string;
 }) {
   const {
@@ -70,29 +69,16 @@ function scoreToRiskDefaults(scores: {
     financialScore, market,
   } = scores;
 
-  // Basis: locationScore 100 → +$6/MWh, 50 → $0, 0 → -$12/MWh (asymmetric downside)
   const basisAdjMwh = locationScore >= 50
     ? ((locationScore - 50) / 50) * 6
     : ((locationScore - 50) / 50) * 12;
 
-  // Curtailment volume haircut: score 100 → 0%, score 0 → 22%
   const curtailmentHaircut = Math.max(0, Math.min(0.25, (100 - curtailmentScore) / 100 * 0.22));
-
-  // Shape/timing discount on price: score 100 → 0%, score 0 → 15%
   const shapeDiscount = Math.max(0, Math.min(0.20, (100 - gridStabilityScore) / 100 * 0.15));
-
-  // Availability: combined reliability from interconnection + development risk
-  // score=100 → 99% uptime, score=50 → 96%, score=0 → 93%
   const avgReliability = (interconnectionScore + developmentRiskScore) / 2;
   const availabilityFactor = 0.93 + (avgReliability / 100) * 0.06;
-
-  // REC revenue: market base × (environmentalScore / 100)
-  // ERCOT $0–2, CAISO $0–7, PJM $0–5.5
   const recRevenueMwh = (REC_BASE_MWH[market] ?? 4) * (environmentalScore / 100);
 
-  // Market price uncertainty band from financialScore
-  // financialScore 100 = tight market (reliable revenue) → ±15% spread
-  // financialScore 0   = volatile market                 → ±25% spread
   const spreadHalf = 0.15 + (1 - financialScore / 100) * 0.10;
   const p10Multiplier = 1 + spreadHalf;
   const p90Multiplier = 1 - spreadHalf;
@@ -113,19 +99,39 @@ function npv(cashflows: number[], wacc: number): number {
 }
 
 /**
+ * Fetch the average synthetic power price from the gas forward strip.
+ * Returns null if no strip data is available.
+ *
+ * Synthetic price = gasForward × heatRate × seasonalMultiplier
+ * Default heat rate 8.5 MMBtu/MWh (representative ERCOT marginal unit)
+ */
+async function computeForwardPowerAvg(heatRate: number = 8.5): Promise<number | null> {
+  try {
+    const rows = await db.execute<{ delivery_month: string; settle_price: string }>(sql`
+      SELECT delivery_month::text, settle_price::float8
+      FROM gas_forwards
+      WHERE as_of_date = (SELECT MAX(as_of_date) FROM gas_forwards)
+        AND settle_price IS NOT NULL
+      ORDER BY delivery_month ASC
+    `);
+    if (!rows.rows.length) return null;
+    const avg = rows.rows.reduce((s, r) => s + Number(r.settle_price) * heatRate, 0) / rows.rows.length;
+    return Math.round(avg * 100) / 100;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * GET /api/ppa-npv
  *
  * Compute VPPA NPV incorporating all 8 ranking dimension scores as financial adjustments.
  *
- * All 5 risk adjustments have score-derived defaults but accept caller overrides:
- *   basisAdjMwh        → locationScore (node-hub spread)
- *   curtailmentHaircut → curtailmentScore (volume lost to curtailment)
- *   shapeDiscount      → gridStabilityScore (price discount from shape mismatch)
- *   availabilityFactor → interconnectionScore + developmentRiskScore (plant uptime)
- *   recRevenueMwh      → environmentalScore + market ($/MWh bundled REC value)
- *
- * P10/P90 spread auto-derived from financialScore (market revenue certainty).
- * demandProximityScore and regulatoryScore are returned as context only.
+ * Optional params:
+ *   forwardPowerPriceMwh  — override market reference DA price with synthetic power forward avg
+ *                           (computed by ercot-gas Forward Curve tab: gasStrip × heatRate)
+ *                           When provided, marketRefSource = 'forward_curve'
+ *                           When absent, tries gas_forwards table; falls back to historical avg
  */
 router.get("/ppa-npv", async (req, res) => {
   try {
@@ -176,21 +182,36 @@ router.get("/ppa-npv", async (req, res) => {
     const availabilityFactor = req.query.availabilityFactor !== undefined ? Math.max(0.80, Math.min(1.0, Number(req.query.availabilityFactor))) : defaults.availabilityFactor;
     const recRevenueMwh    = req.query.recRevenueMwh      !== undefined ? Math.max(0, Math.min(30, Number(req.query.recRevenueMwh)))         : defaults.recRevenueMwh;
 
-    // Use P10/P90 spread from financialScore (not overridable — auto from model)
     const p10Multiplier = defaults.p10Multiplier;
     const p90Multiplier = defaults.p90Multiplier;
 
-    // Price build-up:
-    //   marketRefDA × captureRatio  → raw capture
-    //   × (1 - shapeDiscount)       → timing penalty
-    //   + basisAdjMwh               → node-hub spread
-    //   + recRevenueMwh             → bundled REC value (additional $/MWh revenue)
-    const marketRefDA       = MARKET_REF_DA[market] ?? 31.42;
+    // ── Market reference price resolution ─────────────────────────────────
+    // Priority: (1) caller-provided forwardPowerPriceMwh, (2) gas_forwards strip, (3) historical avg
+    let marketRefDA: number;
+    let marketRefSource: "caller_override" | "forward_curve" | "historical_avg";
+
+    if (req.query.forwardPowerPriceMwh !== undefined) {
+      const v = Number(req.query.forwardPowerPriceMwh);
+      marketRefDA = !isNaN(v) && v > 0 ? v : (MARKET_REF_DA[market] ?? 31.42);
+      marketRefSource = "caller_override";
+    } else {
+      // Try to derive from gas forward strip (ERCOT markets only for now)
+      const fwdAvg = market === "ERCOT" ? await computeForwardPowerAvg(8.5) : null;
+      if (fwdAvg != null && fwdAvg > 0) {
+        marketRefDA = fwdAvg;
+        marketRefSource = "forward_curve";
+      } else {
+        marketRefDA = MARKET_REF_DA[market] ?? 31.42;
+        marketRefSource = "historical_avg";
+      }
+    }
+
+    // Price build-up
     const rawCapturePrice   = marketRefDA * captureRatio;
     const afterShapePrice   = rawCapturePrice * (1 - shapeDiscount);
     const afterBasisPrice   = afterShapePrice + basisAdjMwh;
-    const effectiveCapturePrice = afterBasisPrice;  // pre-REC power price
-    const totalRevenueMwh   = effectiveCapturePrice + recRevenueMwh;  // power + REC
+    const effectiveCapturePrice = afterBasisPrice;
+    const totalRevenueMwh   = effectiveCapturePrice + recRevenueMwh;
 
     // Volume: gross → curtailment → availability
     const grossMwhYr = Number(req.query.volume) > 0
@@ -216,7 +237,7 @@ router.get("/ppa-npv", async (req, res) => {
     const p10Npv = npv(p10Flows, wacc);
     const p90Npv = npv(p90Flows, wacc);
 
-    // Breakeven: the market price at which NPV(P50) = 0
+    // Breakeven market price where NPV(P50) = 0
     const breakevenPower = (() => {
       let lo = 0, hi = 300;
       for (let i = 0; i < 60; i++) {
@@ -242,6 +263,7 @@ router.get("/ppa-npv", async (req, res) => {
       // Full price waterfall
       priceWaterfall: {
         marketRefDa:        Math.round(marketRefDA * 100) / 100,
+        marketRefSource,
         captureRatio:       Math.round(captureRatio * 1000) / 1000,
         rawCapturePrice:    Math.round(rawCapturePrice * 100) / 100,
         shapeDiscount:      Math.round(shapeDiscount * 1000) / 1000,
@@ -265,13 +287,10 @@ router.get("/ppa-npv", async (req, res) => {
 
       // All score dimensions used in model + context
       riskFactors: {
-        // Sliders
         locationScore, curtailmentScore: curtailmentScoreN, gridStabilityScore: gridStabilityN,
         interconnectionScore: interconnectionN, developmentRiskScore: developmentRiskN,
         environmentalScore: environmentalN,
-        // Context only
         financialScore: financialN, demandProximityScore: demandProximityN, regulatoryScore: regulatoryN,
-        // Applied values
         basisAdjMwh:         Math.round(basisAdjMwh * 100) / 100,
         curtailmentHaircut:  Math.round(curtailmentHaircut * 1000) / 1000,
         shapeDiscount:       Math.round(shapeDiscount * 1000) / 1000,
@@ -281,7 +300,7 @@ router.get("/ppa-npv", async (req, res) => {
         p90Multiplier:       Math.round(p90Multiplier * 1000) / 1000,
       },
 
-      baseCapturePriceMwh: Math.round(totalRevenueMwh * 100) / 100, // kept for compat
+      baseCapturePriceMwh: Math.round(totalRevenueMwh * 100) / 100,
       scenarios: {
         p10: {
           label: `Bullish (+${Math.round((p10Multiplier - 1) * 100)}% power price)`,

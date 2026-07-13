@@ -6,7 +6,7 @@ import { Slider } from "@/components/ui/slider";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
-import { Loader2, TrendingUp, ShieldAlert, Info } from "lucide-react";
+import { Loader2, TrendingUp, ShieldAlert, Info, BookOpen, Target, FlaskConical } from "lucide-react";
 import {
   AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid,
   ResponsiveContainer, Tooltip as RechartsTooltip, Cell, Legend,
@@ -667,6 +667,84 @@ function CaisoPanel(props: {
           </p>
         </CardContent>
       </Card>
+
+      {/* Explainer panel */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <Card className="bg-card border-border">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm flex items-center gap-1.5">
+              <BookOpen className="h-4 w-4 text-teal-400" />
+              What This Tool Does
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="text-xs text-muted-foreground space-y-2">
+            <p>
+              Combines a <span className="text-foreground font-medium">3-year load forecast</span> (Jul 2026 – Jun 2029)
+              built from real EIA-930 hourly data with an <span className="text-foreground font-medium">OPF-based scarcity stress test</span> to
+              assess supply adequacy at projected peak demand.
+            </p>
+            <p>
+              The forecast uses OLS regression on temperature and calendar effects (R²=0.88–0.92), then layers on
+              incremental load from EVs and datacenter growth. The ERCOT stress tab feeds the peak into the
+              PyPSA 5-bus Tier-1 OPF to determine whether installed capacity — derated by renewable CFs — is
+              sufficient or triggers VOLL scarcity pricing.
+            </p>
+            <p>
+              CAISO uses a simpler reserve-margin approach (real EIA-860 capacity vs adjustable peak demand) since
+              CAISO nodal data does not include a load-forecast regression.
+            </p>
+          </CardContent>
+        </Card>
+
+        <Card className="bg-card border-border">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm flex items-center gap-1.5">
+              <Target className="h-4 w-4 text-amber-400" />
+              Use Cases
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="text-xs text-muted-foreground space-y-2">
+            <ul className="space-y-1.5 list-none">
+              {[
+                ["PE / Developer", "How much capacity headroom remains in 2028 if major datacenters come online? → Drag DC increment slider — compare unserved energy in OPF stress result."],
+                ["Utility / Grid Planner", "What reserve margin does a hub maintain under the high-EV scenario by 2029? → Advance year, increase EV slider, read reserve margin KPI."],
+                ["IPP", "Where is load growth fastest, and does transmission keep up? → Compare hub peak trajectory 2026–2029 for NORTH vs WEST vs HOUSTON."],
+                ["Investor / Analyst", "At what peak load does scarcity pricing begin in the West hub? → OPF stress test shows VOLL onset — watch avg LMP spike."],
+              ].map(([role, a]) => (
+                <li key={role} className="border-l-2 border-teal-500/30 pl-2">
+                  <p className="text-foreground font-medium leading-tight">{role}</p>
+                  <p className="text-muted-foreground mt-0.5">{a}</p>
+                </li>
+              ))}
+            </ul>
+          </CardContent>
+        </Card>
+
+        <Card className="bg-card border-border">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm flex items-center gap-1.5">
+              <FlaskConical className="h-4 w-4 text-purple-400" />
+              Key Assumptions
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="text-xs text-muted-foreground space-y-1.5">
+            {[
+              ["Forecast method", "OLS: Load ~ Temp + Temp² + month_sin/cos + isWeekend. Trained on real EIA-930 (Jan 2024–Jun 2026). R²=0.88–0.92 major zones."],
+              ["Temperature", "Real Open-Meteo archive through Jun 2026; then 3yr climatological projection (+0.3°F/yr warming trend per CMIP6)."],
+              ["EV load", "+0.5% system load/yr compounding (ERCOT 2024 LTLF planning assumption). Applied uniformly across zones."],
+              ["Datacenter load", "Incremental MW from 55 curated hyperscaler/colo facilities in the DB. Allocated to host zone."],
+              ["ERCOT stress test", "PyPSA 5-bus Tier-1 OPF. Nameplate capacity from EIA 860 (wind 38.6 GW, solar 22.2 GW, gas 96 GW). Derated by CF sliders."],
+              ["CAISO stress", "Simple reserve margin: EIA-860 nameplate × accreditation factor vs adjustable peak. No OPF."],
+              ["VOLL", "$9,000/MWh for unserved energy in OPF objective. Matches ERCOT ORDC cap. Unserved MWh shown as KPI."],
+            ].map(([k, v]) => (
+              <div key={k}>
+                <span className="text-foreground font-medium">{k}: </span>
+                <span>{v}</span>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      </div>
     </div>
   );
 }

@@ -18,6 +18,7 @@ import generatorsRouter from "./generators";
 import ercotDispatchRouter from "./ercot_dispatch";
 import aucMsaRouter from "./auc_msa";
 import caisoCapacityRouter from "./caiso_capacity";
+import heatRateOptionsRouter from "./heat_rate_options";
 
 const router: IRouter = Router();
 
@@ -40,5 +41,6 @@ router.use(generatorsRouter);
 router.use(ercotDispatchRouter);
 router.use(aucMsaRouter);
 router.use(caisoCapacityRouter);
+router.use(heatRateOptionsRouter);
 
 export default router;

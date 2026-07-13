@@ -6,7 +6,7 @@ import {
   TerminalSquare, GitBranch, BookOpen, Leaf, Cpu, Flame,
   MapPin, FlaskConical, ShieldCheck, BookMarked, ChevronDown,
   Brain, Clock, Network, Wind, Battery, Thermometer, Calculator,
-  Scale, Factory, TrendingUp,
+  Scale, Factory, TrendingUp, Sigma,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -33,6 +33,7 @@ const sidebarEntries: NavEntry[] = [
   { title: "Map Workspace",        href: "/map",        icon: MapIcon },
   { title: "ERCOT Historical",     href: "/ercot",           icon: Activity },
   { title: "ERCOT Gas & Power",   href: "/ercot-gas",       icon: Flame },
+  { title: "Heat Rate Options",    href: "/heat-rate-options", icon: Sigma },
   { title: "ERCOT Dispatch / SCED", href: "/ercot-dispatch", icon: Zap },
   {
     group: {
@@ -58,7 +59,6 @@ const sidebarEntries: NavEntry[] = [
         { title: "Node Detail",       href: "/ci-node",        icon: Activity },
         { title: "Basis Analyzer",    href: "/ci-basis",       icon: GitBranch },
         { title: "Backtest",          href: "/ci-backtest",    icon: FlaskConical },
-        { title: "Data Quality",      href: "/ci-quality",     icon: ShieldCheck },
         { title: "Methodology",       href: "/ci-methodology", icon: BookMarked },
       ],
     },
@@ -71,7 +71,6 @@ const sidebarEntries: NavEntry[] = [
       items: [
         { title: "OPF Network",     href: "/pypsa-network",     icon: Zap },
         { title: "ML Model",        href: "/pypsa-ml",          icon: Brain },
-        { title: "Hourly Data",     href: "/pypsa-hourly",      icon: Clock },
         { title: "Curtailment Sim", href: "/pypsa-curtailment", icon: Wind },
         { title: "TX Relief Sim",   href: "/pypsa-tx-relief",   icon: GitBranch },
         { title: "Scarcity Sim",    href: "/pypsa-scarcity",    icon: Flame },
@@ -89,6 +88,7 @@ const sidebarEntries: NavEntry[] = [
   { title: "Load Forecast Stress",  href: "/load-forecast-stress", icon: TrendingUp },
   { title: "NPV Calculator",        href: "/ppa",         icon: Calculator },
   { title: "REC Analysis",          href: "/recs",        icon: Leaf },
+  { title: "Data Quality",          href: "/ci-quality",  icon: ShieldCheck },
   { title: "Q&A Copilot",           href: "/qa",         icon: MessageSquare },
   { title: "Export Center",         href: "/export",     icon: Download },
   { title: "Saved Screenings",      href: "/screenings", icon: Bookmark },

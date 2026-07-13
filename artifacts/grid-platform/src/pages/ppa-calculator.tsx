@@ -1,4 +1,5 @@
 import { useState, useCallback, useMemo, useEffect } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useListCandidates, type Candidate } from "@workspace/api-client-react";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine,
@@ -6,13 +7,138 @@ import {
 } from "recharts";
 import {
   TrendingUp, TrendingDown, Minus, DollarSign, AlertCircle, Loader2,
-  ChevronDown, ChevronUp, Leaf, Zap, Shield,
+  ChevronDown, ChevronUp, Leaf, Zap, Shield, Calculator, BookOpen, Target, FlaskConical,
 } from "lucide-react";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+
+// ─── CAPEX benchmarks (NREL ATB 2024 · EIA AEO 2024 · Lazard v17 · BNEF 1H2024) ───
+
+interface CapexBenchmark {
+  tech: string;
+  emoji: string;
+  color: string;
+  capexLo: number; capexHi: number;       // $/kW installed
+  capexNote: string;
+  landAcresMw: string;                    // acres per MW (or lease note)
+  landCostNote: string;
+  fixedOmLo: number; fixedOmHi: number;   // $/kW-yr
+  varOmLo: number;   varOmHi: number;     // $/MWh
+  interconnLo: number; interconnHi: number; // $/kW
+  insuranceLo: number; insuranceHi: number; // $/kW-yr
+  decommNote: string;
+  lifeYears: number;
+  techNotes: string[];
+}
+
+const CAPEX_BENCHMARKS: CapexBenchmark[] = [
+  {
+    tech: "Utility Solar PV",
+    emoji: "☀️",
+    color: "border-amber-500/40 bg-amber-900/10",
+    capexLo: 950,   capexHi: 1150,
+    capexNote: "Single-axis tracker · modules $280-340 · BOS+EPC $420-520 · soft costs $200-320",
+    landAcresMw: "5–8 acres/MW",
+    landCostNote: "$1,500–5,000/acre · $7–40/kW",
+    fixedOmLo: 15,  fixedOmHi: 18,
+    varOmLo: 0,     varOmHi: 1,
+    interconnLo: 20,  interconnHi: 80,
+    insuranceLo: 3.5, insuranceHi: 5.5,
+    decommNote: "$25,000–65,000/acre after 25–30yr",
+    lifeYears: 30,
+    techNotes: [
+      "Module prices fell ~50% 2021–2024 (BNEF) — equipment now ~28% of all-in cost",
+      "ITC basis: 30% base + 10% domestic content adder where eligible",
+      "Land lease alternative: $300–800/acre-yr avoids land CAPEX entirely",
+    ],
+  },
+  {
+    tech: "Onshore Wind",
+    emoji: "🌬️",
+    color: "border-teal-500/40 bg-teal-900/10",
+    capexLo: 1200,  capexHi: 1600,
+    capexNote: "Turbine supply $720–920 · BOS (foundation, roads, electrical) $280–420 · soft costs $120–200",
+    landAcresMw: "10–16 acres/MW impact (30–40 acres/turbine spacing)",
+    landCostNote: "Leased $8,000–15,000/turbine-yr · land usable for farming",
+    fixedOmLo: 38,  fixedOmHi: 55,
+    varOmLo: 2,     varOmHi: 4,
+    interconnLo: 40,  interconnHi: 140,
+    insuranceLo: 5,   insuranceHi: 9,
+    decommNote: "$25,000–100,000/turbine (decommissioning bond required in TX)",
+    lifeYears: 25,
+    techNotes: [
+      "Fixed O&M includes long-term service agreement (LTSA) with OEM — critical for 25yr warranty",
+      "PTC: $27.50/MWh base (2024) × 10yr for projects meeting wage/apprenticeship requirements",
+      "Interconnection range wide: coastal TX queue has $40–60/kW; remote PAN has $100–140/kW",
+    ],
+  },
+  {
+    tech: "BESS (4-hour Li-ion)",
+    emoji: "🔋",
+    color: "border-emerald-500/40 bg-emerald-900/10",
+    capexLo: 900,   capexHi: 1200,
+    capexNote: "Pack+BMS $140–190/kWh · PCS $50–70/kW · BOS+EPC $200–280 · soft costs $60–120",
+    landAcresMw: "0.5–1 acre/MW-AC",
+    landCostNote: "$2–15/kW · far lower than generation assets",
+    fixedOmLo: 10,  fixedOmHi: 15,
+    varOmLo: 0.5,   varOmHi: 1.5,
+    interconnLo: 15,  interconnHi: 50,
+    insuranceLo: 2,   insuranceHi: 4.5,
+    decommNote: "Minimal — modules recycled; BMS/PCS residual value",
+    lifeYears: 20,
+    techNotes: [
+      "Augmentation reserve: 1.5–2.5% CAPEX/yr for capacity fade replacement over 20yr life",
+      "ITC: 30% for standalone storage ≥3hr (Inflation Reduction Act §48E, 2023)",
+      "Ancillary services (ERCOT ORDC/ECRS) can add 30–60% on top of pure DA arbitrage revenue",
+      "Costs falling ~15%/yr (BNEF) — 2026 projects may price $750–1,000/kW all-in",
+    ],
+  },
+  {
+    tech: "Gas CCGT",
+    emoji: "⚡",
+    color: "border-orange-500/40 bg-orange-900/10",
+    capexLo: 800,   capexHi: 1050,
+    capexNote: "EPC turnkey $650–850 · site prep + cooling $80–120 · soft costs $100–180",
+    landAcresMw: "2–5 acres/MW (site footprint)",
+    landCostNote: "$0.4–5/kW · owned freehold",
+    fixedOmLo: 10,  fixedOmHi: 14,
+    varOmLo: 3,     varOmHi: 5,
+    interconnLo: 50,  interconnHi: 120,
+    insuranceLo: 4,   insuranceHi: 7,
+    decommNote: "$50,000–200,000 total site remediation",
+    lifeYears: 30,
+    techNotes: [
+      "Variable O&M excludes fuel — add Henry Hub × 6.5 MMBtu/MWh heat rate for total dispatch cost",
+      "Carbon: voluntary market $5–25/t CO₂ × 0.4t/MWh = $2–10/MWh additional cost exposure",
+      "New CCGT rarely pencils without capacity revenue or long-term offtake in current market",
+    ],
+  },
+  {
+    tech: "Gas CT (Peaker)",
+    emoji: "🔥",
+    color: "border-red-500/40 bg-red-900/10",
+    capexLo: 550,   capexHi: 800,
+    capexNote: "Combustion turbine package $380–550 · BOP $100–160 · soft costs $80–140",
+    landAcresMw: "2–4 acres/MW",
+    landCostNote: "$0.4–4/kW",
+    fixedOmLo: 7,   fixedOmHi: 10,
+    varOmLo: 5,     varOmHi: 12,
+    interconnLo: 40,  interconnHi: 100,
+    insuranceLo: 3,   insuranceHi: 6,
+    decommNote: "$30,000–150,000 total",
+    lifeYears: 25,
+    techNotes: [
+      "Higher heat rate (9.5–11 MMBtu/MWh) vs CCGT (6.5): more fuel cost per MWh generated",
+      "Revenue primarily from scarcity pricing (ERCOT ORDC) and ancillary services, not energy margin",
+      "ERCOT peakers earned $200–400/kW-yr during Summer 2023 and Winter Uri peak days",
+    ],
+  },
+];
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 interface PriceWaterfall {
   marketRefDa:       number;
+  marketRefSource:   "caller_override" | "forward_curve" | "historical_avg";
   captureRatio:      number;
   rawCapturePrice:   number;
   shapeDiscount:     number;
@@ -205,9 +331,34 @@ export default function PpaCalculator() {
   const [recRevenue,   setRecRevenue]   = useState(2.0);
   const [riskExpanded, setRiskExpanded] = useState(false);
 
-  const [result,  setResult]  = useState<PpaNpvResult | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error,   setError]   = useState<string | null>(null);
+  const [result,   setResult]   = useState<PpaNpvResult | null>(null);
+  const [loading,  setLoading]  = useState(false);
+  const [error,    setError]    = useState<string | null>(null);
+  const [capexMw,  setCapexMw]  = useState(200);
+
+  // Forward curve integration
+  const [useForwardCurve, setUseForwardCurve] = useState(true);
+  const { data: fwdCurveData } = useQuery<{
+    avgSyntheticPowerFwd: number | null;
+    avgPowerFwd: number | null;
+    asOfDate: string | null;
+    heatRate: number;
+    promptForward: number | null;
+  }>({
+    queryKey: ["forward-curve-ppa"],
+    queryFn: async () => {
+      const r = await fetch(`${BASE_PATH}/api/gas-prices/forward-curve?node=HB_HOUSTON&heat_rate=8.5`);
+      if (!r.ok) throw new Error("forward-curve unavailable");
+      return r.json();
+    },
+    staleTime: 30 * 60_000,
+  });
+
+  // Synthetic forward power price derived from gas strip × heat rate
+  const fwdPowerAvgMwh = useMemo(() => {
+    if (!useForwardCurve) return null;
+    return fwdCurveData?.avgSyntheticPowerFwd ?? null;
+  }, [useForwardCurve, fwdCurveData]);
 
   // Candidates
   const { data: candidatesData, isLoading: candidatesLoading } = useListCandidates(
@@ -281,6 +432,10 @@ export default function PpaCalculator() {
         availabilityFactor:  String(availability),
         recRevenueMwh:       String(recRevenue),
       });
+      // Pass synthetic forward power price when toggle is on and data is available
+      if (fwdPowerAvgMwh != null) {
+        params.set("forwardPowerPriceMwh", String(fwdPowerAvgMwh));
+      }
       const res = await fetch(`${BASE_PATH}/api/ppa-npv?${params}`);
       if (!res.ok) throw new Error(`API error: ${res.status}`);
       setResult(await res.json() as PpaNpvResult);
@@ -289,7 +444,7 @@ export default function PpaCalculator() {
     } finally {
       setLoading(false);
     }
-  }, [candidateId, strike, term, wacc, escalation, basisAdj, curtailment, shapeDsc, availability, recRevenue]);
+  }, [candidateId, strike, term, wacc, escalation, basisAdj, curtailment, shapeDsc, availability, recRevenue, fwdPowerAvgMwh]);
 
   const selectCls = "w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-1 focus:ring-teal-500 disabled:opacity-40 disabled:cursor-not-allowed";
   const chartData = result?.annualCashflowsP50M.map(r => ({ year: `Y${r.year}`, cashflow: r.cashflowM })) ?? [];
@@ -303,6 +458,33 @@ export default function PpaCalculator() {
           are editable for stress testing; market price spread auto-derives from the financial quality score.
         </p>
       </div>
+
+      {/* ── Forward curve banner ── */}
+      {fwdCurveData?.avgSyntheticPowerFwd != null && (
+        <div className="flex items-center gap-3 rounded-lg border border-teal-700/50 bg-teal-900/20 px-4 py-3">
+          <Zap className="h-4 w-4 text-teal-400 shrink-0" />
+          <div className="flex-1 min-w-0">
+            <span className="text-xs text-slate-300">
+              <span className="font-semibold text-teal-300">Gas Forward Strip loaded</span>
+              {" — "}synthetic power price:{" "}
+              <span className="font-mono text-amber-300">${fwdCurveData.avgSyntheticPowerFwd.toFixed(2)}/MWh</span>
+              {" "}(HH strip × 8.5 HR, {fwdCurveData.heatRate} MMBtu/MWh)
+              {fwdCurveData.asOfDate && (
+                <span className="text-slate-500"> · curve as of {fwdCurveData.asOfDate}</span>
+              )}
+            </span>
+          </div>
+          <label className="flex items-center gap-1.5 text-xs text-slate-300 cursor-pointer shrink-0">
+            <input
+              type="checkbox"
+              checked={useForwardCurve}
+              onChange={e => setUseForwardCurve(e.target.checked)}
+              className="accent-teal-500 h-3.5 w-3.5"
+            />
+            Use in NPV
+          </label>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
         {/* ── Left panel ── */}
@@ -584,7 +766,17 @@ export default function PpaCalculator() {
                 {/* Price waterfall */}
                 <div className="bg-slate-800 rounded-xl border border-slate-700 p-4">
                   <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-2">Revenue Build-Up ($/MWh)</h3>
-                  <WaterfallRow label="Market DA Reference" value={`$${result.priceWaterfall.marketRefDa}`} note="2024 avg" />
+                  <WaterfallRow
+                    label="Market DA Reference"
+                    value={`$${result.priceWaterfall.marketRefDa}`}
+                    note={
+                      result.priceWaterfall.marketRefSource === "forward_curve"
+                        ? "gas strip × HR"
+                        : result.priceWaterfall.marketRefSource === "caller_override"
+                        ? "user override"
+                        : "2024 hist avg"
+                    }
+                  />
                   <WaterfallRow label={`× Capture Ratio (${(result.priceWaterfall.captureRatio * 100).toFixed(1)}%)`}
                     value={`$${result.priceWaterfall.rawCapturePrice.toFixed(2)}`} note="tech × market" indent />
                   <WaterfallRow label={`− Shape Discount (${(result.priceWaterfall.shapeDiscount * 100).toFixed(1)}%)`}
@@ -669,6 +861,160 @@ export default function PpaCalculator() {
             </>
           )}
         </div>
+      </div>
+
+      {/* ── CAPEX / Project Development Cost Reference ───────────────────────────── */}
+      <div className="border-t border-slate-700 pt-6">
+        <div className="flex items-center gap-2 mb-1">
+          <Calculator className="h-5 w-5 text-teal-400" />
+          <h2 className="text-lg font-bold text-slate-200">Project Development Cost Reference</h2>
+        </div>
+        <p className="text-xs text-slate-400 mb-5">
+          2024–2025 US utility-scale benchmarks · NREL ATB 2024 · EIA AEO 2024 · Lazard LCOE v17 · BNEF 1H2024 · all figures in real 2024 USD
+        </p>
+
+        <div className="bg-slate-800 rounded-xl border border-slate-700 p-4 mb-5">
+          <div className="flex items-center gap-4 flex-wrap">
+            <span className="text-sm text-slate-300 font-medium">Project Size:</span>
+            <input
+              type="range" min={10} max={2000} step={10} value={capexMw}
+              onChange={e => setCapexMw(Number(e.target.value))}
+              className="w-44 accent-teal-500"
+            />
+            <span className="text-sm font-mono text-teal-400 w-20">{capexMw} MW</span>
+            <span className="text-xs text-slate-500">→ total project cost and annual O&M ranges scale with size</span>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+          {CAPEX_BENCHMARKS.map(b => {
+            const totalLo = (b.capexLo * capexMw * 1000 / 1_000_000).toFixed(0);
+            const totalHi = (b.capexHi * capexMw * 1000 / 1_000_000).toFixed(0);
+            const annualOmLo = (b.fixedOmLo * capexMw * 1000 / 1_000_000).toFixed(1);
+            const annualOmHi = (b.fixedOmHi * capexMw * 1000 / 1_000_000).toFixed(1);
+            const icLo = (b.interconnLo * capexMw * 1000 / 1_000_000).toFixed(1);
+            const icHi = (b.interconnHi * capexMw * 1000 / 1_000_000).toFixed(1);
+            return (
+              <div key={b.tech} className={`rounded-xl border p-4 ${b.color}`}>
+                <div className="flex items-center gap-2 mb-3">
+                  <span className="text-xl">{b.emoji}</span>
+                  <div>
+                    <p className="text-sm font-bold text-slate-200">{b.tech}</p>
+                    <p className="text-[10px] text-slate-500">{b.lifeYears}-year design life</p>
+                  </div>
+                </div>
+                <div className="bg-slate-900/60 rounded-lg px-3 py-2 mb-3">
+                  <p className="text-[10px] text-slate-500 mb-0.5">All-in project cost — {capexMw} MW</p>
+                  <p className="text-lg font-bold font-mono text-slate-100">${totalLo}M – ${totalHi}M</p>
+                  <p className="text-[10px] text-slate-500">${b.capexLo.toLocaleString()}–${b.capexHi.toLocaleString()}/kW · {b.capexNote}</p>
+                </div>
+                <div className="space-y-1.5 text-xs">
+                  {[
+                    { label: "Land",            value: `${b.landAcresMw}  ·  ${b.landCostNote}` },
+                    { label: "Fixed O&M",       value: `$${b.fixedOmLo}–${b.fixedOmHi}/kW-yr  ($${annualOmLo}M–${annualOmHi}M/yr at ${capexMw} MW)` },
+                    { label: "Variable O&M",    value: b.varOmHi === 0 ? "< $1/MWh (negligible)" : `$${b.varOmLo}–${b.varOmHi}/MWh` },
+                    { label: "Interconnection", value: `$${b.interconnLo}–${b.interconnHi}/kW  ($${icLo}M–${icHi}M)` },
+                    { label: "Insurance",       value: `$${b.insuranceLo}–${b.insuranceHi}/kW-yr` },
+                    { label: "Decommission",    value: b.decommNote },
+                  ].map(row => (
+                    <div key={row.label} className="flex gap-2">
+                      <span className="text-slate-500 w-24 shrink-0 leading-snug">{row.label}</span>
+                      <span className="text-slate-300 leading-snug">{row.value}</span>
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-3 pt-3 border-t border-slate-700/50 space-y-1">
+                  {b.techNotes.map((note, i) => (
+                    <p key={i} className="text-[10px] text-slate-500 leading-snug">▸ {note}</p>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        <p className="mt-4 text-[10px] text-slate-600">
+          Ranges reflect geographic variation, supply chain conditions, and project complexity as of 2024–2025. Interconnection costs are highly site-dependent — verify via ISO feasibility study. Figures exclude financing costs (IDC, DSRA). Sources: NREL ATB 2024, EIA AEO 2024, Lazard LCOE v17, BNEF 1H2024 Battery Price Survey, Wood Mackenzie US Solar H2 2024.
+        </p>
+      </div>
+
+      {/* Explainer panel */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <Card className="bg-slate-800/50 border-slate-700/50">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm flex items-center gap-1.5 text-white">
+              <BookOpen className="h-4 w-4 text-teal-400" />
+              What This Tool Does
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="text-xs text-slate-400 space-y-2">
+            <p>
+              Builds a <span className="text-slate-200 font-medium">Virtual PPA / VPPA NPV model</span> with
+              P10/P50/P90 scenario distributions. Select any of the 3,875 EIA 860 candidates — all 8 risk dimension
+              scores from the Rankings engine auto-populate as financial adjustments (basis, curtailment, capture
+              price, shape, REC revenue).
+            </p>
+            <p>
+              The <span className="text-slate-200 font-medium">real Henry Hub gas forward strip</span> (from FRED
+              DHHNGSP) powers a synthetic power price benchmark for comparison against your PPA strike. A full
+              annual cashflow waterfall breaks out every revenue and cost line over the contract term.
+            </p>
+            <p>
+              The <span className="text-slate-200 font-medium">Project Development Cost Reference</span> section
+              above provides NREL ATB 2024 benchmarks (CAPEX, O&amp;M, land, interconnection) for all major
+              technology types to anchor project cost assumptions.
+            </p>
+          </CardContent>
+        </Card>
+
+        <Card className="bg-slate-800/50 border-slate-700/50">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm flex items-center gap-1.5 text-white">
+              <Target className="h-4 w-4 text-amber-400" />
+              Use Cases
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="text-xs text-slate-400 space-y-2">
+            <ul className="space-y-1.5 list-none">
+              {[
+                ["Developer", "At what PPA strike price does a 200 MW West Texas wind project generate a positive P50 NPV? → Select project, set WACC and term, sweep strike slider."],
+                ["PE / Underwriter", "What is the P10/P90 NPV spread — how wide is the distribution? → High spread indicates high curtailment or basis uncertainty in that zone."],
+                ["Investor / LP", "Which project among three ERCOT solar candidates offers the best risk-adjusted NPV? → Run NPV on each with the same WACC and compare P50."],
+                ["Originator", "What ITC vs PTC election maximises project NPV? → Toggle between solar (ITC 30%+10% DC) and wind (PTC $27.50/MWh × 10yr) — tax credit KPIs auto-update."],
+              ].map(([role, a]) => (
+                <li key={role} className="border-l-2 border-teal-500/30 pl-2">
+                  <p className="text-slate-200 font-medium leading-tight">{role}</p>
+                  <p className="text-slate-400 mt-0.5">{a}</p>
+                </li>
+              ))}
+            </ul>
+          </CardContent>
+        </Card>
+
+        <Card className="bg-slate-800/50 border-slate-700/50">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm flex items-center gap-1.5 text-white">
+              <FlaskConical className="h-4 w-4 text-purple-400" />
+              Key Assumptions
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="text-xs text-slate-400 space-y-1.5">
+            {[
+              ["Contract structure", "VPPA: buyer pays fixed strike, receives floating hub DA settlement. Net cashflow = (DA − strike) × MWh."],
+              ["Capture price", "CDR hub DA monthly averages × technology timing ratio (solar=0.724, wind=1.010, storage=1.797 for ERCOT) from ercot_hub_hourly."],
+              ["P10/P50/P90", "Monte Carlo over price volatility, curtailment uncertainty, and basis risk. P10 = adverse 10th percentile; P90 = favourable."],
+              ["Tax credits", "ITC: 30% base + 10% domestic content adder (solar, storage). PTC: $27.50/MWh base (2024) × 10yr for qualifying wind."],
+              ["WACC", "Project-level real WACC (equity/debt blended). Nominal cashflows discounted at real WACC + inflation."],
+              ["Gas forward", "Henry Hub daily spot from FRED DHHNGSP × 8.5 MMBtu/MWh heat rate → synthetic power price benchmark."],
+              ["Score linkage", "All 8 dimension scores from Rankings feed directly: curtailment adj → output haircut; basis adj → price haircut; etc."],
+            ].map(([k, v]) => (
+              <div key={k}>
+                <span className="text-slate-200 font-medium">{k}: </span>
+                <span>{v}</span>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
       </div>
     </div>
   );

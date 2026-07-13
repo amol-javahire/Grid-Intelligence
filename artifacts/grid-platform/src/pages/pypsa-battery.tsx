@@ -3,7 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
-import { Loader2, Battery, DollarSign, TrendingUp } from "lucide-react";
+import { Loader2, Battery, DollarSign, TrendingUp, BookOpen, Target, FlaskConical } from "lucide-react";
 import { useState } from "react";
 import {
   ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, ResponsiveContainer,
@@ -41,6 +41,8 @@ interface HourlyRow {
   da_price: number;
   rt_price: number;
   lmp: number;
+  effective_price: number;
+  curtailment_mw: number;
 }
 
 interface BatteryResult {
@@ -57,8 +59,11 @@ interface BatteryResult {
   "arbitrage_revenue_$": number;
   "daily_revenue_$": number;
   avg_lmp_at_bus: number;
+  avg_da_hub: number;
+  zone_basis_mwh: number;
   lmp_volatility: number;
   neg_price_hours: number;
+  total_curtailment_mwh: number;
   da_price_range: [number, number];
   hourly_schedule: HourlyRow[];
 }
@@ -72,6 +77,7 @@ export default function PypsaBattery() {
   const [year,        setYear]        = useState(2025);
   const [month,       setMonth]       = useState(7);
   const [windCf,      setWindCf]      = useState(35);
+  const [solarCf,     setSolarCf]     = useState(22);
   const [gasPrice,    setGasPrice]    = useState(350);
   const [dirty, setDirty] = useState(false);
   const [result, setResult] = useState<BatteryResult | null>(null);
@@ -96,7 +102,7 @@ export default function PypsaBattery() {
       year,
       month,
       wind_cf: windCf / 100,
-      solar_cf: 0.22,
+      solar_cf: solarCf / 100,
       gas_price_mmbtu: gasPrice / 100,
     });
   }
@@ -117,12 +123,94 @@ export default function PypsaBattery() {
             Battery Revenue Simulator
           </h1>
           <p className="text-muted-foreground mt-1 text-sm">
-            24-hour multi-period OPF · PyPSA StorageUnit · real ERCOT DA hourly prices · cyclic SOC
+            5-bus zonal OPF (24 × Tier-1 snapshots) · zone LMP captures curtailment &amp; congestion · real ERCOT DA prices · cyclic SOC
           </p>
         </div>
         <Badge variant="outline" className="border-emerald-500/40 text-emerald-400 text-xs">
           24-Snapshot OPF
         </Badge>
+      </div>
+
+      {/* Explainer panel */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <Card className="bg-card border-border">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm flex items-center gap-1.5">
+              <BookOpen className="h-4 w-4 text-emerald-400" />
+              What This Tool Does
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="text-xs text-muted-foreground space-y-2">
+            <p>
+              Simulates a <span className="text-foreground font-medium">battery storage asset on the ERCOT 5-bus network</span> using
+              two coupled stages. Phase 1 runs 24 separate Tier-1 OPFs — one per hour of day — using diurnal renewable and
+              load profiles to derive zone-specific LMPs that reflect curtailment and congestion at the storage bus.
+            </p>
+            <p>
+              Phase 2 runs a <span className="text-foreground font-medium">battery arbitrage LP</span> using a blended price
+              signal (50% real DA hub prices + 50% zone OPF LMP) to dispatch charge and discharge over a representative
+              24-hour cycle. The cyclic SOC constraint forces the battery to start and end at the same state of charge,
+              preventing unrealistic one-way arbitrage.
+            </p>
+            <p>
+              Revenue is settled at <span className="text-foreground font-medium">real historical DA hub prices</span> from ERCOT CDR reports — not model outputs — so the financial result is grounded in actual market data.
+            </p>
+          </CardContent>
+        </Card>
+
+        <Card className="bg-card border-border">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm flex items-center gap-1.5">
+              <Target className="h-4 w-4 text-amber-400" />
+              Use Cases
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="text-xs text-muted-foreground space-y-2">
+            <ul className="space-y-1.5 list-none">
+              {[
+                ["What is the realistic daily arbitrage revenue for a West Texas BESS co-located with solar?",
+                  "Set bus=WEST, node=HB_WEST, solarCF=25%, Jul 2025 → high curtailment depresses zone LMP vs hub."],
+                ["Does a 4-hour battery outperform a 2-hour at the Houston coast?",
+                  "Set bus=HOUSTON, MWh=2×MW (4h) vs MWh=1×MW (2h) — compare daily revenue and $/MW-day."],
+                ["How does zone basis affect battery siting?",
+                  "Compare Zone Basis KPI card across WEST / NORTH / HOUSTON — positive basis = zone earns more than hub."],
+                ["Is a BESS worth less in a high-curtailment summer week vs winter?",
+                  "Run Jul 2025 (high solar, more curtailment) vs Jan 2025 (low solar, tighter supply) at HB_WEST."],
+              ].map(([q, a]) => (
+                <li key={q} className="border-l-2 border-emerald-500/30 pl-2">
+                  <p className="text-foreground font-medium leading-tight">{q}</p>
+                  <p className="text-muted-foreground mt-0.5">{a}</p>
+                </li>
+              ))}
+            </ul>
+          </CardContent>
+        </Card>
+
+        <Card className="bg-card border-border">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm flex items-center gap-1.5">
+              <FlaskConical className="h-4 w-4 text-purple-400" />
+              Key Assumptions
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="text-xs text-muted-foreground space-y-1.5">
+            {[
+              ["Network", "ERCOT 5-bus Tier-1: NORTH, SOUTH, WEST, HOUSTON, PAN. Transmission limits are aggregate zonal."],
+              ["DA prices", "Real hourly DA prices from ERCOT CDR Report 13060 (Jan 2024–Dec 2025, 15 hub/zone nodes). Revenue is settled here."],
+              ["Zone LMP", "Per-hour OPF marginal price at the storage bus, driven by the wind CF, solar CF, and gas price inputs. Not used for settlement — used for dispatch signal."],
+              ["Dispatch signal", "Blended: 50% real DA price + 50% zone OPF LMP. Mimics a merchant that has both real market access and zonal congestion awareness."],
+              ["Cyclic SOC", "Battery SOC at hour 24 must equal SOC at hour 0. Prevents infinite single-direction arbitrage."],
+              ["Efficiency", "Round-trip efficiency applies symmetrically: charge takes in X MWh, discharge puts out X × η² MWh (split between charge and discharge stages)."],
+              ["Curtailment", "Hours where zone LMP < 0 (negative prices) result in renewable curtailment. Curtailment MWh = hourly curtailment_mw summed over 24h."],
+              ["Revenue", "arbitrage_revenue_$ = Σ (discharge_mw × DA_price − charge_mw × DA_price) across all hours. Daily = total ÷ 30 (avg month)."],
+            ].map(([k, v]) => (
+              <div key={k}>
+                <span className="text-foreground font-medium">{k}: </span>
+                <span>{v}</span>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
       </div>
 
       {/* Controls */}
@@ -237,6 +325,14 @@ export default function PypsaBattery() {
                 <Slider min={5} max={75} step={1} value={[windCf]}
                   onValueChange={([v]) => { setWindCf(v); setDirty(true); }} />
               </div>
+              <div>
+                <div className="flex justify-between text-xs mb-1">
+                  <span className="text-muted-foreground">Solar CF</span>
+                  <span className="font-mono text-amber-400">{solarCf}%</span>
+                </div>
+                <Slider min={5} max={50} step={1} value={[solarCf]}
+                  onValueChange={([v]) => { setSolarCf(v); setDirty(true); }} />
+              </div>
             </div>
           </div>
 
@@ -268,7 +364,7 @@ export default function PypsaBattery() {
       {result && !mut.isPending && (
         <>
           {/* KPI strip */}
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+          <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-3">
             {[
               {
                 label: "Daily Arbitrage Rev",
@@ -285,7 +381,7 @@ export default function PypsaBattery() {
               {
                 label: "$/MW-day",
                 value: `$${result.storage_mw > 0 ? (Math.abs(result["daily_revenue_$"])/result.storage_mw).toFixed(0) : "—"}`,
-                sub: "per MW power capacity",
+                sub: "per MW capacity",
                 color: "text-amber-400",
               },
               {
@@ -293,6 +389,18 @@ export default function PypsaBattery() {
                 value: `${result.total_charge_mwh.toFixed(0)} / ${result.total_discharge_mwh.toFixed(0)}`,
                 sub: "MWh in 24h",
                 color: "text-muted-foreground",
+              },
+              {
+                label: "Zone Basis",
+                value: `${result.zone_basis_mwh >= 0 ? "+" : ""}$${result.zone_basis_mwh?.toFixed(2) ?? "0.00"}`,
+                sub: `vs hub DA $${result.avg_da_hub?.toFixed(2) ?? "—"}/MWh`,
+                color: (result.zone_basis_mwh ?? 0) >= 0 ? "text-teal-400" : "text-red-400",
+              },
+              {
+                label: "Curtailment MWh",
+                value: `${(result.total_curtailment_mwh ?? 0).toFixed(0)}`,
+                sub: "total in 24h (OPF)",
+                color: (result.total_curtailment_mwh ?? 0) > 0 ? "text-amber-400" : "text-emerald-400",
               },
               {
                 label: "Neg-Price Hours",
@@ -342,8 +450,10 @@ export default function PypsaBattery() {
                       label={false} />
                     <Line yAxisId="price" type="monotone" dataKey="da_price" name="DA Price"
                       stroke="#f59e0b" strokeWidth={2} dot={false} />
-                    <Line yAxisId="price" type="monotone" dataKey="lmp" name="Bus LMP"
+                    <Line yAxisId="price" type="monotone" dataKey="lmp" name="Zone LMP"
                       stroke="#a855f7" strokeWidth={1.5} dot={false} strokeDasharray="4 2" />
+                    <Line yAxisId="price" type="monotone" dataKey="effective_price" name="Effective (blended)"
+                      stroke="#22d3ee" strokeWidth={1.5} dot={false} strokeDasharray="2 2" />
                   </ComposedChart>
                 </ResponsiveContainer>
               </div>

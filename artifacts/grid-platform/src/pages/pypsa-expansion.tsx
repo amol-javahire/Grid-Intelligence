@@ -3,7 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
-import { Loader2, TrendingUp, Zap, DollarSign, Layers, AlertTriangle } from "lucide-react";
+import { Loader2, TrendingUp, Zap, DollarSign, Layers, AlertTriangle, BookOpen, Target, FlaskConical } from "lucide-react";
 import { useState } from "react";
 import {
   BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, ResponsiveContainer,
@@ -157,6 +157,88 @@ export default function PypsaExpansion() {
         </Badge>
       </div>
 
+      {/* Explainer panel */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <Card className="bg-card border-border">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm flex items-center gap-1.5">
+              <BookOpen className="h-4 w-4 text-teal-400" />
+              What This Tool Does
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="text-xs text-muted-foreground space-y-2">
+            <p>
+              Solves a <span className="text-foreground font-medium">multi-investment-period capacity expansion LP</span> using
+              PyPSA + HiGHS. The optimizer finds the least-cost mix of new wind, solar, storage, and gas capacity to build
+              across four investment years (2026, 2028, 2030, 2032) on the ERCOT 5-bus network.
+            </p>
+            <p>
+              Each period uses <span className="text-foreground font-medium">4 seasonal representative days × 24 hours</span> (96 snapshots)
+              to capture diurnal and seasonal variation. New capacity built in one period is available in all future periods.
+              The LP minimises annualised capex + operating cost + scarcity cost (VOLL) simultaneously across all periods.
+            </p>
+            <p>
+              The result tells you the optimal technology mix, timing, and estimated system LMP trajectory — the same
+              framework ERCOT uses in its long-term planning studies.
+            </p>
+          </CardContent>
+        </Card>
+
+        <Card className="bg-card border-border">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm flex items-center gap-1.5">
+              <Target className="h-4 w-4 text-amber-400" />
+              Use Cases
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="text-xs text-muted-foreground space-y-2">
+            <ul className="space-y-1.5 list-none">
+              {[
+                ["What generation mix should anchor Walmart's 2026–2032 PPA pipeline?",
+                  "Run Moderate demand, $3.50 HH → solar+storage dominates early periods."],
+                ["How does aggressive AI datacenter load change the optimal build-out?",
+                  "Switch to Aggressive demand → gas CT additions spike in 2028–2030."],
+                ["At what gas price does solar+storage beat gas peakers?",
+                  "Drag HH from $3 → $7 → $15 → solar share grows, CT share shrinks."],
+                ["What is the least-cost path to ERCOT's 13.75% reserve margin?",
+                  "Reserve margin constraint is always active — result shows minimum-cost path."],
+              ].map(([q, a]) => (
+                <li key={q} className="border-l-2 border-teal-500/30 pl-2">
+                  <p className="text-foreground font-medium leading-tight">{q}</p>
+                  <p className="text-muted-foreground mt-0.5">{a}</p>
+                </li>
+              ))}
+            </ul>
+          </CardContent>
+        </Card>
+
+        <Card className="bg-card border-border">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm flex items-center gap-1.5">
+              <FlaskConical className="h-4 w-4 text-purple-400" />
+              Key Assumptions
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="text-xs text-muted-foreground space-y-1.5">
+            {[
+              ["Network", "ERCOT 5-bus Tier-1 (NORTH, SOUTH, WEST, HOUSTON, PAN). Transmission limits are aggregate zonal — not nodal."],
+              ["Capital costs", "NREL ATB 2024 advanced scenario: Solar $700/kW, Wind $1,100/kW, Storage $280/kWh, Gas CC $900/kW, Gas CT $700/kW."],
+              ["Demand", "Moderate: EIA STEO +1.63%/yr. Aggressive: ERCOT LTLF filing 2024 (+17.6%/yr reflecting hyperscaler growth)."],
+              ["Reserve margin", "13.75% accredited-capacity constraint (ERCOT 2024 planning requirement). Storage accredited at 100% power, wind at 14%, solar at 64%."],
+              ["WACC", "7% real. Capital recovery factor applied to annualise CAPEX over technology design life."],
+              ["Gas dispatch", "Marginal cost = HH price × heat rate (8.5 MMBtu/MWh CC, 11.5 CT) + $2/MWh VOM. Adjusted relative to $3.50 base."],
+              ["VOLL", "$9,000/MWh scarcity backstop — matches ERCOT ORDC cap. Any unserved energy priced at VOLL in the objective."],
+              ["Build rate caps", "Max 3 GW/period per technology (supply chain constraint). Causes scarcity in Aggressive scenario early periods."],
+            ].map(([k, v]) => (
+              <div key={k}>
+                <span className="text-foreground font-medium">{k}: </span>
+                <span>{v}</span>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      </div>
+
       {/* Controls */}
       <Card className="bg-card border-border">
         <CardHeader className="pb-3">
@@ -195,8 +277,11 @@ export default function PypsaExpansion() {
                 <span className="text-muted-foreground">Henry Hub Gas Price</span>
                 <span className="font-mono text-orange-400">${(gasPrice / 100).toFixed(2)}/MMBtu</span>
               </div>
-              <Slider min={200} max={800} step={10} value={[gasPrice]}
+              <Slider min={100} max={2100} step={25} value={[gasPrice]}
                 onValueChange={([v]) => { setGasPrice(v); setDirty(true); }} />
+              <div className="flex justify-between text-xs mt-0.5 text-muted-foreground/50">
+                <span>$1.00</span><span>$21.00</span>
+              </div>
             </div>
           </div>
 

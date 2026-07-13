@@ -15,7 +15,7 @@ paths = [ "/aeso/" ]
 localPort = 22537
 
 [services.development]
-run = "pnpm --filter @workspace/aeso-platform run dev"
+run = "sleep infinity"
 
 [services.production]
 build = [ "pnpm", "--filter", "@workspace/aeso-platform", "run", "build" ]

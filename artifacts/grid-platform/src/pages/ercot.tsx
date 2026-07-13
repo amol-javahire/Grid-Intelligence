@@ -53,6 +53,25 @@ const FUEL_LABELS: Record<string, string> = {
   storage: "Storage", other: "Other",
 };
 
+const HUBS_HOURLY = [
+  "HB_NORTH","HB_SOUTH","HB_WEST","HB_PAN","HB_HOUSTON","HB_BUSAVG","HB_HUBAVG",
+  "LZ_NORTH","LZ_SOUTH","LZ_WEST","LZ_HOUSTON","LZ_AEN","LZ_CPS","LZ_LCRA","LZ_RAYBN",
+];
+const YEARS_HOURLY = ["2024","2025","2026"];
+
+function basisColor(v: number) {
+  if (v > 25 || v < -25) return "#ef4444";
+  if (v > 10 || v < -10) return "#f59e0b";
+  return "#14b8a6";
+}
+
+function hourLabel(h: number) {
+  if (h === 0) return "12a";
+  if (h < 12) return `${h}a`;
+  if (h === 12) return "12p";
+  return `${h - 12}p`;
+}
+
 interface LoadRow  { month: number; zone: string;     avgMw: number; peakMw: number; }
 interface FuelRow  { month: number; fuelType: string; avgMw: number; peakMw: number; }
 
@@ -65,6 +84,9 @@ export default function ErcotHistorical() {
   const [year, setYear]               = useState<number>(2024);
   const [compareYear, setCompareYear] = useState<number>(2024);
   const [showCompare, setShowCompare] = useState(false);
+  const [hourlyNode, setHourlyNode]   = useState("HB_NORTH");
+  const [hourlyYear, setHourlyYear]   = useState("2024");
+  const [hourlyMonth, setHourlyMonth] = useState("7");
 
   // ── Prices (existing) ──────────────────────────────────────────────────────
   const { data: stats, isLoading: priceLoading } = useListErcotNodeStats({ node, year });
@@ -159,6 +181,24 @@ export default function ErcotHistorical() {
     return total > 0 ? (renew / total * 100) : 0;
   }, [fuelRaw]);
 
+  // ── Hourly Prices ──────────────────────────────────────────────────────────
+  const { data: hourlyRaw, isLoading: hourlyLoading } = useQuery<{hourly:{hour:number;daPrice:number;rtPrice:number}[];totalRows:number}>({
+    queryKey: ["hub-hourly", hourlyNode, hourlyYear, hourlyMonth],
+    queryFn: () => fetch(`/api/ercot/hub-hourly?node=${encodeURIComponent(hourlyNode)}&year=${hourlyYear}&month=${hourlyMonth}`).then(r => r.json()),
+    staleTime: 300_000,
+  });
+
+  const hourlyChartData = useMemo(() => {
+    if (!hourlyRaw?.hourly) return [];
+    return hourlyRaw.hourly.map(r => ({
+      hour:     r.hour,
+      label:    hourLabel(r.hour),
+      daPrice:  r.daPrice,
+      rtPrice:  r.rtPrice,
+      basis:    parseFloat((r.rtPrice - r.daPrice).toFixed(4)),
+    }));
+  }, [hourlyRaw]);
+
   const priceEmpty = !priceLoading && priceData.length === 0;
 
   const YEARS = [2026, 2025, 2024];
@@ -208,11 +248,153 @@ export default function ErcotHistorical() {
       <Tabs defaultValue="prices">
         <TabsList className="mb-4">
           <TabsTrigger value="prices">DA vs RT Prices</TabsTrigger>
+          <TabsTrigger value="hourly">Hourly Prices</TabsTrigger>
           <TabsTrigger value="peak">On/Off-Peak Split</TabsTrigger>
           <TabsTrigger value="volatility">Volatility & Neg. Prices</TabsTrigger>
           <TabsTrigger value="load">Demand / Load</TabsTrigger>
           <TabsTrigger value="genmix">Generation Mix</TabsTrigger>
         </TabsList>
+
+        {/* ── Hourly Prices ────────────────────────────────────────────────── */}
+        <TabsContent value="hourly" className="space-y-5">
+          <div className="flex items-center gap-4 flex-wrap">
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-muted-foreground">Node:</span>
+              <Select value={hourlyNode} onValueChange={setHourlyNode}>
+                <SelectTrigger className="w-40 h-8 text-xs"><SelectValue /></SelectTrigger>
+                <SelectContent>{HUBS_HOURLY.map(n => <SelectItem key={n} value={n} className="text-xs">{n}</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-muted-foreground">Year:</span>
+              <Select value={hourlyYear} onValueChange={setHourlyYear}>
+                <SelectTrigger className="w-24 h-8 text-xs"><SelectValue /></SelectTrigger>
+                <SelectContent>{YEARS_HOURLY.map(y => <SelectItem key={y} value={y} className="text-xs">{y}</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-muted-foreground">Month:</span>
+              <Select value={hourlyMonth} onValueChange={setHourlyMonth}>
+                <SelectTrigger className="w-24 h-8 text-xs"><SelectValue /></SelectTrigger>
+                <SelectContent>{[1,2,3,4,5,6,7,8,9,10,11,12].map(m => <SelectItem key={m} value={String(m)} className="text-xs">{MONTHS[m-1]}</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
+            {hourlyLoading && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
+          </div>
+
+          {hourlyChartData.length > 0 && (() => {
+            const bases = hourlyChartData.map(r => r.basis);
+            const avgBasis = (bases.reduce((s, v) => s + v, 0) / bases.length).toFixed(2);
+            const sorted = [...bases].sort((a, b) => a - b);
+            const p5  = sorted[Math.floor(sorted.length * 0.05)]?.toFixed(2) ?? "N/A";
+            const p95 = sorted[Math.floor(sorted.length * 0.95)]?.toFixed(2) ?? "N/A";
+            const avgDa = (hourlyChartData.reduce((s, r) => s + r.daPrice, 0) / hourlyChartData.length).toFixed(2);
+            const avgRt = (hourlyChartData.reduce((s, r) => s + r.rtPrice, 0) / hourlyChartData.length).toFixed(2);
+            const peakRtRaw = Math.max(...hourlyChartData.map(r => r.rtPrice));
+            const peakHour = hourlyChartData.find(r => r.rtPrice === peakRtRaw)?.label ?? "N/A";
+            return (
+              <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
+                {[
+                  { label: "Avg DA",          value: `$${avgDa}`,    color: "text-indigo-400" },
+                  { label: "Avg RT",          value: `$${avgRt}`,    color: "text-teal-400"   },
+                  { label: "Avg Basis RT−DA", value: `$${avgBasis}`, color: "text-foreground" },
+                  { label: "Basis P5",        value: `$${p5}`,       color: "text-muted-foreground" },
+                  { label: "Basis P95",       value: `$${p95}`,      color: "text-muted-foreground" },
+                  { label: "Peak RT",         value: `$${peakRtRaw.toFixed(2)}`, color: "text-amber-400" },
+                  { label: "Peak Hour",       value: peakHour,       color: "text-amber-300"  },
+                ].map(s => (
+                  <Card key={s.label}>
+                    <CardContent className="pt-3 pb-3">
+                      <div className="text-xs text-muted-foreground">{s.label}</div>
+                      <div className={`font-mono font-bold text-lg ${s.color}`}>{s.value}</div>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            );
+          })()}
+
+          {!hourlyLoading && hourlyChartData.length === 0 && <EmptyState />}
+
+          {hourlyChartData.length > 0 && (
+            <>
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-sm">Avg Hourly DA vs RT — {hourlyNode} · {MONTHS[parseInt(hourlyMonth)-1]} {hourlyYear}</CardTitle>
+                    <CardDescription className="text-xs">Average across all days in the selected month · Real CDR data</CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="h-[260px]">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <LineChart data={hourlyChartData} margin={{ top: 4, right: 16, left: -10, bottom: 4 }}>
+                          <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
+                          <XAxis dataKey="label" tick={{ fontSize: 9, fill: C.mutedFg }} interval={2} />
+                          <YAxis tick={{ fontSize: 10, fill: C.mutedFg }} tickFormatter={v => `$${v}`} />
+                          <RechartsTooltip contentStyle={TOOLTIP_STYLE} formatter={(v: number, n: string) => [`$${v.toFixed(2)}/MWh`, n]} />
+                          <Legend wrapperStyle={{ fontSize: 10 }} />
+                          <Line type="monotone" dataKey="daPrice" name="DA" stroke="#6366f1" strokeWidth={2} dot={false} />
+                          <Line type="monotone" dataKey="rtPrice" name="RT" stroke={C.teal} strokeWidth={2} dot={false} />
+                        </LineChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-sm">Hourly Basis (RT − DA) — {hourlyNode} · {MONTHS[parseInt(hourlyMonth)-1]} {hourlyYear}</CardTitle>
+                    <CardDescription className="text-xs">Teal = favourable · Amber = moderate congestion · Red = severe</CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="h-[260px]">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart data={hourlyChartData} margin={{ top: 4, right: 16, left: -10, bottom: 4 }}>
+                          <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
+                          <XAxis dataKey="label" tick={{ fontSize: 9, fill: C.mutedFg }} interval={2} />
+                          <YAxis tick={{ fontSize: 10, fill: C.mutedFg }} tickFormatter={v => `$${v}`} />
+                          <RechartsTooltip contentStyle={TOOLTIP_STYLE} formatter={(v: number) => [`$${v.toFixed(2)}/MWh`, "RT − DA Basis"]} />
+                          <Bar dataKey="basis" radius={[2,2,0,0]} isAnimationActive={false}>
+                            {hourlyChartData.map((_d, i) => (
+                              <Cell key={i} fill={basisColor(_d.basis)} />
+                            ))}
+                          </Bar>
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </CardContent>
+                </Card>
+              </div>
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm">Full Hourly Price Overlay — All 24 Hours</CardTitle>
+                  <CardDescription className="text-xs">DA (indigo) and RT (teal) averaged across all days in {MONTHS[parseInt(hourlyMonth)-1]} {hourlyYear}</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="h-[200px]">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={hourlyChartData} barSize={16} margin={{ top: 4, right: 16, left: -10, bottom: 4 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
+                        <XAxis dataKey="label" tick={{ fontSize: 9, fill: C.mutedFg }} />
+                        <YAxis tick={{ fontSize: 10, fill: C.mutedFg }} tickFormatter={v => `$${v}`} />
+                        <RechartsTooltip contentStyle={TOOLTIP_STYLE} formatter={(v: number, n: string) => [`$${v.toFixed(2)}/MWh`, n]} />
+                        <Legend wrapperStyle={{ fontSize: 10 }} />
+                        <Bar dataKey="daPrice" name="DA" fill="#6366f1" radius={[2,2,0,0]} isAnimationActive={false} />
+                        <Bar dataKey="rtPrice" name="RT"  fill={C.teal}   radius={[2,2,0,0]} isAnimationActive={false} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </CardContent>
+              </Card>
+              <Card className="bg-card/50 border-border/50">
+                <CardContent className="pt-3 pb-3">
+                  <p className="text-xs text-muted-foreground">
+                    <span className="text-teal-400 font-medium">Data source:</span> ERCOT CDR Report 13061 (RTM — 15-min intervals averaged to hourly) and CDR Report 13060 (DAM — hourly). All 15 hub/zone nodes · Jan 2024–May 2026 · 317,475 rows. Parsed via Python multiprocessing XML extractor from ERCOT annual XLSX bundles.
+                  </p>
+                </CardContent>
+              </Card>
+            </>
+          )}
+        </TabsContent>
 
         {/* ── DA vs RT Prices ─────────────────────────────────────────────── */}
         <TabsContent value="prices">

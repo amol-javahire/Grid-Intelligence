@@ -388,55 +388,117 @@ router.get("/congestion-intel/backtest", async (req, res) => {
 // ── Data quality ─────────────────────────────────────────────────────────────
 router.get("/congestion-intel/data-quality", async (req, res) => {
   try {
+    const market = (req.query.market as string) || "ERCOT";
+
+    if (market === "ERCOT") {
+      const rows = await db.execute<{
+        year: number; node_type: string;
+        unique_nodes: string; total_records: string;
+        rt_records: string; vol_records: string; neg_records: string;
+      }>(sql`
+        SELECT
+          year, node_type,
+          COUNT(DISTINCT node)                                  AS unique_nodes,
+          COUNT(*)                                              AS total_records,
+          COUNT(*) FILTER (WHERE avg_rt_price IS NOT NULL)      AS rt_records,
+          COUNT(*) FILTER (WHERE volatility IS NOT NULL)        AS vol_records,
+          COUNT(*) FILTER (WHERE neg_price_percent IS NOT NULL) AS neg_records
+        FROM ercot_node_stats
+        GROUP BY year, node_type
+        ORDER BY year, node_type
+      `);
+      const totals = await db.execute<{
+        unique_nodes: string; total_records: string; rt_records: string;
+        min_period: string; max_period: string;
+      }>(sql`
+        SELECT
+          COUNT(DISTINCT node)                             AS unique_nodes,
+          COUNT(*)                                         AS total_records,
+          COUNT(*) FILTER (WHERE avg_rt_price IS NOT NULL) AS rt_records,
+          MIN(year::text || '-' || LPAD(month::text,2,'0')) AS min_period,
+          MAX(year::text || '-' || LPAD(month::text,2,'0')) AS max_period
+        FROM ercot_node_stats
+      `);
+      const t = totals.rows[0];
+      return res.json({
+        market: "ERCOT",
+        totalNodes: Number(t.unique_nodes),
+        totalRecords: Number(t.total_records),
+        rtRecords: Number(t.rt_records),
+        minPeriod: t.min_period,
+        maxPeriod: t.max_period,
+        rtCompleteness: Math.round(Number(t.rt_records) / Number(t.total_records) * 1000) / 10,
+        byYearAndType: rows.rows.map(r => ({
+          year: Number(r.year), nodeType: r.node_type,
+          uniqueNodes: Number(r.unique_nodes), totalRecords: Number(r.total_records),
+          rtRecords: Number(r.rt_records), volRecords: Number(r.vol_records),
+          negRecords: Number(r.neg_records),
+          rtPct: Math.round(Number(r.rt_records) / Number(r.total_records) * 1000) / 10,
+        })),
+      });
+    }
+
+    // CAISO or PJM — query the appropriate table
+    const table = market === "CAISO" ? sql`caiso_node_stats` : sql`pjm_node_stats`;
+
     const rows = await db.execute<{
-      year: number; node_type: string;
-      unique_nodes: string; total_records: string;
-      rt_records: string; vol_records: string; neg_records: string;
+      year: number; node: string;
+      total_records: string; da_records: string; rt_records: string;
+      vol_records: string; neg_records: string;
+      avg_da: string | null;
     }>(sql`
       SELECT
-        year, node_type,
-        COUNT(DISTINCT node)                                  AS unique_nodes,
+        year, node,
         COUNT(*)                                              AS total_records,
+        COUNT(*) FILTER (WHERE avg_da_price IS NOT NULL)      AS da_records,
         COUNT(*) FILTER (WHERE avg_rt_price IS NOT NULL)      AS rt_records,
         COUNT(*) FILTER (WHERE volatility IS NOT NULL)        AS vol_records,
-        COUNT(*) FILTER (WHERE neg_price_percent IS NOT NULL) AS neg_records
-      FROM ercot_node_stats
-      GROUP BY year, node_type
-      ORDER BY year, node_type
+        COUNT(*) FILTER (WHERE neg_price_percent IS NOT NULL) AS neg_records,
+        ROUND(AVG(avg_da_price)::numeric, 2)                  AS avg_da
+      FROM ${table}
+      GROUP BY year, node
+      ORDER BY year, node
     `);
 
     const totals = await db.execute<{
-      unique_nodes: string; total_records: string; rt_records: string;
+      unique_nodes: string; total_records: string;
+      da_records: string; rt_records: string;
       min_period: string; max_period: string;
     }>(sql`
       SELECT
         COUNT(DISTINCT node)                             AS unique_nodes,
         COUNT(*)                                         AS total_records,
+        COUNT(*) FILTER (WHERE avg_da_price IS NOT NULL) AS da_records,
         COUNT(*) FILTER (WHERE avg_rt_price IS NOT NULL) AS rt_records,
         MIN(year::text || '-' || LPAD(month::text,2,'0')) AS min_period,
         MAX(year::text || '-' || LPAD(month::text,2,'0')) AS max_period
-      FROM ercot_node_stats
+      FROM ${table}
     `);
 
     const t = totals.rows[0];
-    res.json({
+    return res.json({
+      market,
       totalNodes: Number(t.unique_nodes),
       totalRecords: Number(t.total_records),
+      daRecords: Number(t.da_records),
       rtRecords: Number(t.rt_records),
       minPeriod: t.min_period,
       maxPeriod: t.max_period,
-      rtCompleteness: Math.round(Number(t.rt_records) / Number(t.total_records) * 1000) / 10,
-      byYearAndType: rows.rows.map(r => ({
-        year: Number(r.year), nodeType: r.node_type,
-        uniqueNodes: Number(r.unique_nodes), totalRecords: Number(r.total_records),
-        rtRecords: Number(r.rt_records), volRecords: Number(r.vol_records),
+      daCompleteness: Math.round(Number(t.da_records) / Number(t.total_records) * 1000) / 10,
+      byYearAndNode: rows.rows.map(r => ({
+        year: Number(r.year), node: r.node,
+        totalRecords: Number(r.total_records),
+        daRecords: Number(r.da_records),
+        rtRecords: Number(r.rt_records),
+        volRecords: Number(r.vol_records),
         negRecords: Number(r.neg_records),
-        rtPct: Math.round(Number(r.rt_records) / Number(r.total_records) * 1000) / 10,
+        avgDa: r.avg_da !== null ? Number(r.avg_da) : null,
+        daPct: Math.round(Number(r.da_records) / Number(r.total_records) * 1000) / 10,
       })),
     });
   } catch (err) {
     req.log.error({ err }, "congestion-intel/data-quality error");
-    res.status(500).json({ error: "internal_error" });
+    return res.status(500).json({ error: "internal_error" });
   }
 });
 

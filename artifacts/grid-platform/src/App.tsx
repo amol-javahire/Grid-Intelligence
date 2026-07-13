@@ -27,7 +27,6 @@ import CIQuality from "@/pages/ci-quality";
 import CIMethodology from "@/pages/ci-methodology";
 import PypsaNetwork from "@/pages/pypsa-network";
 import PypsaML from "@/pages/pypsa-ml";
-import PypsaHourly from "@/pages/pypsa-hourly";
 import PypsaCurtailment from "@/pages/pypsa-curtailment";
 import PypsaTxRelief from "@/pages/pypsa-tx-relief";
 import PypsaScarcity from "@/pages/pypsa-scarcity";
@@ -43,6 +42,7 @@ import ErcotGasPage from "@/pages/ercot-gas";
 import GeneratorsPage from "@/pages/generators";
 import ErcotDispatch from "@/pages/ercot-dispatch";
 import LoadForecastStress from "@/pages/load-forecast-stress";
+import HeatRateOptions from "@/pages/heat-rate-options";
 import NotFound from "@/pages/not-found";
 
 const queryClient = new QueryClient();
@@ -74,7 +74,6 @@ function Router() {
         <Route path="/ci-methodology" component={CIMethodology} />
         <Route path="/pypsa-network" component={PypsaNetwork} />
         <Route path="/pypsa-ml" component={PypsaML} />
-        <Route path="/pypsa-hourly" component={PypsaHourly} />
         <Route path="/pypsa-curtailment" component={PypsaCurtailment} />
         <Route path="/pypsa-tx-relief" component={PypsaTxRelief} />
         <Route path="/pypsa-scarcity" component={PypsaScarcity} />
@@ -90,6 +89,7 @@ function Router() {
         <Route path="/generators" component={GeneratorsPage} />
         <Route path="/ercot-dispatch" component={ErcotDispatch} />
         <Route path="/load-forecast-stress" component={LoadForecastStress} />
+        <Route path="/heat-rate-options" component={HeatRateOptions} />
         {/* Legacy / spec-documented aliases */}
         <Route path="/rec"><Redirect to="/recs" /></Route>
         <Route path="/ci/heatmap"><Redirect to="/ci-heatmap" /></Route>

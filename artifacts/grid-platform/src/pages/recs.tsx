@@ -615,7 +615,7 @@ export default function RECAnalysis() {
 
               <p className="text-xs text-muted-foreground">
                 <span className="text-foreground font-medium">Generation:</span> Annual RECs (MWh) = Capacity (MW) × Capacity Factor × 8,760 h/yr.
-                Capacity factors: solar ERCOT 27%, CAISO 29%; wind ERCOT 40%, CAISO 32%; geothermal 88%; biomass 65%.
+                Capacity factors: solar ERCOT 27%, CAISO 29%; wind ERCOT 38%, CAISO 28%; geothermal 88%; biomass 65%. (Potomac Economics 2024 SOTM; CAISO 2024 annual statistics)
                 {dataSource === "operational"
                   ? " Source: EIA Form 860 2024 — operable generators >1 MW. Year = commercial operation date (COD)."
                   : " Source: interconnection queue filings across ERCOT and CAISO. Year = queue entry date."}
@@ -635,7 +635,7 @@ export default function RECAnalysis() {
                   <table className="w-full text-xs mt-1">
                     <thead><tr className="text-muted-foreground"><th className="text-left font-normal">Type</th><th className="text-right font-normal">Price</th></tr></thead>
                     <tbody>
-                      {[["Wind", "$1.00/MWh"],["Solar", "$2.00/MWh"],["Hydro / Biomass", "$1.25/MWh"],["Geothermal", "$1.25/MWh"]].map(([t, p]) => (
+                      {[["Wind", "$2.00/MWh"],["Solar", "$5.00/MWh"],["Hydro / Biomass", "$1.50/MWh"],["Geothermal", "$2.00/MWh"]].map(([t, p]) => (
                         <tr key={t}><td className="text-foreground py-0.5">{t}</td><td className="text-right text-emerald-400 font-medium">{p}</td></tr>
                       ))}
                     </tbody>
@@ -655,7 +655,7 @@ export default function RECAnalysis() {
                   <table className="w-full text-xs mt-1">
                     <thead><tr className="text-muted-foreground"><th className="text-left font-normal">Type</th><th className="text-right font-normal">Price</th></tr></thead>
                     <tbody>
-                      {[["Solar", "$13.00/MWh"],["Geothermal", "$10.00/MWh"],["Wind", "$8.00/MWh"],["Hydro / Biomass", "$6.00/MWh"]].map(([t, p]) => (
+                      {[["Solar", "$10.00/MWh"],["Geothermal", "$8.00/MWh"],["Wind", "$6.00/MWh"],["Hydro / Biomass", "$5.00/MWh"]].map(([t, p]) => (
                         <tr key={t}><td className="text-foreground py-0.5">{t}</td><td className="text-right text-emerald-400 font-medium">{p}</td></tr>
                       ))}
                     </tbody>

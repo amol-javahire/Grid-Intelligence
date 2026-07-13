@@ -471,8 +471,30 @@ def run_scarcity(
 
 
 # ---------------------------------------------------------------------------
-# 4. Battery Revenue Simulator (24-hour DA price arbitrage via PyPSA)
+# 4. Battery Revenue Simulator — 5-bus zonal OPF + 24-hour DA arbitrage
 # ---------------------------------------------------------------------------
+
+# Solar diurnal profile (0–1 multiplier by hour-of-day, peaks at solar noon)
+_SOLAR_DIURNAL = [
+    0.00, 0.00, 0.00, 0.00, 0.00, 0.04,
+    0.15, 0.35, 0.58, 0.78, 0.92, 0.99,
+    1.00, 0.98, 0.90, 0.78, 0.60, 0.38,
+    0.16, 0.05, 0.00, 0.00, 0.00, 0.00,
+]
+# Load diurnal relative to daily avg = 1.0 (ERCOT-calibrated shape)
+_LOAD_DIURNAL = [
+    0.76, 0.72, 0.70, 0.70, 0.73, 0.82,
+    0.93, 0.98, 1.01, 1.04, 1.07, 1.10,
+    1.12, 1.14, 1.16, 1.13, 1.08, 1.11,
+    1.15, 1.11, 1.03, 0.95, 0.88, 0.82,
+]
+# Seasonal base system load by calendar month (MW, ERCOT historical avg)
+_SEASONAL_BASE = {
+    1: 42000,  2: 44000,  3: 39000,  4: 38000,
+    5: 45000,  6: 55000,  7: 62000,  8: 61000,
+    9: 52000, 10: 43000, 11: 41000, 12: 43000,
+}
+
 
 def run_battery(
     storage_bus: str = "WEST",
@@ -487,16 +509,24 @@ def run_battery(
     gas_price_mmbtu: float = 3.50,
 ) -> dict[str, Any]:
     """
-    24-hour DA price arbitrage using PyPSA single-bus model.
-    Real hourly DA prices from ercot_hub_hourly act as the market signal:
-    - A price-taking "market" generator is priced at the real DA price each hour
-    - A fixed load of 1 MW per hour represents demand
-    - The StorageUnit arbitrages by charging at cheap hours, discharging at expensive ones
-    This directly computes optimal DA price arbitrage revenue without interference
-    from the full multi-zonal network (which suppresses battery dispatch via surplus capacity).
+    24-hour DA price arbitrage — upgraded to 5-bus zonal OPF price signals.
+
+    Phase 1 — Zone LMP derivation (24 × Tier-1 single-snapshot OPFs):
+      For each hour-of-day, run the 5-bus ERCOT network with a diurnal solar
+      profile and load shape.  Extract the zone LMP at the storage bus.  This
+      captures curtailment pressure (solar/wind surplus → negative LMPs at the
+      generation-heavy WEST/PAN buses) and inter-zonal congestion (WEST → NORTH
+      line saturation).
+
+    Phase 2 — Multi-period battery LP:
+      Use a blended signal (50% real DA hub price + 50% zone LMP) as the
+      marginal cost for the single-bus battery optimisation.  Revenue is always
+      settled at the real DA hub price so the reported $/day figure is directly
+      comparable to merchant battery proformas.
     """
     from db import fetch_all
 
+    # ── Fetch real hourly DA + RT prices ──────────────────────────────────────
     rows = fetch_all(
         """SELECT hour, da_price, rt_price
            FROM ercot_hub_hourly
@@ -504,7 +534,6 @@ def run_battery(
            ORDER BY hour""",
         (node, year, month),
     )
-
     if not rows:
         return {"error": f"No hourly data for {node} {year}-{month:02d}. Seed ercot_hub_hourly first."}
 
@@ -519,113 +548,134 @@ def run_battery(
     hours_sorted = sorted(hourly.keys())
     da_prices = [float(np.mean(hourly[h]["da"])) for h in hours_sorted]
     rt_prices = [float(np.mean(hourly[h]["rt"])) for h in hours_sorted]
-    n_hours = len(hours_sorted)
+    n_hours   = len(hours_sorted)
 
-    # Single-bus PyPSA model for DA price arbitrage
-    # The market generator has time-varying marginal cost = real DA price
-    # Battery arbitrages against this price signal
+    # ── Phase 1: 24 Tier-1 OPFs → zone LMPs + curtailment ────────────────────
+    base_load      = _SEASONAL_BASE.get(month, 50_000)
+    zone_lmps:     list[float] = []
+    curtailment_mw: list[float] = []
+
+    for h in hours_sorted:
+        idx        = h % 24
+        load_mw    = base_load * _LOAD_DIURNAL[idx]
+        solar_cf_h = solar_cf  * _SOLAR_DIURNAL[idx]
+        try:
+            net = _build_tier1(load_mw, wind_cf, solar_cf_h, gas_price_mmbtu)
+            net.optimize(solver_name="highs")
+            if net.objective is None or net.buses_t.marginal_price.empty:
+                raise ValueError("infeasible")
+            bus_lmp = float(net.buses_t.marginal_price[storage_bus].iloc[0])
+            curt = 0.0
+            for gen_name, row in net.generators.iterrows():
+                carrier = row.get("carrier", "")
+                if carrier not in ("wind", "solar"):
+                    continue
+                avail = float(row["p_nom"]) * (wind_cf if carrier == "wind" else solar_cf_h)
+                try:
+                    disp = float(net.generators_t.p[gen_name].iloc[0])
+                except Exception:
+                    disp = avail
+                curt += max(0.0, avail - disp)
+        except Exception:
+            bus_lmp = da_prices[hours_sorted.index(h)]
+            curt    = 0.0
+
+        zone_lmps.append(bus_lmp)
+        curtailment_mw.append(round(curt, 1))
+
+    # Blended price signal: zone LMP brings curtailment/congestion signal,
+    # DA price anchors to actual market outturn
+    effective_prices = [
+        round(0.5 * da_prices[i] + 0.5 * zone_lmps[i], 4)
+        for i in range(n_hours)
+    ]
+
+    # ── Phase 2: Multi-period single-bus battery LP ───────────────────────────
     snapshots = pd.date_range("2025-07-01", periods=n_hours, freq="h")
-    n = pypsa.Network()
-    n.set_snapshots(snapshots)
+    net_bat   = pypsa.Network()
+    net_bat.set_snapshots(snapshots)
+    net_bat.add("Bus", "MARKET")
+    net_bat.add("Load", "demand", bus="MARKET", p_set=storage_mw)
 
-    n.add("Bus", "MARKET")
+    eff_series = pd.Series([max(p, 0.0) for p in effective_prices], index=snapshots)
+    net_bat.add("Generator", "MARKET-GEN", bus="MARKET", carrier="market",
+                p_nom=storage_mw * 10, marginal_cost=eff_series, p_max_pu=1.0, p_min_pu=0.0)
+    net_bat.add("StorageUnit", "BATTERY", bus="MARKET", carrier="battery",
+                p_nom=storage_mw,
+                max_hours=storage_mwh / storage_mw,
+                efficiency_store=float(np.sqrt(storage_efficiency)),
+                efficiency_dispatch=float(np.sqrt(storage_efficiency)),
+                cyclic_state_of_charge=True,
+                marginal_cost=0.0)
 
-    # Fixed load of storage_mw so the system must meet demand each hour
-    n.add("Load", "demand", bus="MARKET", p_set=storage_mw)
-
-    # Market generator: price-taker at real DA prices (sets the LMP signal)
-    # Use DA price as marginal cost so LMP = DA price at each snapshot
-    da_series = pd.Series(da_prices, index=snapshots)
-    # Clamp at 0 for feasibility (battery charges, market gen meets remainder)
-    mc_series = da_series.clip(lower=0.0)
-
-    n.add("Generator", "MARKET-GEN",
-          bus="MARKET",
-          carrier="market",
-          p_nom=storage_mw * 10,     # effectively unconstrained
-          marginal_cost=mc_series,
-          p_max_pu=1.0,
-          p_min_pu=0.0)
-
-    # Battery StorageUnit
-    n.add("StorageUnit", "BATTERY",
-          bus="MARKET",
-          carrier="battery",
-          p_nom=storage_mw,
-          max_hours=storage_mwh / storage_mw,
-          efficiency_store=float(np.sqrt(storage_efficiency)),
-          efficiency_dispatch=float(np.sqrt(storage_efficiency)),
-          cyclic_state_of_charge=True,
-          marginal_cost=0.0)
-
-    n.optimize(solver_name="highs")
-    if n.objective is None:
+    net_bat.optimize(solver_name="highs")
+    if net_bat.objective is None:
         return {"error": "Battery OPF failed — check feasibility"}
 
-    # Extract results
     try:
-        bat_p_series = n.storage_units_t.p["BATTERY"]
-        bat_soc_series = n.storage_units_t.state_of_charge["BATTERY"]
+        bat_p_series   = net_bat.storage_units_t.p["BATTERY"]
+        bat_soc_series = net_bat.storage_units_t.state_of_charge["BATTERY"]
     except Exception:
         return {"error": "Battery dispatch results unavailable after OPF"}
 
-    try:
-        bus_lmps_series = n.buses_t.marginal_price["MARKET"]
-        bus_lmps = [float(bus_lmps_series.iloc[i]) for i in range(n_hours)]
-    except Exception:
-        bus_lmps = da_prices[:]
-
-    hourly_schedule = []
-    total_charge_mwh = 0.0
+    hourly_schedule: list[dict] = []
+    total_charge_mwh    = 0.0
     total_discharge_mwh = 0.0
-    arbitrage_revenue = 0.0
+    arbitrage_revenue   = 0.0
 
     for i, h in enumerate(hours_sorted):
-        # In PyPSA StorageUnit: p > 0 = discharging, p < 0 = charging
-        p = float(bat_p_series.iloc[i])
-        soc = float(bat_soc_series.iloc[i])
-        da = da_prices[i]
-        rt = rt_prices[i]
-        lmp = bus_lmps[i]
+        p    = float(bat_p_series.iloc[i])
+        soc  = float(bat_soc_series.iloc[i])
+        da   = da_prices[i]
+        rt   = rt_prices[i]
+        zlmp = zone_lmps[i]
+        eff  = effective_prices[i]
 
         if p > 0:
             total_discharge_mwh += p
-            arbitrage_revenue += p * da
+            arbitrage_revenue   += p * da
         else:
-            total_charge_mwh += abs(p)
-            arbitrage_revenue -= abs(p) * da
+            total_charge_mwh    += abs(p)
+            arbitrage_revenue   -= abs(p) * da
 
         hourly_schedule.append({
-            "hour": h,
-            "label": f"{h}:00",
-            "charge_mw": round(abs(p) if p < 0 else 0.0, 1),
-            "discharge_mw": round(p if p > 0 else 0.0, 1),
-            "soc_mwh": round(soc, 1),
-            "da_price": round(da, 2),
-            "rt_price": round(rt, 2),
-            "lmp": round(lmp, 2),
+            "hour":            h,
+            "label":           f"{h}:00",
+            "charge_mw":       round(abs(p) if p < 0 else 0.0, 1),
+            "discharge_mw":    round(p if p > 0 else 0.0, 1),
+            "soc_mwh":         round(soc, 1),
+            "da_price":        round(da, 2),
+            "rt_price":        round(rt, 2),
+            "lmp":             round(zlmp, 2),
+            "effective_price": round(eff, 2),
+            "curtailment_mw":  curtailment_mw[i],
         })
 
-    avg_lmp = float(np.mean(bus_lmps))
-    lmp_volatility = float(np.std(bus_lmps))
-    neg_price_hours = int(sum(1 for v in da_prices if v < 0))
+    avg_zone_lmp   = float(np.mean(zone_lmps))
+    avg_da         = float(np.mean(da_prices))
+    lmp_volatility = float(np.std(zone_lmps))
+    neg_price_hours = int(sum(1 for v in zone_lmps if v < 0))
+    total_curt_mwh  = round(sum(curtailment_mw), 0)
 
     return {
-        "status": "optimal",
-        "storage_bus": storage_bus,
-        "storage_mw": storage_mw,
-        "storage_mwh": storage_mwh,
-        "node": node,
-        "year": year,
-        "month": month,
-        "n_hours": n_hours,
-        "total_charge_mwh": round(total_charge_mwh, 1),
-        "total_discharge_mwh": round(total_discharge_mwh, 1),
-        "arbitrage_revenue_$": round(arbitrage_revenue, 0),
-        "daily_revenue_$": round(arbitrage_revenue, 0),
-        "avg_lmp_at_bus": round(avg_lmp, 2),
-        "lmp_volatility": round(lmp_volatility, 2),
-        "neg_price_hours": neg_price_hours,
-        "da_price_range": [round(min(da_prices), 2), round(max(da_prices), 2)],
-        "hourly_schedule": hourly_schedule,
+        "status":                 "optimal",
+        "storage_bus":            storage_bus,
+        "storage_mw":             storage_mw,
+        "storage_mwh":            storage_mwh,
+        "node":                   node,
+        "year":                   year,
+        "month":                  month,
+        "n_hours":                n_hours,
+        "total_charge_mwh":       round(total_charge_mwh, 1),
+        "total_discharge_mwh":    round(total_discharge_mwh, 1),
+        "arbitrage_revenue_$":    round(arbitrage_revenue, 0),
+        "daily_revenue_$":        round(arbitrage_revenue, 0),
+        "avg_lmp_at_bus":         round(avg_zone_lmp, 2),
+        "avg_da_hub":             round(avg_da, 2),
+        "zone_basis_mwh":         round(avg_zone_lmp - avg_da, 2),
+        "lmp_volatility":         round(lmp_volatility, 2),
+        "neg_price_hours":        neg_price_hours,
+        "total_curtailment_mwh":  total_curt_mwh,
+        "da_price_range":         [round(min(da_prices), 2), round(max(da_prices), 2)],
+        "hourly_schedule":        hourly_schedule,
     }

@@ -30,20 +30,3 @@ NODE_ENV = "production"
 
 [services.production.health.startup]
 path = "/api/healthz"
-
-[[services]]
-localPort = 8083
-name = "PyPSA Engine"
-paths = ["/pypsa"]
-
-[services.development]
-run = "cd artifacts/pypsa-engine && PORT=8083 .venv/bin/python main.py"
-
-[services.production.run]
-args = ["bash", "-c", "cd artifacts/pypsa-engine && .venv/bin/python main.py"]
-
-[services.production.run.env]
-PORT = "8083"
-
-[services.production.health.startup]
-path = "/pypsa/healthz"

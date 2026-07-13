@@ -25,36 +25,43 @@ const TOOLTIP_STYLE = {
 };
 
 // ── EV Projection Data ────────────────────────────────────────────────────────
-// Sources: ERCOT LTSA 2024, CPUC IEPR 2023, CEC Demand Forecast 2023, NREL EFS
-// Values are total system EV charging load in MW (daily average, includes L1/L2/DCFC)
+// Sources (updated Jul 2026):
+//   ERCOT: Texas DMV registration data — 456,667 EVs on-road end-2025, ~1,500/wk growth
+//          (DFW Clean Cities / TxDMV). Growth rate ~16% CAGR (2025–2029).
+//          Load: 1.51 kW avg per vehicle (L1/L2/DCFC blend, ERCOT LTLF methodology).
+//   CAISO: DOE AFDC / Atlas EV Hub / Experian — ~1.9M ZEVs on-road 2024 (incl. PHEVs).
+//          CEC 2025 IEPR: new BEV sales ~387K in 2024 (flat vs 2023, market maturing).
+//          Growth ~13–18% CAGR near-term, decelerating. Load: 1.40 kW avg per vehicle.
+//   Zone splits: Texas regional DMV shares; CAISO from CEC/CPUC ZEV distribution data.
 
 const ERCOT_ANNUAL: { year: number; totalMw: number; evCount: number }[] = [
-  { year: 2024, totalMw: 350,  evCount: 220_000 },
-  { year: 2025, totalMw: 475,  evCount: 310_000 },
-  { year: 2026, totalMw: 650,  evCount: 430_000 },
-  { year: 2027, totalMw: 1000, evCount: 610_000 },
-  { year: 2028, totalMw: 1400, evCount: 880_000 },
-  { year: 2029, totalMw: 1950, evCount: 1_220_000 },
+  { year: 2024, totalMw: 575,  evCount: 380_000 },  // ~380K (TxDMV backcast from end-2025)
+  { year: 2025, totalMw: 690,  evCount: 457_000 },  // 456,667 confirmed (TxDMV)
+  { year: 2026, totalMw: 800,  evCount: 530_000 },  // +73K/yr at ~1,500/wk pace
+  { year: 2027, totalMw: 930,  evCount: 615_000 },
+  { year: 2028, totalMw: 1080, evCount: 715_000 },
+  { year: 2029, totalMw: 1250, evCount: 830_000 },  // ~16% CAGR vs prior model's 41%
 ];
 
 const CAISO_ANNUAL: { year: number; totalMw: number; evCount: number }[] = [
-  { year: 2024, totalMw: 2200,  evCount: 1_600_000 },
-  { year: 2025, totalMw: 3100,  evCount: 2_200_000 },
-  { year: 2026, totalMw: 4200,  evCount: 3_000_000 },
-  { year: 2027, totalMw: 5600,  evCount: 4_100_000 },
-  { year: 2028, totalMw: 7000,  evCount: 5_400_000 },
-  { year: 2029, totalMw: 8600,  evCount: 6_800_000 },
+  { year: 2024, totalMw: 2660, evCount: 1_900_000 }, // 1.9M ZEVs on-road (AFDC/Experian)
+  { year: 2025, totalMw: 3150, evCount: 2_250_000 }, // +18% growth (CEC IEPR trajectory)
+  { year: 2026, totalMw: 3575, evCount: 2_550_000 }, // decelerating vs prior high-growth model
+  { year: 2027, totalMw: 4000, evCount: 2_860_000 },
+  { year: 2028, totalMw: 4480, evCount: 3_200_000 },
+  { year: 2029, totalMw: 4975, evCount: 3_555_000 }, // ~13% CAGR vs prior model's 31%
 ];
 
-// Zone breakdown (current year, share of total)
+// Zone breakdown (share of total fleet by region)
+// ERCOT: Texas DMV regional shares (DFW=36-37%, Houston=25%, Austin/SA=20%; TxDMV 2025)
 const ERCOT_ZONES = [
-  { zone: "NCEN",  label: "North Central (DFW)", sharePct: 28, color: C.purple },
-  { zone: "SCEN",  label: "South Central (Austin/SAT)", sharePct: 22, color: C.red },
-  { zone: "COAS",  label: "Coast (Houston)",     sharePct: 20, color: C.teal },
-  { zone: "NRTH",  label: "North",               sharePct: 12, color: C.amber },
-  { zone: "SOUT",  label: "South (Corpus)",      sharePct: 8,  color: C.blue },
-  { zone: "EAST",  label: "East",                sharePct: 6,  color: C.green },
-  { zone: "FWES",  label: "Far West",            sharePct: 3,  color: "#f97316" },
+  { zone: "NCEN",  label: "North Central (DFW)", sharePct: 36, color: C.purple },
+  { zone: "COAS",  label: "Coast (Houston)",     sharePct: 25, color: C.teal },
+  { zone: "SCEN",  label: "South Central (Austin/SAT)", sharePct: 20, color: C.red },
+  { zone: "NRTH",  label: "North",               sharePct: 8,  color: C.amber },
+  { zone: "SOUT",  label: "South (Corpus)",      sharePct: 5,  color: C.blue },
+  { zone: "EAST",  label: "East",                sharePct: 3,  color: C.green },
+  { zone: "FWES",  label: "Far West",            sharePct: 2,  color: "#f97316" },
   { zone: "WEST",  label: "West (Lubbock)",      sharePct: 1,  color: "#ec4899" },
 ];
 
@@ -197,7 +204,7 @@ export default function EvChargingPage() {
           <h1 className="text-2xl font-bold text-slate-100">EV Charging Load</h1>
           <p className="text-slate-400 mt-1 text-sm">
             EV fleet growth and grid charging load by zone — ERCOT and CAISO.
-            Projections from ERCOT LTSA 2024, CPUC IEPR 2023, CEC 2023, NREL EFS.
+            ERCOT: Texas DMV (456,667 EVs end-2025, ~1,500/wk). CAISO: DOE AFDC / CEC 2025 IEPR (~1.9M ZEVs on-road 2024).
           </p>
         </div>
         {/* Market toggle */}
@@ -589,13 +596,14 @@ export default function EvChargingPage() {
         <CardContent className="pt-4 pb-3">
           <p className="text-xs text-slate-500 leading-relaxed">
             <span className="text-slate-400 font-medium">Methodology:</span>{" "}
-            EV fleet size derived from state DMV registration trends extrapolated to 2029 using S-curve adoption models.
-            Load per vehicle assumes an average of ~3.0 kW continuous for ERCOT (mix of L1/L2 home and DCFC), 
-            and ~2.8 kW for CAISO (higher L2 penetration). 
-            ERCOT projections calibrated to ERCOT Long-Term System Assessment 2024 (Table 4-2, Low-Medium EV scenario).
-            CAISO projections calibrated to CPUC IEPR 2023 Mid-Demand Baseline and CEC 2023 Integrated Energy Policy Report.
-            Zone allocation uses ERCOT load zone population / commercial activity weights from 2024 EIA state data.
-            Daily profile derived from NREL EV Infrastructure Deployment study (2023) and CAISO load shape analysis.
+            ERCOT fleet anchored to Texas DMV data: 456,667 EVs registered by end-2025 (DFW Clean Cities / TxDMV),
+            growing ~1,500 vehicles/week. Projected forward at ~16% CAGR (2025–2029), consistent with current trajectory.
+            Load: 1.51 kW avg per vehicle (L1/L2/DCFC blend, ERCOT LTLF 2025 methodology).
+            ERCOT zone shares from Texas DMV regional distribution: DFW (NCEN) 36%, Houston (COAS) 25%, Austin/SA (SCEN) 20%.
+            CAISO fleet anchored to DOE AFDC / Experian: ~1.9M ZEVs on-road in 2024 (incl. PHEVs).
+            CEC 2025 IEPR: new BEV sales ~387K in 2024 (flat vs 2023, market maturing). Projected at ~13% CAGR (2025–2029).
+            Load: 1.40 kW avg per vehicle. CAISO zone shares from CEC/CPUC ZEV distribution: SP15 60%, NP15 37%, ZP26 3%.
+            Hourly charging profile (managed vs. unmanaged) from NREL EV Infrastructure Deployment study.
           </p>
         </CardContent>
       </Card>

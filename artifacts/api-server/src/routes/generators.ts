@@ -192,4 +192,38 @@ router.get("/generators/summary", async (req, res) => {
   }
 });
 
+// ── GET /api/generators/eia-fleet ─────────────────────────────────────────────
+// Full ERCOT fleet from EIA 860 (candidates table) — all fuel types.
+// Used for wind / solar / storage / nuclear / hydro / biomass fleet tabs.
+router.get("/generators/eia-fleet", async (req, res) => {
+  try {
+    const { iso, asset_type } = req.query as Record<string, string | undefined>;
+    const market = iso ?? "ERCOT";
+
+    const rows = await db.execute<{
+      id: number; name: string; asset_type: string; capacity_mw: string;
+      state: string | null; county: string | null;
+      commissioning_year: number | null; interconnection_node: string | null;
+      pricing_hub_node: string | null; curtailment_score: string | null;
+      price_score: string | null; overall_score: string;
+    }>(sql`
+      SELECT
+        id, name, asset_type, capacity_mw, state, county,
+        commissioning_year, interconnection_node, pricing_hub_node,
+        curtailment_score, price_score, overall_score
+      FROM candidates
+      WHERE market = ${market}
+        AND status = 'active'
+        ${asset_type ? sql`AND asset_type = ${asset_type}` : sql``}
+      ORDER BY capacity_mw DESC
+      LIMIT 500
+    `);
+
+    res.json(rows.rows);
+  } catch (err) {
+    req.log.error({ err }, "eia-fleet error");
+    res.status(500).json({ error: "internal_error" });
+  }
+});
+
 export default router;
