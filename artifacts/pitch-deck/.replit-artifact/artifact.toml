@@ -17,15 +17,6 @@ localPort = 18522
 [services.development]
 run = "sleep infinity"
 
-[services.production]
-build = [ "pnpm", "--filter", "@workspace/pitch-deck", "run", "build" ]
-publicDir = "artifacts/pitch-deck/dist/public"
-serve = "static"
-
-[[services.production.rewrites]]
-from = "/*"
-to = "/index.html"
-
 [services.env]
 PORT = "18522"
 BASE_PATH = "/pitch-deck/"
