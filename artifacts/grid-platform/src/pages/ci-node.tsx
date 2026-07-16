@@ -229,12 +229,8 @@ export default function CINode() {
                       <td className="px-3 py-1.5 text-right">{b != null ? `$${Math.abs(b).toFixed(2)}` : "—"}</td>
                       <td className="px-3 py-1.5 text-right text-muted-foreground">{r.volatility != null ? `$${r.volatility.toFixed(2)}` : "—"}</td>
                       <td className="px-3 py-1.5 text-right text-muted-foreground">{r.negPricePct != null ? `${r.negPricePct.toFixed(1)}%` : "—"}</td>
-                      <td className="px-3 py-1.5 text-right text-muted-foreground" title={r.minPrice != null ? `Raw min: $${r.minPrice.toFixed(2)}/MWh` : undefined}>
-                        {r.minPrice != null ? `$${Math.max(r.minPrice, -500).toFixed(2)}${r.minPrice < -500 ? "*" : ""}` : "—"}
-                      </td>
-                      <td className="px-3 py-1.5 text-right text-muted-foreground" title={r.maxPrice != null && r.maxPrice > 5000 ? `Raw max: $${r.maxPrice.toFixed(2)}/MWh (scarcity spike)` : undefined}>
-                        {r.maxPrice != null ? `$${Math.min(r.maxPrice, 5000).toFixed(2)}${r.maxPrice > 5000 ? "+" : ""}` : "—"}
-                      </td>
+                      <td className="px-3 py-1.5 text-right text-muted-foreground">{r.minPrice != null ? `$${r.minPrice.toFixed(2)}` : "—"}</td>
+                      <td className="px-3 py-1.5 text-right text-muted-foreground">{r.maxPrice != null ? `$${r.maxPrice.toFixed(2)}` : "—"}</td>
                     </tr>
                   );
                 })}

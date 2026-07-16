@@ -640,10 +640,7 @@ export default function CongestionAnalysis() {
                         const vol    = Number(row.volatility ?? 0);
                         const minP   = Number(row.minPrice ?? 0);
                         const maxP   = Number(row.maxPrice ?? 0);
-                        const rawRange = maxP - minP;
-                        const RANGE_CAP = 2000;
-                        const rangeCapped = rawRange > RANGE_CAP;
-                        const range = Math.min(rawRange, RANGE_CAP);
+                        const range  = maxP - minP;
                         const avgRt  = Number(row.avgRtPrice ?? 0);
                         const onPeak = Number(row.onPeakAvg ?? 0);
                         const offPeak= Number(row.offPeakAvg ?? 0);
@@ -659,9 +656,9 @@ export default function CongestionAnalysis() {
                             </td>
                             <td
                               className="text-right pr-4 py-1.5 text-muted-foreground"
-                              title={rangeCapped ? `Raw range: $${rawRange.toFixed(0)}/MWh (includes scarcity spike — capped at $2,000 for display)` : undefined}
+                              title={`Max: $${maxP.toFixed(2)} · Min: $${minP.toFixed(2)}`}
                             >
-                              ${range.toFixed(0)}{rangeCapped && <span className="text-amber-400 text-xs ml-0.5">+</span>}
+                              ${range.toFixed(2)}
                             </td>
                             <td className="text-right pr-4 py-1.5 font-medium">
                               ${avgRt.toFixed(2)}
