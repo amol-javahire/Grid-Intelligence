@@ -9,6 +9,27 @@ args = ["pnpm", "store", "prune"]
 env = { "CI" = "true" }
 
 [workflows]
+runButton = "Project"
+
+[[workflows.workflow]]
+name = "Project"
+mode = "parallel"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "artifacts/pypsa-engine: PyPSA Engine"
+
+[[workflows.workflow]]
+name = "artifacts/pypsa-engine: PyPSA Engine"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd artifacts/pypsa-engine && .venv/bin/uvicorn main:app --host 0.0.0.0 --port 8083"
+
+[workflows.workflow.metadata]
+outputType = "console"
 
 [agent]
 stack = "PNPM_WORKSPACE"
