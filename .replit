@@ -29,8 +29,7 @@ outputType = "console"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "cd artifacts/pypsa-engine && .venv/bin/uvicorn main:app --host 0.0.0.0 --port 8083"
-waitForPort = 8083
+args = "sleep infinity"
 
 [agent]
 stack = "PNPM_WORKSPACE"
