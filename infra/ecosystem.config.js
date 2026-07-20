@@ -13,7 +13,7 @@ module.exports = {
       script:      `${APP_DIR}/artifacts/api-server/dist/index.mjs`,
       cwd:         APP_DIR,
       interpreter: 'node',
-      interpreter_args: '--enable-source-maps --require dotenv/config',
+      interpreter_args: `--enable-source-maps --require ${APP_DIR}/node_modules/dotenv/config`,
 
       instances:   1,
       autorestart: true,
