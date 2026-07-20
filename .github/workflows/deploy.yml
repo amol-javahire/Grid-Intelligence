@@ -1,0 +1,80 @@
+##############################################################################
+# Grid Intelligence Platform — GitHub Actions CI/CD
+#
+# Triggers: push to main branch
+# Action:   SSH into Azure VM, pull, rebuild, reload PM2, redeploy nginx static
+#
+# Required GitHub Secrets (Settings → Secrets and variables → Actions):
+#   AZURE_VM_HOST    — Public IP or domain of your Azure VM
+#   AZURE_VM_USER    — azureuser  (default for Ubuntu VMs on Azure)
+#   AZURE_SSH_KEY    — Contents of your VM private key (~/.ssh/id_rsa)
+#                      (the SSH key pair selected when creating the VM)
+#
+# Optional secrets (set if you want CI to rebuild .env too):
+#   DATABASE_URL, SESSION_SECRET, etc. — but usually .env lives on VM already.
+##############################################################################
+
+name: Deploy to Azure VM
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:        # allow manual trigger from GitHub UI
+
+jobs:
+  deploy:
+    name: Deploy to Azure VM
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      # ── 1. Checkout (just for context; actual code is pulled on VM) ──────────
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── 2. Deploy via SSH ──────────────────────────────────────────────────────
+      - name: Deploy to Azure VM
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host:        ${{ secrets.AZURE_VM_HOST }}
+          username:    ${{ secrets.AZURE_VM_USER }}
+          key:         ${{ secrets.AZURE_SSH_KEY }}
+          timeout:     15m
+          script: |
+            set -euo pipefail
+            APP_DIR=/home/azureuser/grid-intelligence
+
+            echo "=== [1/5] Git pull ==="
+            cd "$APP_DIR"
+            git fetch origin main
+            git reset --hard origin/main
+
+            echo "=== [2/5] Install dependencies ==="
+            pnpm install --frozen-lockfile
+
+            echo "=== [3/5] Build ==="
+            pnpm run build
+
+            echo "=== [4/5] Deploy frontend to nginx root ==="
+            sudo cp -r artifacts/grid-platform/dist/. /var/www/grid-platform/
+            sudo chown -R www-data:www-data /var/www/grid-platform/
+
+            echo "=== [5/5] Reload PM2 (zero-downtime) ==="
+            pm2 reload infra/ecosystem.config.js --update-env
+            pm2 save
+
+            echo "=== Deploy complete ==="
+            pm2 status
+
+      # ── 3. Health check ────────────────────────────────────────────────────────
+      - name: Health check
+        run: |
+          sleep 10
+          HTTP_STATUS=$(curl -sf -o /dev/null -w "%{http_code}" \
+            "http://${{ secrets.AZURE_VM_HOST }}/health" || echo "000")
+          if [ "$HTTP_STATUS" = "200" ]; then
+            echo "Health check passed (HTTP $HTTP_STATUS)"
+          else
+            echo "Health check FAILED (HTTP $HTTP_STATUS)"
+            exit 1
+          fi
