@@ -40,13 +40,11 @@ module.exports = {
     // 4 GB Azure VM RAM handles memory spikes during OPF solve.
     {
       name: 'pypsa-engine',
-      script: 'uvicorn',
+      script: `${APP_DIR}/artifacts/pypsa-engine/.venv/bin/uvicorn`,
       args:   'main:app --host 127.0.0.1 --port 8083 --workers 1',
       cwd:    `${APP_DIR}/artifacts/pypsa-engine`,
 
-      // Use the project venv, not system python
-      interpreter: `${APP_DIR}/artifacts/pypsa-engine/.venv/bin/python`,
-      interpreter_args: '-m',
+      interpreter: 'none',
 
       instances:   1,
       autorestart: true,
