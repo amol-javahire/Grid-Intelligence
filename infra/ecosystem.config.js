@@ -13,7 +13,7 @@ module.exports = {
       script:      `${APP_DIR}/artifacts/api-server/dist/index.mjs`,
       cwd:         APP_DIR,
       interpreter: 'node',
-      interpreter_args: '--enable-source-maps',
+      interpreter_args: '--enable-source-maps --require dotenv/config',
 
       instances:   1,
       autorestart: true,
@@ -23,10 +23,9 @@ module.exports = {
       max_memory_restart: '350M',
 
       env: {
-        NODE_ENV: 'production',
-        PORT:     '8080',
-        // Remaining vars are loaded from .env at startup via dotenv in the app.
-        // Do NOT hard-code secrets here — ecosystem.config.js goes in git.
+        NODE_ENV:           'production',
+        PORT:               '8080',
+        DOTENV_CONFIG_PATH: `${APP_DIR}/.env`,
       },
 
       error_file: '/var/log/grid-intelligence/api-error.log',
