@@ -10,10 +10,10 @@ module.exports = {
     // ── Node API server (Express 5, port 8080) ──────────────────────────────
     {
       name:        'api-server',
-      script:      `${APP_DIR}/artifacts/api-server/dist/index.mjs`,
+      script:      `${APP_DIR}/infra/start-api.sh`,
       cwd:         APP_DIR,
-      interpreter: 'node',
-      interpreter_args: `--enable-source-maps --require ${APP_DIR}/node_modules/dotenv/config`,
+      interpreter: 'bash',
+      interpreter_args: '',
 
       instances:   1,
       autorestart: true,
