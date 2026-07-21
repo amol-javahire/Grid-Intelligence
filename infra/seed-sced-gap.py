@@ -44,20 +44,23 @@ _token_cache = {"token": None, "expires": 0}
 def get_token() -> str:
     if _token_cache["token"] and time.time() < _token_cache["expires"] - 60:
         return _token_cache["token"]
+    # ERCOT uses their own B2C tenant with ROPC flow
     resp = requests.post(
-        "https://login.microsoftonline.com/consumers/oauth2/v2.0/token",
+        "https://ercotb2c.b2clogin.com/ercotb2c.onmicrosoft.com/oauth2/v2.0/token"
+        "?p=B2C_1_PUBAPI-ROPC-FLOW",
         data={
             "grant_type":    "password",
             "client_id":     ERCOT_CLIENT_ID,
             "username":      ERCOT_USERNAME,
             "password":      ERCOT_PASSWORD,
-            "scope":         "openid profile offline_access",
+            "response_type": "id_token",
+            "scope":         f"openid {ERCOT_CLIENT_ID} offline_access",
         },
         timeout=30,
     )
     resp.raise_for_status()
     j = resp.json()
-    _token_cache["token"]   = j["access_token"]
+    _token_cache["token"]   = j.get("access_token") or j.get("id_token")
     _token_cache["expires"] = time.time() + j.get("expires_in", 3600)
     return _token_cache["token"]
 
