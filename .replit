@@ -29,7 +29,7 @@ outputType = "console"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "cd artifacts/pypsa-engine && .venv/bin/python3 seed_month.py 2026 3 && .venv/bin/python3 seed_month.py 2026 2"
+args = "cd artifacts/pypsa-engine && .venv/bin/python seed_month_v2.py 2026 3 && .venv/bin/python seed_month_v2.py 2026 2 && .venv/bin/python seed_month_v2.py 2026 1"
 
 [agent]
 stack = "PNPM_WORKSPACE"

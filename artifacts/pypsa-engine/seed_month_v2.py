@@ -86,29 +86,49 @@ def _get_token() -> str:
 
 
 def _get_doc_id(token: str, sub_key: str, date: datetime.date) -> str | None:
-    """Return the docId for a given operational date, or None if not found."""
+    """Return the docId for a given operational date, with rate-limit backoff.
+
+    The ERCOT archive listing response uses key "archives" (not "data").
+    The download link is in archive["_links"]["endpoint"]["href"] which
+    is a CDR misdownload URL ending in doclookupId=XXXXXXX.
+    """
     post_date = date + datetime.timedelta(days=60)
-    resp = requests.get(
-        ERCOT_ARCHIVE_URL,
-        params={
-            "postDatetimeFrom": post_date.strftime("%Y-%m-%dT00:00:00"),
-            "postDatetimeTo":   (post_date + datetime.timedelta(days=1)).strftime("%Y-%m-%dT00:00:00"),
-            "size": 10,
-            "page": 1,
-        },
-        headers={
-            "Authorization":            f"Bearer {token}",
-            "Ocp-Apim-Subscription-Key": sub_key,
-        },
-        timeout=30,
-    )
-    if resp.status_code != 200:
-        logger.warning("  Archive listing failed (%s) for %s", resp.status_code, date)
-        return None
-    archives = resp.json().get("data", [])
-    if not archives:
-        return None
-    return str(archives[0]["docId"])
+    for attempt in range(3):
+        resp = requests.get(
+            ERCOT_ARCHIVE_URL,
+            params={
+                "postDatetimeFrom": post_date.strftime("%Y-%m-%dT00:00:00"),
+                "postDatetimeTo":   (post_date + datetime.timedelta(days=1)).strftime("%Y-%m-%dT00:00:00"),
+                "size": 10,
+                "page": 1,
+            },
+            headers={
+                "Authorization":             f"Bearer {token}",
+                "Ocp-Apim-Subscription-Key": sub_key,
+            },
+            timeout=30,
+        )
+        if resp.status_code == 429:
+            wait = 15 * (attempt + 1)
+            logger.warning("  Rate limited — waiting %ds", wait)
+            time.sleep(wait)
+            continue
+        if resp.status_code != 200:
+            logger.warning("  Archive listing %s for %s", resp.status_code, date)
+            return None
+        body = resp.json()
+        # gridstatus uses key "archives", not "data"
+        archives = body.get("archives", body.get("data", []))
+        if not archives:
+            return None
+        entry = archives[0]
+        # docId lives in the CDR misdownload href: ...doclookupId=XXXXXXX
+        href = (entry.get("_links", {}).get("endpoint", {}).get("href", ""))
+        if "doclookupId=" in href:
+            return href.split("doclookupId=")[-1]
+        # fallback: direct docId field
+        return str(entry.get("docId", "")) or None
+    return None
 
 
 def _download_zip(doc_id: str) -> bytes:
@@ -199,7 +219,7 @@ def _process_zip(raw_zip: bytes) -> pl.DataFrame | None:
     return agg
 
 
-def _insert(conn, agg: pl.DataFrame, resource_type_map: dict) -> int:
+def _insert(conn, agg: pl.DataFrame, resource_type_map: dict, seed_date: datetime.date) -> int:
     rows = []
     for r in agg.iter_rows(named=True):
         rows.append((
@@ -249,7 +269,7 @@ def _insert(conn, agg: pl.DataFrame, resource_type_map: dict) -> int:
             "INSERT INTO ercot_dispatch_seed_log (seed_date, rows_inserted)"
             " VALUES (%s, %s)"
             " ON CONFLICT (seed_date) DO UPDATE SET rows_inserted = EXCLUDED.rows_inserted",
-            (rows[0][1].date() if rows else None, len(rows)),
+            (seed_date, len(rows)),
         )
     conn.commit()
     return len(rows)
@@ -320,14 +340,15 @@ def main():
             token = _get_token()
             token_fetched_at = time.time()
 
+        doc_id = _get_doc_id(token, sub_key, date)
+        if not doc_id:
+            logger.warning("[%d/%d] %s — no archive found (embargoed or missing)", i, len(dates_needed), date)
+            errors += 1
+            time.sleep(2)   # pace between listing calls
+            continue
+
         t0 = time.time()
         try:
-            doc_id = _get_doc_id(token, sub_key, date)
-            if not doc_id:
-                logger.warning("[%d/%d] %s — no archive found (embargoed or missing)", i, len(dates_needed), date)
-                errors += 1
-                continue
-
             raw_zip = _download_zip(doc_id)
             agg = _process_zip(raw_zip)
             if agg is None or agg.is_empty():
@@ -335,7 +356,7 @@ def main():
                 errors += 1
                 continue
 
-            n = _insert(conn, agg, RESOURCE_TYPE_MAP)
+            n = _insert(conn, agg, RESOURCE_TYPE_MAP, date)
             total_rows += n
             elapsed = time.time() - t0
             logger.info("[%d/%d] %s — %d rows in %.1fs  (docId=%s)", i, len(dates_needed), date, n, elapsed, doc_id)
@@ -347,7 +368,7 @@ def main():
             logger.warning("[%d/%d] %s — error: %s — skipping", i, len(dates_needed), date, e)
             errors += 1
 
-        time.sleep(0.3)
+        time.sleep(2)  # pace listing calls to stay under ERCOT API rate limit
 
     conn.close()
     logger.info(
