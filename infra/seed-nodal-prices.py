@@ -71,17 +71,45 @@ def headers() -> dict:
 
 BASE = "https://api.ercot.com/api/public-reports/archive"
 
+# ERCOT public API allows ~30 requests/minute. Throttle to stay under.
+import threading
+MIN_REQUEST_INTERVAL = 2.1   # seconds between requests (~28/min)
+_last_request = {"t": 0.0}
+_throttle_lock = threading.Lock()
+
+def _throttle():
+    with _throttle_lock:
+        elapsed = time.time() - _last_request["t"]
+        if elapsed < MIN_REQUEST_INTERVAL:
+            time.sleep(MIN_REQUEST_INTERVAL - elapsed)
+        _last_request["t"] = time.time()
+
+def _get_with_retry(url: str, params: dict, stream: bool = False, max_retries: int = 6):
+    """GET with throttle + exponential backoff on 429/5xx."""
+    for attempt in range(max_retries):
+        _throttle()
+        resp = requests.get(url, headers=headers(), params=params,
+                            timeout=120, stream=stream)
+        if resp.status_code == 429 or resp.status_code >= 500:
+            wait = min(60, 2 ** attempt * 3)  # 3,6,12,24,48,60s
+            log.info(f"  {resp.status_code} — backoff {wait}s (attempt {attempt+1}/{max_retries})")
+            time.sleep(wait)
+            continue
+        resp.raise_for_status()
+        return resp
+    resp.raise_for_status()
+    return resp
+
 # ── API helpers ───────────────────────────────────────────────────────────────
 def list_archives(endpoint: str, from_dt: datetime.date, to_dt: datetime.date) -> list[int]:
     doc_ids = []
     page = 1
     while True:
-        resp = requests.get(f"{BASE}/{endpoint}", headers=headers(), params={
+        resp = _get_with_retry(f"{BASE}/{endpoint}", {
             "postDatetimeFrom": from_dt.isoformat() + "T00:00:00",
             "postDatetimeTo":   to_dt.isoformat()   + "T00:00:00",
             "size": 1000, "page": page,
-        }, timeout=30)
-        resp.raise_for_status()
+        })
         j = resp.json()
         archives = j.get("archives", [])
         doc_ids.extend(item["docId"] for item in archives if "docId" in item)
@@ -92,9 +120,7 @@ def list_archives(endpoint: str, from_dt: datetime.date, to_dt: datetime.date) -
     return doc_ids
 
 def download_zip(endpoint: str, doc_id: int) -> io.BytesIO:
-    resp = requests.get(f"{BASE}/{endpoint}", headers=headers(),
-                        params={"download": doc_id}, timeout=120, stream=True)
-    resp.raise_for_status()
+    resp = _get_with_retry(f"{BASE}/{endpoint}", {"download": doc_id}, stream=True)
     buf = io.BytesIO()
     for chunk in resp.iter_content(chunk_size=1 << 20):
         buf.write(chunk)
@@ -119,10 +145,10 @@ def parse_da(df: pl.DataFrame) -> pl.DataFrame:
     return (
         df
         .with_columns([
-            pl.col("HourEnding").str.slice(0, 2).cast(pl.Int32).alias("_he"),
-            pl.col("DeliveryDate").str.to_date(format="%m/%d/%Y").cast(pl.Datetime).alias("_date"),
-            pl.col("SettlementPointPrice").cast(pl.Float64).alias("da_price"),
-            pl.col("SettlementPoint").alias("node_name"),
+            pl.col("HourEnding").cast(pl.Utf8).str.strip_chars().str.slice(0, 2).cast(pl.Int32, strict=False).alias("_he"),
+            pl.col("DeliveryDate").cast(pl.Utf8).str.strip_chars().str.to_date(format="%m/%d/%Y", strict=False).cast(pl.Datetime).alias("_date"),
+            pl.col("SettlementPointPrice").cast(pl.Utf8).str.strip_chars().cast(pl.Float64, strict=False).alias("da_price"),
+            pl.col("SettlementPoint").cast(pl.Utf8).str.strip_chars().alias("node_name"),
         ])
         .with_columns([
             (pl.col("_date") + pl.duration(hours=(pl.col("_he") - 1))).alias("hour")
@@ -189,10 +215,10 @@ def parse_rt(df: pl.DataFrame) -> pl.DataFrame:
     return (
         df
         .with_columns([
-            pl.col("DeliveryHour").cast(pl.Int32).alias("_dh"),
-            pl.col("DeliveryDate").str.to_date(format="%m/%d/%Y").cast(pl.Datetime).alias("_date"),
-            pl.col("SettlementPointPrice").cast(pl.Float64).alias("rt_price"),
-            pl.col("SettlementPointName").alias("node_name"),
+            pl.col("DeliveryHour").cast(pl.Utf8).str.strip_chars().cast(pl.Int32, strict=False).alias("_dh"),
+            pl.col("DeliveryDate").cast(pl.Utf8).str.strip_chars().str.to_date(format="%m/%d/%Y", strict=False).cast(pl.Datetime).alias("_date"),
+            pl.col("SettlementPointPrice").cast(pl.Utf8).str.strip_chars().cast(pl.Float64, strict=False).alias("rt_price"),
+            pl.col("SettlementPointName").cast(pl.Utf8).str.strip_chars().alias("node_name"),
         ])
         .with_columns([
             (pl.col("_date") + pl.duration(hours=(pl.col("_dh") - 1))).alias("hour")
@@ -224,7 +250,7 @@ def seed_rt_day(conn, data_date: datetime.date) -> int:
     def fetch(doc_id):
         return read_csv_from_zip(RT_ENDPOINT, doc_id)
 
-    with ThreadPoolExecutor(max_workers=8) as pool:
+    with ThreadPoolExecutor(max_workers=4) as pool:
         futures = {pool.submit(fetch, d): d for d in doc_ids}
         for fut in as_completed(futures):
             df = fut.result()
