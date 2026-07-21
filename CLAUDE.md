@@ -34,9 +34,9 @@ This file is read automatically at the start of every session. It is the primary
 |---------|---------|
 | `polars` | Primary DataFrame library for all seeders — faster, less RAM than pandas |
 | `duckdb` | In-process OLAP SQL engine for analytics |
-| `gridstatus` | ERCOT/CAISO/PJM API client (60-day SCED disclosure etc.) |
+| `requests` | HTTP — used by seed-sced-gap.py to hit ERCOT API directly (no gridstatus) |
 | `psycopg2-binary` | PostgreSQL driver |
-| `pandas` | Kept only where gridstatus requires it (returns pandas DataFrames) |
+| `pandas` | Avoid — only keep if a library explicitly requires it |
 | `numpy` `scipy` | Scientific stack |
 | `requests` | HTTP |
 | `fastapi` `uvicorn` | PyPSA engine API server |
@@ -103,7 +103,7 @@ GitHub: https://github.com/JuliusBrussee/caveman-code
    cd ~/grid-intelligence/lib/db && pnpm exec drizzle-kit push
    ```
 
-3. **ERCOT SCED seeder** — the gap-fill script is `infra/seed-sced-gap.py` (replaces the old `scripts/src/seed-ercot-dispatch.py` main loop which was discarded). The new script targets 2025-12-06 → today only.
+3. **ERCOT SCED seeder** — `infra/seed-sced-gap.py` hits ERCOT CDR API directly (no gridstatus). Streams ZIP → pure Polars parsing → inserts hourly aggregates. No pandas, no OOM. Requires `ERCOT_USERNAME`, `ERCOT_PASSWORD` in `.env`. Targets 2025-12-06 → today-60d.
 
 4. **SCED 2024 data is lowest priority** — if DB space is tight, delete it first:
    ```sql
