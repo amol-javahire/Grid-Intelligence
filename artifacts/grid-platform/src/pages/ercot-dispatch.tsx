@@ -309,8 +309,8 @@ function CapacityFactors() {
   });
 
   const { data: monthly, isLoading: mlLoading } = useQuery<SummaryRow[]>({
-    queryKey: ["ercot-dispatch-summary-13m"],
-    queryFn:  () => apiFetch("/api/ercot/dispatch/summary?months=13"),
+    queryKey: ["ercot-dispatch-summary-25m"],
+    queryFn:  () => apiFetch("/api/ercot/dispatch/summary?months=25"),
     staleTime: 10 * 60_000,
   });
 
