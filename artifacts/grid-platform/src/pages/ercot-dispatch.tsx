@@ -433,8 +433,8 @@ function CapacityFactors() {
 // ── Shared capture data hook ───────────────────────────────────────────────────
 function useCaptureData() {
   return useQuery<CaptureRow[]>({
-    queryKey: ["ercot-capture"],
-    queryFn:  () => apiFetch("/api/ercot/dispatch/capture?months=24"),
+    queryKey: ["ercot-capture-25m"],
+    queryFn:  () => apiFetch("/api/ercot/dispatch/capture?months=25"),
     staleTime: 10 * 60_000,
   });
 }
@@ -463,14 +463,18 @@ function captureRollup(data: CaptureRow[], key: "capture_price_rt" | "capture_ra
   })).sort((a, b) => b.value - a.value);
 }
 
-// Build flat monthly array for a given per-fuel-type metric
+// Build flat monthly array sorted chronologically (not alphabetically by label)
 function captureMonthlyFlat(data: CaptureRow[], key: keyof CaptureRow, includeHub = false) {
-  const seen: string[] = [];
-  data.forEach(r => { const m = fmtMonth(r.year, r.month); if (!seen.includes(m)) seen.push(m); });
-  seen.sort();
-  return seen.map(month => {
-    const rows = data.filter(r => fmtMonth(r.year, r.month) === month);
-    const row: Record<string, unknown> = { month };
+  const seen = new Map<string, { year: number; month: number }>();
+  data.forEach(r => {
+    const k = `${r.year}-${r.month}`;
+    if (!seen.has(k)) seen.set(k, { year: r.year, month: r.month });
+  });
+  const sorted = [...seen.values()].sort((a, b) => a.year * 12 + a.month - (b.year * 12 + b.month));
+  return sorted.map(({ year, month }) => {
+    const label = fmtMonth(year, month);
+    const rows = data.filter(r => r.year === year && r.month === month);
+    const row: Record<string, unknown> = { month: label };
     rows.forEach(r => { row[r.resource_type] = Number(r[key]); });
     if (includeHub && rows.length > 0) row["hub_avg"] = Number(rows[0].hub_avg_rt);
     return row;
@@ -500,8 +504,8 @@ function CapturePrices() {
         <CardHeader className="pb-2">
           <CardTitle className="text-white text-sm">Capture Price by Fuel Type — Last 12 Months</CardTitle>
           <CardDescription className="text-slate-400 text-xs">
-            Generation-weighted average RT hub price (HB_BUSAVG) received during dispatch hours.
-            Data covers Jan 2024 – Dec 2025 (ERCOT hourly hub coverage).
+            Generation-weighted average RT price in each generator's load zone (LZ_WEST/NORTH/SOUTH/HOUSTON)
+            during dispatch hours. System avg (HB_BUSAVG) shown as reference. Data covers Jan 2024 – Dec 2025.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -517,7 +521,7 @@ function CapturePrices() {
                   </div>
                   <p className="text-white text-2xl font-bold">${r.value.toFixed(1)}</p>
                   <p className="text-slate-500 text-xs mt-0.5">
-                    Hub avg ${r.hubAvg.toFixed(1)} &middot;{" "}
+                    Sys avg ${r.hubAvg.toFixed(1)} &middot;{" "}
                     <span className={delta >= 0 ? "text-green-400" : "text-red-400"}>
                       {delta >= 0 ? "+" : ""}{pct.toFixed(0)}%
                     </span>
@@ -537,10 +541,10 @@ function CapturePrices() {
 
       <Card className="bg-slate-800 border-slate-700">
         <CardHeader className="pb-2">
-          <CardTitle className="text-white text-sm">Capture Price Trend — $/MWh (RT Hub)</CardTitle>
+          <CardTitle className="text-white text-sm">Capture Price Trend — $/MWh (Zone RT)</CardTitle>
           <CardDescription className="text-slate-400 text-xs">
-            Monthly capture price per fuel type. Dashed line = hub average (HB_BUSAVG). Divergence reveals
-            time-of-generation value vs. flat baseload pricing.
+            Monthly zone LMP capture price per fuel type (gen-weighted). Dashed line = system avg (HB_BUSAVG).
+            Divergence shows zone basis — wind/solar zones trade at a discount or premium to the system hub.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -554,11 +558,11 @@ function CapturePrices() {
                 contentStyle={{ backgroundColor: C.tooltipBg, borderColor: C.tooltipBorder, color: C.tooltipFg }}
                 formatter={(v: unknown, name: string) => [
                   `$${Number(v).toFixed(1)}/MWh`,
-                  name === "hub_avg" ? "Hub Avg" : (FUEL_LABEL[name] ?? name)
+                  name === "hub_avg" ? "Sys Avg (HB_BUSAVG)" : (FUEL_LABEL[name] ?? name)
                 ]}
               />
               <Legend wrapperStyle={{ fontSize: 11, color: "#94a3b8" }}
-                      formatter={(name) => name === "hub_avg" ? "Hub Avg" : (FUEL_LABEL[name] ?? name)} />
+                      formatter={(name) => name === "hub_avg" ? "Sys Avg (HB_BUSAVG)" : (FUEL_LABEL[name] ?? name)} />
               <Line key="hub_avg" type="monotone" dataKey="hub_avg"
                     stroke="#64748b" dot={false} strokeWidth={1.5}
                     strokeDasharray="5 3" connectNulls />
@@ -598,9 +602,8 @@ function CaptureRates() {
         <CardHeader className="pb-2">
           <CardTitle className="text-white text-sm">Capture Rate by Fuel Type — Last 12 Months</CardTitle>
           <CardDescription className="text-slate-400 text-xs">
-            Capture rate = generation-weighted capture price ÷ flat hub average.
-            Values &gt;1.0 = above-average timing (dispatches during high-price hours).
-            Values &lt;1.0 = value deflation (generates during low-price hours).
+            Capture rate = gen-weighted zone LMP ÷ system avg (HB_BUSAVG).
+            Values &gt;1.0 = zone runs at a premium to system; &lt;1.0 = zone discount (congestion/curtailment).
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -625,7 +628,7 @@ function CaptureRates() {
                     {pct.toFixed(0)}%
                   </p>
                   <p className="text-slate-500 text-xs mt-0.5">
-                    of hub avg &middot; <span style={{ color }}>{label}</span>
+                    of sys avg &middot; <span style={{ color }}>{label}</span>
                   </p>
                   {/* bar showing ratio vs 100% */}
                   <div className="mt-2 h-1.5 rounded bg-slate-700 overflow-hidden">
@@ -641,10 +644,10 @@ function CaptureRates() {
 
       <Card className="bg-slate-800 border-slate-700">
         <CardHeader className="pb-2">
-          <CardTitle className="text-white text-sm">Capture Rate Trend</CardTitle>
+          <CardTitle className="text-white text-sm">Capture Rate Trend — Zone LMP ÷ Sys Avg</CardTitle>
           <CardDescription className="text-slate-400 text-xs">
-            Monthly capture rate over time. Reference line at 1.0 = hub average.
-            Watch solar trend downward as penetration grows — a real PPA risk signal.
+            Monthly zone capture rate vs system avg (HB_BUSAVG). Reference line at 1.0×.
+            Persistent discount = geographic basis risk; premium = favorable zone economics for a PPA.
           </CardDescription>
         </CardHeader>
         <CardContent>
