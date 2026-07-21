@@ -309,37 +309,42 @@ function CapacityFactors() {
   });
 
   const { data: monthly, isLoading: mlLoading } = useQuery<SummaryRow[]>({
-    queryKey: ["ercot-dispatch-summary"],
-    queryFn:  () => apiFetch("/api/ercot/dispatch/summary?months=30"),
+    queryKey: ["ercot-dispatch-summary-13m"],
+    queryFn:  () => apiFetch("/api/ercot/dispatch/summary?months=13"),
     staleTime: 10 * 60_000,
   });
 
-  // Build monthly trend by fuel type
+  // Build monthly trend by fuel type — store numeric year/month for correct sort
   const monthlyByFuel = useMemo(() => {
     if (!monthly) return {};
-    const byFuel: Record<string, { label: string; data: { month: string; cf: number }[] }> = {};
+    const byFuel: Record<string, { label: string; data: { year: number; month: number; cf: number }[] }> = {};
     monthly.forEach(r => {
       if (!byFuel[r.resource_type]) {
         byFuel[r.resource_type] = { label: FUEL_LABEL[r.resource_type] ?? r.resource_type, data: [] };
       }
       byFuel[r.resource_type].data.push({
-        month: fmtMonth(r.year, r.month),
+        year:  r.year,
+        month: r.month,
         cf:    r.avg_cf != null ? Math.round(Number(r.avg_cf) * 100) : 0,
       });
     });
     return byFuel;
   }, [monthly]);
 
-  // Combine monthly data into a single array keyed by month label
+  // Combine into flat array sorted chronologically by year×12+month (not alphabetically)
   const monthlyFlat = useMemo(() => {
-    const allMonths: string[] = [];
+    const seen = new Map<string, { year: number; month: number }>();
     Object.values(monthlyByFuel).forEach(({ data }) =>
-      data.forEach(d => { if (!allMonths.includes(d.month)) allMonths.push(d.month); })
+      data.forEach(d => {
+        const key = `${d.year}-${d.month}`;
+        if (!seen.has(key)) seen.set(key, { year: d.year, month: d.month });
+      })
     );
-    return allMonths.sort().map(month => {
-      const row: Record<string, unknown> = { month };
+    const sorted = [...seen.values()].sort((a, b) => a.year * 12 + a.month - (b.year * 12 + b.month));
+    return sorted.map(({ year, month }) => {
+      const row: Record<string, unknown> = { month: fmtMonth(year, month) };
       Object.entries(monthlyByFuel).forEach(([type, { data }]) => {
-        const found = data.find(d => d.month === month);
+        const found = data.find(d => d.year === year && d.month === month);
         row[type] = found?.cf ?? null;
       });
       return row;
