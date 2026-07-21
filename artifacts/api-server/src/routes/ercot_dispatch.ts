@@ -165,6 +165,45 @@ router.get("/ercot/dispatch/capacity-factors", async (req, res) => {
   }
 });
 
+// ── Capture prices + rates ─────────────────────────────────────────────────────
+// GET /api/ercot/dispatch/capture?months=24
+// Returns generation-weighted hub capture price per fuel type per month.
+// Data available through Dec 2025 (ercot_hub_hourly coverage).
+router.get("/ercot/dispatch/capture", async (req, res) => {
+  try {
+    const months = Math.min(Number(req.query.months ?? 24), 30);
+
+    const rows = await db.execute<{
+      year: number; month: number; resource_type: string;
+      capture_price_rt: number; capture_price_da: number;
+      hub_avg_rt: number; hub_avg_da: number;
+      capture_rate_rt: number; capture_rate_da: number;
+      total_gen_mwh: number;
+    }>(sql`
+      SELECT
+        year, month, resource_type,
+        capture_price_rt,
+        capture_price_da,
+        hub_avg_rt,
+        hub_avg_da,
+        ROUND((capture_price_rt / NULLIF(hub_avg_rt, 0))::numeric, 3) AS capture_rate_rt,
+        ROUND((capture_price_da / NULLIF(hub_avg_da, 0))::numeric, 3) AS capture_rate_da,
+        total_gen_mwh
+      FROM mv_capture_monthly
+      WHERE (year * 12 + month) >= (
+        EXTRACT(year  FROM NOW() - (${months} || ' months')::interval)::int * 12 +
+        EXTRACT(month FROM NOW() - (${months} || ' months')::interval)::int
+      )
+      ORDER BY year, month, resource_type
+    `);
+
+    res.json(rows.rows);
+  } catch (err) {
+    req.log.error({ err }, "ercot capture prices error");
+    res.status(500).json({ error: "internal_error" });
+  }
+});
+
 // ── Seed progress ─────────────────────────────────────────────────────────────
 // GET /api/ercot/dispatch/seed-status
 router.get("/ercot/dispatch/seed-status", async (req, res) => {

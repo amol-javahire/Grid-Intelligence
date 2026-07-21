@@ -9,7 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Slider } from "@/components/ui/slider";
-import { ChevronLeft, ChevronRight, Loader2, Zap, TrendingUp, Database, Activity } from "lucide-react";
+import { ChevronLeft, ChevronRight, Loader2, Zap, TrendingUp, Database, Activity, DollarSign, Percent } from "lucide-react";
 
 // ── Palette ────────────────────────────────────────────────────────────────────
 const C = {
@@ -81,6 +81,14 @@ interface SummaryRow {
 interface CFRow {
   resource_type: string; avg_cf: number;
   total_resources: number; avg_offer_price: number;
+}
+
+interface CaptureRow {
+  year: number; month: number; resource_type: string;
+  capture_price_rt: number; capture_price_da: number;
+  hub_avg_rt: number; hub_avg_da: number;
+  capture_rate_rt: number; capture_rate_da: number;
+  total_gen_mwh: number;
 }
 
 // ── Tooltip ───────────────────────────────────────────────────────────────────
@@ -417,6 +425,255 @@ function CapacityFactors() {
   );
 }
 
+// ── Shared capture data hook ───────────────────────────────────────────────────
+function useCaptureData() {
+  return useQuery<CaptureRow[]>({
+    queryKey: ["ercot-capture"],
+    queryFn:  () => apiFetch("/api/ercot/dispatch/capture?months=24"),
+    staleTime: 10 * 60_000,
+  });
+}
+
+// Compute 12-month weighted avg per fuel type from monthly capture data
+function captureRollup(data: CaptureRow[], key: "capture_price_rt" | "capture_rate_rt") {
+  const now = new Date();
+  const cutoff = now.getFullYear() * 12 + now.getMonth(); // 12 months back
+  const byType: Record<string, { num: number; den: number; hubNum: number }> = {};
+  data.forEach(r => {
+    const ym = r.year * 12 + r.month;
+    if (ym < cutoff - 11) return;
+    const t = r.resource_type;
+    const w = Number(r.total_gen_mwh);
+    if (!byType[t]) byType[t] = { num: 0, den: 0, hubNum: 0 };
+    byType[t].num += Number(r[key]) * w;
+    byType[t].den += w;
+    if (key === "capture_price_rt") byType[t].hubNum += Number(r.hub_avg_rt) * w;
+  });
+  return Object.entries(byType).map(([type, v]) => ({
+    type,
+    label: FUEL_LABEL[type] ?? type,
+    color: FUEL_COLOR[type] ?? "#94a3b8",
+    value: v.den > 0 ? v.num / v.den : 0,
+    hubAvg: v.den > 0 && key === "capture_price_rt" ? v.hubNum / v.den : 0,
+  })).sort((a, b) => b.value - a.value);
+}
+
+// Build flat monthly array for a given per-fuel-type metric
+function captureMonthlyFlat(data: CaptureRow[], key: keyof CaptureRow, includeHub = false) {
+  const seen: string[] = [];
+  data.forEach(r => { const m = fmtMonth(r.year, r.month); if (!seen.includes(m)) seen.push(m); });
+  seen.sort();
+  return seen.map(month => {
+    const rows = data.filter(r => fmtMonth(r.year, r.month) === month);
+    const row: Record<string, unknown> = { month };
+    rows.forEach(r => { row[r.resource_type] = Number(r[key]); });
+    if (includeHub && rows.length > 0) row["hub_avg"] = Number(rows[0].hub_avg_rt);
+    return row;
+  });
+}
+
+// ── Capture Prices Tab ────────────────────────────────────────────────────────
+function CapturePrices() {
+  const { data, isLoading } = useCaptureData();
+
+  const summary = useMemo(() => (data ? captureRollup(data, "capture_price_rt") : []), [data]);
+  const fuelTypes = useMemo(() => (data ? [...new Set(data.map(r => r.resource_type))] : []), [data]);
+  const monthlyFlat = useMemo(() => (data ? captureMonthlyFlat(data, "capture_price_rt", true) : []), [data]);
+
+  if (isLoading) return (
+    <div className="flex items-center justify-center h-64">
+      <Loader2 className="animate-spin text-teal-400" size={32} />
+    </div>
+  );
+  if (!data?.length) return (
+    <div className="flex items-center justify-center h-64 text-slate-400 text-sm">No capture price data available.</div>
+  );
+
+  return (
+    <div className="space-y-6">
+      <Card className="bg-slate-800 border-slate-700">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-white text-sm">Capture Price by Fuel Type — Last 12 Months</CardTitle>
+          <CardDescription className="text-slate-400 text-xs">
+            Generation-weighted average RT hub price (HB_BUSAVG) received during dispatch hours.
+            Data covers Jan 2024 – Dec 2025 (ERCOT hourly hub coverage).
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            {summary.map(r => {
+              const delta = r.value - r.hubAvg;
+              const pct   = r.hubAvg > 0 ? (r.value / r.hubAvg - 1) * 100 : 0;
+              return (
+                <div key={r.type} className="bg-slate-900 rounded p-3 border border-slate-700">
+                  <div className="flex items-center gap-1.5 mb-1">
+                    <div className="w-2 h-2 rounded-full" style={{ backgroundColor: r.color }} />
+                    <span className="text-slate-400 text-xs">{r.label}</span>
+                  </div>
+                  <p className="text-white text-2xl font-bold">${r.value.toFixed(1)}</p>
+                  <p className="text-slate-500 text-xs mt-0.5">
+                    Hub avg ${r.hubAvg.toFixed(1)} &middot;{" "}
+                    <span className={delta >= 0 ? "text-green-400" : "text-red-400"}>
+                      {delta >= 0 ? "+" : ""}{pct.toFixed(0)}%
+                    </span>
+                  </p>
+                  {/* ratio bar */}
+                  <div className="mt-2 h-1 rounded bg-slate-700 overflow-hidden">
+                    <div className="h-full rounded"
+                         style={{ width: `${Math.min(100, (r.value / Math.max(r.hubAvg, 0.01)) * 50)}%`,
+                                  backgroundColor: r.color }} />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className="bg-slate-800 border-slate-700">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-white text-sm">Capture Price Trend — $/MWh (RT Hub)</CardTitle>
+          <CardDescription className="text-slate-400 text-xs">
+            Monthly capture price per fuel type. Dashed line = hub average (HB_BUSAVG). Divergence reveals
+            time-of-generation value vs. flat baseload pricing.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <ResponsiveContainer width="100%" height={320}>
+            <LineChart data={monthlyFlat} margin={{ left: 8, right: 16, top: 4, bottom: 4 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+              <XAxis dataKey="month" tick={{ fill: "#94a3b8", fontSize: 10 }} interval={2} />
+              <YAxis tick={{ fill: "#94a3b8", fontSize: 10 }}
+                     tickFormatter={v => `$${Number(v).toFixed(0)}`} />
+              <RechartsTooltip
+                contentStyle={{ backgroundColor: C.tooltipBg, borderColor: C.tooltipBorder, color: C.tooltipFg }}
+                formatter={(v: unknown, name: string) => [
+                  `$${Number(v).toFixed(1)}/MWh`,
+                  name === "hub_avg" ? "Hub Avg" : (FUEL_LABEL[name] ?? name)
+                ]}
+              />
+              <Legend wrapperStyle={{ fontSize: 11, color: "#94a3b8" }}
+                      formatter={(name) => name === "hub_avg" ? "Hub Avg" : (FUEL_LABEL[name] ?? name)} />
+              <Line key="hub_avg" type="monotone" dataKey="hub_avg"
+                    stroke="#64748b" dot={false} strokeWidth={1.5}
+                    strokeDasharray="5 3" connectNulls />
+              {fuelTypes.map(type => (
+                <Line key={type} type="monotone" dataKey={type}
+                      stroke={FUEL_COLOR[type] ?? "#94a3b8"}
+                      dot={false} strokeWidth={2} connectNulls />
+              ))}
+            </LineChart>
+          </ResponsiveContainer>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+// ── Capture Rates Tab ─────────────────────────────────────────────────────────
+function CaptureRates() {
+  const { data, isLoading } = useCaptureData();
+
+  const summary = useMemo(() => (data ? captureRollup(data, "capture_rate_rt") : []), [data]);
+  const fuelTypes = useMemo(() => (data ? [...new Set(data.map(r => r.resource_type))] : []), [data]);
+  const monthlyFlat = useMemo(() => (data ? captureMonthlyFlat(data, "capture_rate_rt") : []), [data]);
+
+  if (isLoading) return (
+    <div className="flex items-center justify-center h-64">
+      <Loader2 className="animate-spin text-teal-400" size={32} />
+    </div>
+  );
+  if (!data?.length) return (
+    <div className="flex items-center justify-center h-64 text-slate-400 text-sm">No capture rate data available.</div>
+  );
+
+  return (
+    <div className="space-y-6">
+      <Card className="bg-slate-800 border-slate-700">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-white text-sm">Capture Rate by Fuel Type — Last 12 Months</CardTitle>
+          <CardDescription className="text-slate-400 text-xs">
+            Capture rate = generation-weighted capture price ÷ flat hub average.
+            Values &gt;1.0 = above-average timing (dispatches during high-price hours).
+            Values &lt;1.0 = value deflation (generates during low-price hours).
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            {summary.map(r => {
+              const pct = r.value * 100;
+              const color = r.value >= 1.1 ? C.green
+                          : r.value >= 0.95 ? C.teal
+                          : r.value >= 0.8  ? C.amber
+                          : C.red;
+              const label = r.value >= 1.1 ? "premium"
+                          : r.value >= 0.95 ? "at par"
+                          : r.value >= 0.8  ? "discount"
+                          : "deep discount";
+              return (
+                <div key={r.type} className="bg-slate-900 rounded p-3 border border-slate-700">
+                  <div className="flex items-center gap-1.5 mb-1">
+                    <div className="w-2 h-2 rounded-full" style={{ backgroundColor: r.color }} />
+                    <span className="text-slate-400 text-xs">{r.label}</span>
+                  </div>
+                  <p className="text-2xl font-bold" style={{ color }}>
+                    {pct.toFixed(0)}%
+                  </p>
+                  <p className="text-slate-500 text-xs mt-0.5">
+                    of hub avg &middot; <span style={{ color }}>{label}</span>
+                  </p>
+                  {/* bar showing ratio vs 100% */}
+                  <div className="mt-2 h-1.5 rounded bg-slate-700 overflow-hidden">
+                    <div className="h-full rounded transition-all"
+                         style={{ width: `${Math.min(100, pct)}%`, backgroundColor: color }} />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className="bg-slate-800 border-slate-700">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-white text-sm">Capture Rate Trend</CardTitle>
+          <CardDescription className="text-slate-400 text-xs">
+            Monthly capture rate over time. Reference line at 1.0 = hub average.
+            Watch solar trend downward as penetration grows — a real PPA risk signal.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <ResponsiveContainer width="100%" height={320}>
+            <LineChart data={monthlyFlat} margin={{ left: 8, right: 16, top: 4, bottom: 4 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+              <XAxis dataKey="month" tick={{ fill: "#94a3b8", fontSize: 10 }} interval={2} />
+              <YAxis tick={{ fill: "#94a3b8", fontSize: 10 }}
+                     tickFormatter={v => `${(Number(v) * 100).toFixed(0)}%`}
+                     domain={[0, "auto"]} />
+              <RechartsTooltip
+                contentStyle={{ backgroundColor: C.tooltipBg, borderColor: C.tooltipBorder, color: C.tooltipFg }}
+                formatter={(v: unknown, name: string) => [
+                  `${(Number(v) * 100).toFixed(1)}%`,
+                  FUEL_LABEL[name] ?? name
+                ]}
+              />
+              <Legend wrapperStyle={{ fontSize: 11, color: "#94a3b8" }}
+                      formatter={(name) => FUEL_LABEL[name] ?? name} />
+              <ReferenceLine y={1} stroke="#475569" strokeDasharray="4 2"
+                             label={{ value: "par (1.0×)", fill: "#64748b", fontSize: 10, position: "right" }} />
+              {fuelTypes.map(type => (
+                <Line key={type} type="monotone" dataKey={type}
+                      stroke={FUEL_COLOR[type] ?? "#94a3b8"}
+                      dot={false} strokeWidth={2} connectNulls />
+              ))}
+            </LineChart>
+          </ResponsiveContainer>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
 // ── Main Page ─────────────────────────────────────────────────────────────────
 export default function ErcotDispatch() {
   const [tab,       setTab]       = useState("supply-stack");
@@ -502,6 +759,12 @@ export default function ErcotDispatch() {
           <TabsTrigger value="capacity-factors" className="data-[state=active]:bg-teal-700 data-[state=active]:text-white">
             <TrendingUp size={14} className="mr-1.5" /> Capacity Factors
           </TabsTrigger>
+          <TabsTrigger value="capture-prices" className="data-[state=active]:bg-teal-700 data-[state=active]:text-white">
+            <DollarSign size={14} className="mr-1.5" /> Capture Prices
+          </TabsTrigger>
+          <TabsTrigger value="capture-rates" className="data-[state=active]:bg-teal-700 data-[state=active]:text-white">
+            <Percent size={14} className="mr-1.5" /> Capture Rates
+          </TabsTrigger>
           <TabsTrigger value="about" className="data-[state=active]:bg-teal-700 data-[state=active]:text-white">
             <Database size={14} className="mr-1.5" /> Data Source
           </TabsTrigger>
@@ -569,6 +832,14 @@ export default function ErcotDispatch() {
 
         <TabsContent value="capacity-factors">
           <CapacityFactors />
+        </TabsContent>
+
+        <TabsContent value="capture-prices">
+          <CapturePrices />
+        </TabsContent>
+
+        <TabsContent value="capture-rates">
+          <CaptureRates />
         </TabsContent>
 
         <TabsContent value="about">
