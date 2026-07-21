@@ -134,9 +134,22 @@ def aggregate_day(csv_bytes: bytes, data_date: datetime.date) -> pl.DataFrame:
     lsl_col    = find_col(["LSL", "LSLMw", "LSL_MW"])
     bp_col     = find_col(["Base Point", "BasePointMW", "BASE_POINT_MW"])
 
+    # Try common ERCOT timestamp formats — format varies by file vintage
+    ts_expr = pl.col(ts_col).cast(pl.Utf8)
+    parsed = None
+    for fmt in ["%m/%d/%Y %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S", None]:
+        try:
+            sample = df.select(ts_expr.str.to_datetime(format=fmt, strict=True)).drop_nulls()
+            if len(sample) > 0:
+                parsed = ts_expr.str.to_datetime(format=fmt, strict=False)
+                break
+        except Exception:
+            continue
+    if parsed is None:
+        raise ValueError(f"Could not parse timestamp column '{ts_col}'")
+
     df = df.with_columns(
-        pl.col(ts_col).cast(pl.Utf8).str.to_datetime(format=None, strict=False)
-          .dt.truncate("1h").alias("hour"),
+        parsed.dt.truncate("1h").alias("hour"),
         output_col.cast(pl.Float64).alias("_output"),
         hsl_col.cast(pl.Float64).alias("_hsl"),
         lsl_col.cast(pl.Float64).alias("_lsl"),
