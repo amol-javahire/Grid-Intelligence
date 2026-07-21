@@ -435,10 +435,6 @@ export default function ErcotDispatch() {
     const endMs   = Date.now() - 62 * 86_400_000;
     return Math.max(0, Math.floor((endMs - start) / 86_400_000) + 1);
   }, []);
-  const endDateLabel = useMemo(() => {
-    const d = new Date(Date.now() - 62 * 86_400_000);
-    return d.toLocaleDateString("en-US", { month: "short", year: "numeric" });
-  }, []);
 
   return (
     <div className="min-h-screen bg-slate-950 text-white p-6">
@@ -471,17 +467,6 @@ export default function ErcotDispatch() {
         </div>
       </div>
 
-      {/* Seed coverage banner */}
-      {daysSeeded < daysTotal && (
-        <div className="mb-4 p-3 rounded-lg bg-slate-800/60 border border-slate-600/50 flex items-center gap-3">
-          <Loader2 className="animate-spin text-teal-400 shrink-0" size={16} />
-          <p className="text-slate-300 text-xs">
-            <span className="font-semibold text-white">Seeding in progress:</span> {daysSeeded} of {daysTotal} days complete ({(totalRows/1e6).toFixed(2)}M rows).
-            Fetching Jan 2024 → {endDateLabel} from ERCOT NP3-965-ER SCED disclosure files.
-            Charts update automatically as more dates land — refresh the page to see the latest count.
-          </p>
-        </div>
-      )}
 
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList className="bg-slate-800 border border-slate-700 mb-6">
