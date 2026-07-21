@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip,
@@ -8,8 +8,8 @@ import {
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Loader2, Zap, TrendingUp, Database, Activity } from "lucide-react";
+import { Slider } from "@/components/ui/slider";
+import { ChevronLeft, ChevronRight, Loader2, Zap, TrendingUp, Database, Activity } from "lucide-react";
 
 // ── Palette ────────────────────────────────────────────────────────────────────
 const C = {
@@ -104,11 +104,18 @@ function ChartTooltip({ active, payload, label }: {
 }
 
 // ── Supply Stack Chart ─────────────────────────────────────────────────────────
-function SupplyStack({ date }: { date: string }) {
+function SupplyStack({ start, end }: { start: string; end: string }) {
+  const isRange = start !== end;
+  const queryKey = isRange ? ["ercot-supply-stack", start, end] : ["ercot-supply-stack", start];
+  const url = isRange
+    ? `/api/ercot/dispatch/supply-stack?start=${start}&end=${end}`
+    : `/api/ercot/dispatch/supply-stack?date=${start}`;
+
   const { data, isLoading, error } = useQuery<StackRow[]>({
-    queryKey: ["ercot-supply-stack", date],
-    queryFn:  () => apiFetch(`/api/ercot/dispatch/supply-stack?date=${date}`),
+    queryKey,
+    queryFn:  () => apiFetch(url),
     staleTime: 5 * 60_000,
+    enabled:  !!start,
   });
 
   const chartData = useMemo(() => {
@@ -160,6 +167,8 @@ function SupplyStack({ date }: { date: string }) {
   const totalMw    = fuelAgg.reduce((s, r) => s + r.avg_mw, 0);
   const totalCapMw = fuelAgg.reduce((s, r) => s + r.hsl,    0);
 
+  const dateLabel = isRange ? `${start} → ${end}` : start;
+
   if (isLoading) return (
     <div className="flex items-center justify-center h-64">
       <Loader2 className="animate-spin text-teal-400" size={32} />
@@ -167,7 +176,7 @@ function SupplyStack({ date }: { date: string }) {
   );
   if (error || !data?.length) return (
     <div className="flex items-center justify-center h-64 text-slate-400 text-sm">
-      No dispatch data available for {date}. The seeder may still be loading historical dates.
+      No dispatch data available for {dateLabel}. The seeder may still be loading historical dates.
     </div>
   );
 
@@ -194,7 +203,7 @@ function SupplyStack({ date }: { date: string }) {
       {/* Dispatch by fuel type */}
       <Card className="bg-slate-800 border-slate-700">
         <CardHeader className="pb-2">
-          <CardTitle className="text-white text-sm">Generation by Fuel Type — {date}</CardTitle>
+          <CardTitle className="text-white text-sm">Generation by Fuel Type — {dateLabel}</CardTitle>
           <CardDescription className="text-slate-400 text-xs">
             Average MW dispatched (bar) vs. rated capacity HSL (lighter bar). Percentage = capacity factor.
           </CardDescription>
@@ -233,7 +242,7 @@ function SupplyStack({ date }: { date: string }) {
       {/* Merit order scatter: offer price vs cumulative MW */}
       <Card className="bg-slate-800 border-slate-700">
         <CardHeader className="pb-2">
-          <CardTitle className="text-white text-sm">Merit Order Supply Curve — {date}</CardTitle>
+          <CardTitle className="text-white text-sm">Merit Order Supply Curve — {dateLabel}</CardTitle>
           <CardDescription className="text-slate-400 text-xs">
             Resources sorted by offer price. X-axis = cumulative MW dispatched (GW). Y-axis = $/MWh offer price.
             Each segment colored by fuel type.
@@ -343,10 +352,9 @@ function CapacityFactors() {
       {cfData && (
         <Card className="bg-slate-800 border-slate-700">
           <CardHeader className="pb-2">
-            <CardTitle className="text-white text-sm">All-Time Capacity Factors by Fuel Type</CardTitle>
+            <CardTitle className="text-white text-sm">Capacity Factors by Fuel Type — Last 12 Months</CardTitle>
             <CardDescription className="text-slate-400 text-xs">
-              Average capacity factor across all seeded data (Jan 2024 → present).
-              Avg dispatch MW ÷ rated HSL capacity.
+              CF = total MWh generated ÷ (nameplate capacity × available hours). Uses MAX(HSL) per resource as nameplate.
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -411,8 +419,9 @@ function CapacityFactors() {
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
 export default function ErcotDispatch() {
-  const [tab,      setTab]      = useState("supply-stack");
-  const [stackDate, setStackDate] = useState("2024-01-03");
+  const [tab,       setTab]       = useState("supply-stack");
+  // Two indices into the dates[] array — same value = single date, different = range
+  const [dateRange, setDateRange] = useState<[number, number]>([0, 0]);
 
   const { data: status } = useQuery<SeedStatus>({
     queryKey: ["ercot-dispatch-seed-status"],
@@ -424,7 +433,24 @@ export default function ErcotDispatch() {
     queryKey: ["ercot-dispatch-dates"],
     queryFn:  () => apiFetch("/api/ercot/dispatch/dates"),
     staleTime: 60_000,
+    select: (d) => d,
   });
+
+  const maxIdx = Math.max(0, (dates?.length ?? 1) - 1);
+
+  // Jump to last available date once dates load (only if still at initial position)
+  useEffect(() => {
+    if (dates && dates.length > 0) {
+      setDateRange(prev =>
+        prev[0] === 0 && prev[1] === 0 ? [maxIdx, maxIdx] : prev
+      );
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dates?.length]);
+
+  const startDate   = dates?.[dateRange[0]] ?? "";
+  const endDate     = dates?.[dateRange[1]] ?? startDate;
+  const isRangePick = dateRange[0] !== dateRange[1];
 
   const totalRows      = status?.total_rows     ?? 0;
   const totalResources = status?.total_resources ?? 0;
@@ -482,23 +508,63 @@ export default function ErcotDispatch() {
         </TabsList>
 
         <TabsContent value="supply-stack">
-          <div className="mb-4 flex items-center gap-3">
-            <label className="text-slate-400 text-sm">Date:</label>
-            <Select value={stackDate} onValueChange={setStackDate}>
-              <SelectTrigger className="w-40 bg-slate-800 border-slate-600 text-white text-sm">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent className="bg-slate-800 border-slate-700">
-                {(dates ?? ["2024-01-01","2024-01-02","2024-01-03"]).map(d => (
-                  <SelectItem key={d} value={d} className="text-white hover:bg-slate-700">{d}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <p className="text-slate-500 text-xs">
-              {dates?.length ? `${dates.length} dates available` : "Loading available dates..."}
-            </p>
+          {/* Date range slider */}
+          <div className="mb-6 bg-slate-800 border border-slate-700 rounded-lg p-4">
+            <div className="flex items-center justify-between mb-3">
+              <div>
+                <span className="text-white font-medium text-sm">
+                  {isRangePick ? (
+                    <>{startDate} <span className="text-teal-400">→</span> {endDate}
+                      <span className="text-slate-400 text-xs ml-2">
+                        ({dateRange[1] - dateRange[0] + 1} days avg)
+                      </span>
+                    </>
+                  ) : startDate}
+                </span>
+              </div>
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => setDateRange(([s, e]) => {
+                    const ns = Math.max(0, s - 1);
+                    return [ns, s === e ? ns : e];
+                  })}
+                  disabled={dateRange[0] === 0}
+                  className="p-1 rounded hover:bg-slate-700 text-slate-400 hover:text-white disabled:opacity-30"
+                >
+                  <ChevronLeft size={16} />
+                </button>
+                <button
+                  onClick={() => setDateRange(([s, e]) => {
+                    const ne = Math.min(maxIdx, e + 1);
+                    return [s === e ? ne : s, ne];
+                  })}
+                  disabled={dateRange[1] >= maxIdx}
+                  className="p-1 rounded hover:bg-slate-700 text-slate-400 hover:text-white disabled:opacity-30"
+                >
+                  <ChevronRight size={16} />
+                </button>
+              </div>
+            </div>
+
+            <Slider
+              min={0}
+              max={maxIdx}
+              step={1}
+              value={dateRange}
+              onValueChange={(v) => setDateRange(v as [number, number])}
+              className="my-2"
+            />
+
+            <div className="flex justify-between text-slate-500 text-xs mt-1">
+              <span>{dates?.[0] ?? "Jan 2024"}</span>
+              <span className="text-slate-600 text-xs">
+                drag to select date or range · {dates?.length ?? 0} days available
+              </span>
+              <span>{dates?.[maxIdx] ?? "latest"}</span>
+            </div>
           </div>
-          <SupplyStack date={stackDate} />
+
+          <SupplyStack start={startDate} end={endDate} />
         </TabsContent>
 
         <TabsContent value="capacity-factors">
