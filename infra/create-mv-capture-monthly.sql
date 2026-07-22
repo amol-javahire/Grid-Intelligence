@@ -21,31 +21,24 @@
 --     so EXTRACT(hour)+1 = the same CDR HourEnding. Dates/HE line up.
 -- ============================================================
 
+-- Keep the big aggregation in RAM (avoids disk spill / BufFileRead thrash).
+SET work_mem = '512MB';
+SET statement_timeout = 0;
+
 DROP MATERIALIZED VIEW IF EXISTS mv_capture_monthly;
 
 CREATE MATERIALIZED VIEW mv_capture_monthly AS
 WITH
--- Step 1: roll dispatch into (year, month, day, CDR-hour 1-24, resource, type, MW-sum).
-dispatch_hourly_agg AS (
+-- Steps 1-3 fused: join dispatch → zone mapping, then aggregate straight to
+-- (year, month, day, CDR-hour, resource_type, load_zone) in a single GROUP BY.
+-- This avoids dragging a ~15M-row per-resource intermediate through memory.
+dispatch_zone_hourly AS (
     SELECT
         EXTRACT(year  FROM (d.hour AT TIME ZONE 'America/Chicago'))::int      AS yr,
         EXTRACT(month FROM (d.hour AT TIME ZONE 'America/Chicago'))::int      AS mo,
         EXTRACT(day   FROM (d.hour AT TIME ZONE 'America/Chicago'))::int      AS dy,
         EXTRACT(hour  FROM (d.hour AT TIME ZONE 'America/Chicago'))::int + 1  AS chi_hr,
-        d.resource_name,
         d.resource_type,
-        SUM(d.avg_mw) AS sum_gen
-    FROM ercot_hourly_dispatch d
-    WHERE d.avg_mw > 0
-      AND d.hour >= '2024-12-31'::timestamptz   -- ercot_node_prices starts 2025-01; drop earlier dispatch
-    GROUP BY yr, mo, dy, chi_hr, d.resource_name, d.resource_type
-),
-
--- Step 2: map each resource to its load zone (minor zones collapsed; unmatched → LZ_HOUSTON).
-dispatch_with_zone AS (
-    SELECT
-        dha.yr, dha.mo, dha.dy, dha.chi_hr,
-        dha.resource_type,
         CASE COALESCE(nl.load_zone, 'LZ_HOUSTON')
             WHEN 'LZ_AEN'   THEN 'LZ_SOUTH'
             WHEN 'LZ_CPS'   THEN 'LZ_SOUTH'
@@ -53,18 +46,12 @@ dispatch_with_zone AS (
             WHEN 'LZ_RAYBN' THEN 'LZ_NORTH'
             ELSE COALESCE(nl.load_zone, 'LZ_HOUSTON')
         END AS load_zone,
-        dha.sum_gen
-    FROM dispatch_hourly_agg dha
-    LEFT JOIN ercot_node_locations nl
-           ON nl.node_name = dha.resource_name
-),
-
--- Step 3: collapse resources of the same type sharing a zone/hour.
-dispatch_zone_hourly AS (
-    SELECT yr, mo, dy, chi_hr, resource_type, load_zone,
-           SUM(sum_gen) AS sum_gen
-    FROM dispatch_with_zone
-    GROUP BY yr, mo, dy, chi_hr, resource_type, load_zone
+        SUM(d.avg_mw) AS sum_gen
+    FROM ercot_hourly_dispatch d
+    LEFT JOIN ercot_node_locations nl ON nl.node_name = d.resource_name
+    WHERE d.avg_mw > 0
+      AND d.hour >= '2024-12-31'::timestamptz   -- ercot_node_prices starts 2025-01
+    GROUP BY yr, mo, dy, chi_hr, d.resource_type, load_zone
 ),
 
 -- Price source: ercot_node_prices reduced to the 5 nodes capture needs,
