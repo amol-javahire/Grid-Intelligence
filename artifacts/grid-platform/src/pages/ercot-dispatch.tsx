@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip,
@@ -8,8 +8,8 @@ import {
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Loader2, Zap, TrendingUp, Database, Activity } from "lucide-react";
+import { Slider } from "@/components/ui/slider";
+import { ChevronLeft, ChevronRight, Loader2, Zap, TrendingUp, Database, Activity, DollarSign, Percent } from "lucide-react";
 
 // ── Palette ────────────────────────────────────────────────────────────────────
 const C = {
@@ -83,6 +83,14 @@ interface CFRow {
   total_resources: number; avg_offer_price: number;
 }
 
+interface CaptureRow {
+  year: number; month: number; resource_type: string;
+  capture_price_rt: number; capture_price_da: number;
+  hub_avg_rt: number; hub_avg_da: number;
+  capture_rate_rt: number; capture_rate_da: number;
+  total_gen_mwh: number;
+}
+
 // ── Tooltip ───────────────────────────────────────────────────────────────────
 function ChartTooltip({ active, payload, label }: {
   active?: boolean;
@@ -104,11 +112,18 @@ function ChartTooltip({ active, payload, label }: {
 }
 
 // ── Supply Stack Chart ─────────────────────────────────────────────────────────
-function SupplyStack({ date }: { date: string }) {
+function SupplyStack({ start, end }: { start: string; end: string }) {
+  const isRange = start !== end;
+  const queryKey = isRange ? ["ercot-supply-stack", start, end] : ["ercot-supply-stack", start];
+  const url = isRange
+    ? `/api/ercot/dispatch/supply-stack?start=${start}&end=${end}`
+    : `/api/ercot/dispatch/supply-stack?date=${start}`;
+
   const { data, isLoading, error } = useQuery<StackRow[]>({
-    queryKey: ["ercot-supply-stack", date],
-    queryFn:  () => apiFetch(`/api/ercot/dispatch/supply-stack?date=${date}`),
+    queryKey,
+    queryFn:  () => apiFetch(url),
     staleTime: 5 * 60_000,
+    enabled:  !!start,
   });
 
   const chartData = useMemo(() => {
@@ -160,6 +175,8 @@ function SupplyStack({ date }: { date: string }) {
   const totalMw    = fuelAgg.reduce((s, r) => s + r.avg_mw, 0);
   const totalCapMw = fuelAgg.reduce((s, r) => s + r.hsl,    0);
 
+  const dateLabel = isRange ? `${start} → ${end}` : start;
+
   if (isLoading) return (
     <div className="flex items-center justify-center h-64">
       <Loader2 className="animate-spin text-teal-400" size={32} />
@@ -167,7 +184,7 @@ function SupplyStack({ date }: { date: string }) {
   );
   if (error || !data?.length) return (
     <div className="flex items-center justify-center h-64 text-slate-400 text-sm">
-      No dispatch data available for {date}. The seeder may still be loading historical dates.
+      No dispatch data available for {dateLabel}. The seeder may still be loading historical dates.
     </div>
   );
 
@@ -194,7 +211,7 @@ function SupplyStack({ date }: { date: string }) {
       {/* Dispatch by fuel type */}
       <Card className="bg-slate-800 border-slate-700">
         <CardHeader className="pb-2">
-          <CardTitle className="text-white text-sm">Generation by Fuel Type — {date}</CardTitle>
+          <CardTitle className="text-white text-sm">Generation by Fuel Type — {dateLabel}</CardTitle>
           <CardDescription className="text-slate-400 text-xs">
             Average MW dispatched (bar) vs. rated capacity HSL (lighter bar). Percentage = capacity factor.
           </CardDescription>
@@ -233,7 +250,7 @@ function SupplyStack({ date }: { date: string }) {
       {/* Merit order scatter: offer price vs cumulative MW */}
       <Card className="bg-slate-800 border-slate-700">
         <CardHeader className="pb-2">
-          <CardTitle className="text-white text-sm">Merit Order Supply Curve — {date}</CardTitle>
+          <CardTitle className="text-white text-sm">Merit Order Supply Curve — {dateLabel}</CardTitle>
           <CardDescription className="text-slate-400 text-xs">
             Resources sorted by offer price. X-axis = cumulative MW dispatched (GW). Y-axis = $/MWh offer price.
             Each segment colored by fuel type.
@@ -292,37 +309,42 @@ function CapacityFactors() {
   });
 
   const { data: monthly, isLoading: mlLoading } = useQuery<SummaryRow[]>({
-    queryKey: ["ercot-dispatch-summary"],
-    queryFn:  () => apiFetch("/api/ercot/dispatch/summary?months=30"),
+    queryKey: ["ercot-dispatch-summary-25m"],
+    queryFn:  () => apiFetch("/api/ercot/dispatch/summary?months=25"),
     staleTime: 10 * 60_000,
   });
 
-  // Build monthly trend by fuel type
+  // Build monthly trend by fuel type — store numeric year/month for correct sort
   const monthlyByFuel = useMemo(() => {
     if (!monthly) return {};
-    const byFuel: Record<string, { label: string; data: { month: string; cf: number }[] }> = {};
+    const byFuel: Record<string, { label: string; data: { year: number; month: number; cf: number }[] }> = {};
     monthly.forEach(r => {
       if (!byFuel[r.resource_type]) {
         byFuel[r.resource_type] = { label: FUEL_LABEL[r.resource_type] ?? r.resource_type, data: [] };
       }
       byFuel[r.resource_type].data.push({
-        month: fmtMonth(r.year, r.month),
+        year:  r.year,
+        month: r.month,
         cf:    r.avg_cf != null ? Math.round(Number(r.avg_cf) * 100) : 0,
       });
     });
     return byFuel;
   }, [monthly]);
 
-  // Combine monthly data into a single array keyed by month label
+  // Combine into flat array sorted chronologically by year×12+month (not alphabetically)
   const monthlyFlat = useMemo(() => {
-    const allMonths: string[] = [];
+    const seen = new Map<string, { year: number; month: number }>();
     Object.values(monthlyByFuel).forEach(({ data }) =>
-      data.forEach(d => { if (!allMonths.includes(d.month)) allMonths.push(d.month); })
+      data.forEach(d => {
+        const key = `${d.year}-${d.month}`;
+        if (!seen.has(key)) seen.set(key, { year: d.year, month: d.month });
+      })
     );
-    return allMonths.sort().map(month => {
-      const row: Record<string, unknown> = { month };
+    const sorted = [...seen.values()].sort((a, b) => a.year * 12 + a.month - (b.year * 12 + b.month));
+    return sorted.map(({ year, month }) => {
+      const row: Record<string, unknown> = { month: fmtMonth(year, month) };
       Object.entries(monthlyByFuel).forEach(([type, { data }]) => {
-        const found = data.find(d => d.month === month);
+        const found = data.find(d => d.year === year && d.month === month);
         row[type] = found?.cf ?? null;
       });
       return row;
@@ -343,10 +365,9 @@ function CapacityFactors() {
       {cfData && (
         <Card className="bg-slate-800 border-slate-700">
           <CardHeader className="pb-2">
-            <CardTitle className="text-white text-sm">All-Time Capacity Factors by Fuel Type</CardTitle>
+            <CardTitle className="text-white text-sm">Capacity Factors by Fuel Type — Last 12 Months</CardTitle>
             <CardDescription className="text-slate-400 text-xs">
-              Average capacity factor across all seeded data (Jan 2024 → present).
-              Avg dispatch MW ÷ rated HSL capacity.
+              CF = total MWh generated ÷ (nameplate capacity × available hours). Uses MAX(HSL) per resource as nameplate.
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -409,10 +430,263 @@ function CapacityFactors() {
   );
 }
 
+// ── Shared capture data hook ───────────────────────────────────────────────────
+function useCaptureData() {
+  return useQuery<CaptureRow[]>({
+    queryKey: ["ercot-capture-25m"],
+    queryFn:  () => apiFetch("/api/ercot/dispatch/capture?months=25"),
+    staleTime: 10 * 60_000,
+  });
+}
+
+// Compute 12-month weighted avg per fuel type from monthly capture data
+function captureRollup(data: CaptureRow[], key: "capture_price_rt" | "capture_rate_rt") {
+  const now = new Date();
+  const cutoff = now.getFullYear() * 12 + now.getMonth(); // 12 months back
+  const byType: Record<string, { num: number; den: number; hubNum: number }> = {};
+  data.forEach(r => {
+    const ym = r.year * 12 + r.month;
+    if (ym < cutoff - 11) return;
+    const t = r.resource_type;
+    const w = Number(r.total_gen_mwh);
+    if (!byType[t]) byType[t] = { num: 0, den: 0, hubNum: 0 };
+    byType[t].num += Number(r[key]) * w;
+    byType[t].den += w;
+    if (key === "capture_price_rt") byType[t].hubNum += Number(r.hub_avg_rt) * w;
+  });
+  return Object.entries(byType).map(([type, v]) => ({
+    type,
+    label: FUEL_LABEL[type] ?? type,
+    color: FUEL_COLOR[type] ?? "#94a3b8",
+    value: v.den > 0 ? v.num / v.den : 0,
+    hubAvg: v.den > 0 && key === "capture_price_rt" ? v.hubNum / v.den : 0,
+  })).sort((a, b) => b.value - a.value);
+}
+
+// Build flat monthly array sorted chronologically (not alphabetically by label)
+function captureMonthlyFlat(data: CaptureRow[], key: keyof CaptureRow, includeHub = false) {
+  const seen = new Map<string, { year: number; month: number }>();
+  data.forEach(r => {
+    const k = `${r.year}-${r.month}`;
+    if (!seen.has(k)) seen.set(k, { year: r.year, month: r.month });
+  });
+  const sorted = [...seen.values()].sort((a, b) => a.year * 12 + a.month - (b.year * 12 + b.month));
+  return sorted.map(({ year, month }) => {
+    const label = fmtMonth(year, month);
+    const rows = data.filter(r => r.year === year && r.month === month);
+    const row: Record<string, unknown> = { month: label };
+    rows.forEach(r => { row[r.resource_type] = Number(r[key]); });
+    if (includeHub && rows.length > 0) row["hub_avg"] = Number(rows[0].hub_avg_rt);
+    return row;
+  });
+}
+
+// ── Capture Prices Tab ────────────────────────────────────────────────────────
+function CapturePrices() {
+  const { data, isLoading } = useCaptureData();
+
+  const summary = useMemo(() => (data ? captureRollup(data, "capture_price_rt") : []), [data]);
+  const fuelTypes = useMemo(() => (data ? [...new Set(data.map(r => r.resource_type))] : []), [data]);
+  const monthlyFlat = useMemo(() => (data ? captureMonthlyFlat(data, "capture_price_rt", true) : []), [data]);
+
+  if (isLoading) return (
+    <div className="flex items-center justify-center h-64">
+      <Loader2 className="animate-spin text-teal-400" size={32} />
+    </div>
+  );
+  if (!data?.length) return (
+    <div className="flex items-center justify-center h-64 text-slate-400 text-sm">No capture price data available.</div>
+  );
+
+  return (
+    <div className="space-y-6">
+      <Card className="bg-slate-800 border-slate-700">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-white text-sm">Capture Price by Fuel Type — Last 12 Months</CardTitle>
+          <CardDescription className="text-slate-400 text-xs">
+            Generation-weighted average RT price in each generator's load zone (LZ_WEST/NORTH/SOUTH/HOUSTON)
+            during dispatch hours. System avg (HB_BUSAVG) shown as reference. Data covers Jan 2024 – Dec 2025.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            {summary.map(r => {
+              const delta = r.value - r.hubAvg;
+              const pct   = r.hubAvg > 0 ? (r.value / r.hubAvg - 1) * 100 : 0;
+              return (
+                <div key={r.type} className="bg-slate-900 rounded p-3 border border-slate-700">
+                  <div className="flex items-center gap-1.5 mb-1">
+                    <div className="w-2 h-2 rounded-full" style={{ backgroundColor: r.color }} />
+                    <span className="text-slate-400 text-xs">{r.label}</span>
+                  </div>
+                  <p className="text-white text-2xl font-bold">${r.value.toFixed(1)}</p>
+                  <p className="text-slate-500 text-xs mt-0.5">
+                    Sys avg ${r.hubAvg.toFixed(1)} &middot;{" "}
+                    <span className={delta >= 0 ? "text-green-400" : "text-red-400"}>
+                      {delta >= 0 ? "+" : ""}{pct.toFixed(0)}%
+                    </span>
+                  </p>
+                  {/* ratio bar */}
+                  <div className="mt-2 h-1 rounded bg-slate-700 overflow-hidden">
+                    <div className="h-full rounded"
+                         style={{ width: `${Math.min(100, (r.value / Math.max(r.hubAvg, 0.01)) * 50)}%`,
+                                  backgroundColor: r.color }} />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className="bg-slate-800 border-slate-700">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-white text-sm">Capture Price Trend — $/MWh (Zone RT)</CardTitle>
+          <CardDescription className="text-slate-400 text-xs">
+            Monthly zone LMP capture price per fuel type (gen-weighted). Dashed line = system avg (HB_BUSAVG).
+            Divergence shows zone basis — wind/solar zones trade at a discount or premium to the system hub.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <ResponsiveContainer width="100%" height={320}>
+            <LineChart data={monthlyFlat} margin={{ left: 8, right: 16, top: 4, bottom: 4 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+              <XAxis dataKey="month" tick={{ fill: "#94a3b8", fontSize: 10 }} interval={2} />
+              <YAxis tick={{ fill: "#94a3b8", fontSize: 10 }}
+                     tickFormatter={v => `$${Number(v).toFixed(0)}`} />
+              <RechartsTooltip
+                contentStyle={{ backgroundColor: C.tooltipBg, borderColor: C.tooltipBorder, color: C.tooltipFg }}
+                formatter={(v: unknown, name: string) => [
+                  `$${Number(v).toFixed(1)}/MWh`,
+                  name === "hub_avg" ? "Sys Avg (HB_BUSAVG)" : (FUEL_LABEL[name] ?? name)
+                ]}
+              />
+              <Legend wrapperStyle={{ fontSize: 11, color: "#94a3b8" }}
+                      formatter={(name) => name === "hub_avg" ? "Sys Avg (HB_BUSAVG)" : (FUEL_LABEL[name] ?? name)} />
+              <Line key="hub_avg" type="monotone" dataKey="hub_avg"
+                    stroke="#64748b" dot={false} strokeWidth={1.5}
+                    strokeDasharray="5 3" connectNulls />
+              {fuelTypes.map(type => (
+                <Line key={type} type="monotone" dataKey={type}
+                      stroke={FUEL_COLOR[type] ?? "#94a3b8"}
+                      dot={false} strokeWidth={2} connectNulls />
+              ))}
+            </LineChart>
+          </ResponsiveContainer>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+// ── Capture Rates Tab ─────────────────────────────────────────────────────────
+function CaptureRates() {
+  const { data, isLoading } = useCaptureData();
+
+  const summary = useMemo(() => (data ? captureRollup(data, "capture_rate_rt") : []), [data]);
+  const fuelTypes = useMemo(() => (data ? [...new Set(data.map(r => r.resource_type))] : []), [data]);
+  const monthlyFlat = useMemo(() => (data ? captureMonthlyFlat(data, "capture_rate_rt") : []), [data]);
+
+  if (isLoading) return (
+    <div className="flex items-center justify-center h-64">
+      <Loader2 className="animate-spin text-teal-400" size={32} />
+    </div>
+  );
+  if (!data?.length) return (
+    <div className="flex items-center justify-center h-64 text-slate-400 text-sm">No capture rate data available.</div>
+  );
+
+  return (
+    <div className="space-y-6">
+      <Card className="bg-slate-800 border-slate-700">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-white text-sm">Capture Rate by Fuel Type — Last 12 Months</CardTitle>
+          <CardDescription className="text-slate-400 text-xs">
+            Capture rate = gen-weighted zone LMP ÷ system avg (HB_BUSAVG).
+            Values &gt;1.0 = zone runs at a premium to system; &lt;1.0 = zone discount (congestion/curtailment).
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            {summary.map(r => {
+              const pct = r.value * 100;
+              const color = r.value >= 1.1 ? C.green
+                          : r.value >= 0.95 ? C.teal
+                          : r.value >= 0.8  ? C.amber
+                          : C.red;
+              const label = r.value >= 1.1 ? "premium"
+                          : r.value >= 0.95 ? "at par"
+                          : r.value >= 0.8  ? "discount"
+                          : "deep discount";
+              return (
+                <div key={r.type} className="bg-slate-900 rounded p-3 border border-slate-700">
+                  <div className="flex items-center gap-1.5 mb-1">
+                    <div className="w-2 h-2 rounded-full" style={{ backgroundColor: r.color }} />
+                    <span className="text-slate-400 text-xs">{r.label}</span>
+                  </div>
+                  <p className="text-2xl font-bold" style={{ color }}>
+                    {pct.toFixed(0)}%
+                  </p>
+                  <p className="text-slate-500 text-xs mt-0.5">
+                    of sys avg &middot; <span style={{ color }}>{label}</span>
+                  </p>
+                  {/* bar showing ratio vs 100% */}
+                  <div className="mt-2 h-1.5 rounded bg-slate-700 overflow-hidden">
+                    <div className="h-full rounded transition-all"
+                         style={{ width: `${Math.min(100, pct)}%`, backgroundColor: color }} />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className="bg-slate-800 border-slate-700">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-white text-sm">Capture Rate Trend — Zone LMP ÷ Sys Avg</CardTitle>
+          <CardDescription className="text-slate-400 text-xs">
+            Monthly zone capture rate vs system avg (HB_BUSAVG). Reference line at 1.0×.
+            Persistent discount = geographic basis risk; premium = favorable zone economics for a PPA.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <ResponsiveContainer width="100%" height={320}>
+            <LineChart data={monthlyFlat} margin={{ left: 8, right: 16, top: 4, bottom: 4 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+              <XAxis dataKey="month" tick={{ fill: "#94a3b8", fontSize: 10 }} interval={2} />
+              <YAxis tick={{ fill: "#94a3b8", fontSize: 10 }}
+                     tickFormatter={v => `${(Number(v) * 100).toFixed(0)}%`}
+                     domain={[0, "auto"]} />
+              <RechartsTooltip
+                contentStyle={{ backgroundColor: C.tooltipBg, borderColor: C.tooltipBorder, color: C.tooltipFg }}
+                formatter={(v: unknown, name: string) => [
+                  `${(Number(v) * 100).toFixed(1)}%`,
+                  FUEL_LABEL[name] ?? name
+                ]}
+              />
+              <Legend wrapperStyle={{ fontSize: 11, color: "#94a3b8" }}
+                      formatter={(name) => FUEL_LABEL[name] ?? name} />
+              <ReferenceLine y={1} stroke="#475569" strokeDasharray="4 2"
+                             label={{ value: "par (1.0×)", fill: "#64748b", fontSize: 10, position: "right" }} />
+              {fuelTypes.map(type => (
+                <Line key={type} type="monotone" dataKey={type}
+                      stroke={FUEL_COLOR[type] ?? "#94a3b8"}
+                      dot={false} strokeWidth={2} connectNulls />
+              ))}
+            </LineChart>
+          </ResponsiveContainer>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
 // ── Main Page ─────────────────────────────────────────────────────────────────
 export default function ErcotDispatch() {
-  const [tab,      setTab]      = useState("supply-stack");
-  const [stackDate, setStackDate] = useState("2024-01-03");
+  const [tab,       setTab]       = useState("supply-stack");
+  // Two indices into the dates[] array — same value = single date, different = range
+  const [dateRange, setDateRange] = useState<[number, number]>([0, 0]);
 
   const { data: status } = useQuery<SeedStatus>({
     queryKey: ["ercot-dispatch-seed-status"],
@@ -424,7 +698,24 @@ export default function ErcotDispatch() {
     queryKey: ["ercot-dispatch-dates"],
     queryFn:  () => apiFetch("/api/ercot/dispatch/dates"),
     staleTime: 60_000,
+    select: (d) => d,
   });
+
+  const maxIdx = Math.max(0, (dates?.length ?? 1) - 1);
+
+  // Jump to last available date once dates load (only if still at initial position)
+  useEffect(() => {
+    if (dates && dates.length > 0) {
+      setDateRange(prev =>
+        prev[0] === 0 && prev[1] === 0 ? [maxIdx, maxIdx] : prev
+      );
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dates?.length]);
+
+  const startDate   = dates?.[dateRange[0]] ?? "";
+  const endDate     = dates?.[dateRange[1]] ?? startDate;
+  const isRangePick = dateRange[0] !== dateRange[1];
 
   const totalRows      = status?.total_rows     ?? 0;
   const totalResources = status?.total_resources ?? 0;
@@ -434,10 +725,6 @@ export default function ErcotDispatch() {
     const start   = new Date("2024-01-01").getTime();
     const endMs   = Date.now() - 62 * 86_400_000;
     return Math.max(0, Math.floor((endMs - start) / 86_400_000) + 1);
-  }, []);
-  const endDateLabel = useMemo(() => {
-    const d = new Date(Date.now() - 62 * 86_400_000);
-    return d.toLocaleDateString("en-US", { month: "short", year: "numeric" });
   }, []);
 
   return (
@@ -471,17 +758,6 @@ export default function ErcotDispatch() {
         </div>
       </div>
 
-      {/* Seed coverage banner */}
-      {daysSeeded < daysTotal && (
-        <div className="mb-4 p-3 rounded-lg bg-slate-800/60 border border-slate-600/50 flex items-center gap-3">
-          <Loader2 className="animate-spin text-teal-400 shrink-0" size={16} />
-          <p className="text-slate-300 text-xs">
-            <span className="font-semibold text-white">Seeding in progress:</span> {daysSeeded} of {daysTotal} days complete ({(totalRows/1e6).toFixed(2)}M rows).
-            Fetching Jan 2024 → {endDateLabel} from ERCOT NP3-965-ER SCED disclosure files.
-            Charts update automatically as more dates land — refresh the page to see the latest count.
-          </p>
-        </div>
-      )}
 
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList className="bg-slate-800 border border-slate-700 mb-6">
@@ -491,33 +767,87 @@ export default function ErcotDispatch() {
           <TabsTrigger value="capacity-factors" className="data-[state=active]:bg-teal-700 data-[state=active]:text-white">
             <TrendingUp size={14} className="mr-1.5" /> Capacity Factors
           </TabsTrigger>
+          <TabsTrigger value="capture-prices" className="data-[state=active]:bg-teal-700 data-[state=active]:text-white">
+            <DollarSign size={14} className="mr-1.5" /> Capture Prices
+          </TabsTrigger>
+          <TabsTrigger value="capture-rates" className="data-[state=active]:bg-teal-700 data-[state=active]:text-white">
+            <Percent size={14} className="mr-1.5" /> Capture Rates
+          </TabsTrigger>
           <TabsTrigger value="about" className="data-[state=active]:bg-teal-700 data-[state=active]:text-white">
             <Database size={14} className="mr-1.5" /> Data Source
           </TabsTrigger>
         </TabsList>
 
         <TabsContent value="supply-stack">
-          <div className="mb-4 flex items-center gap-3">
-            <label className="text-slate-400 text-sm">Date:</label>
-            <Select value={stackDate} onValueChange={setStackDate}>
-              <SelectTrigger className="w-40 bg-slate-800 border-slate-600 text-white text-sm">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent className="bg-slate-800 border-slate-700">
-                {(dates ?? ["2024-01-01","2024-01-02","2024-01-03"]).map(d => (
-                  <SelectItem key={d} value={d} className="text-white hover:bg-slate-700">{d}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <p className="text-slate-500 text-xs">
-              {dates?.length ? `${dates.length} dates available` : "Loading available dates..."}
-            </p>
+          {/* Date range slider */}
+          <div className="mb-6 bg-slate-800 border border-slate-700 rounded-lg p-4">
+            <div className="flex items-center justify-between mb-3">
+              <div>
+                <span className="text-white font-medium text-sm">
+                  {isRangePick ? (
+                    <>{startDate} <span className="text-teal-400">→</span> {endDate}
+                      <span className="text-slate-400 text-xs ml-2">
+                        ({dateRange[1] - dateRange[0] + 1} days avg)
+                      </span>
+                    </>
+                  ) : startDate}
+                </span>
+              </div>
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => setDateRange(([s, e]) => {
+                    const ns = Math.max(0, s - 1);
+                    return [ns, s === e ? ns : e];
+                  })}
+                  disabled={dateRange[0] === 0}
+                  className="p-1 rounded hover:bg-slate-700 text-slate-400 hover:text-white disabled:opacity-30"
+                >
+                  <ChevronLeft size={16} />
+                </button>
+                <button
+                  onClick={() => setDateRange(([s, e]) => {
+                    const ne = Math.min(maxIdx, e + 1);
+                    return [s === e ? ne : s, ne];
+                  })}
+                  disabled={dateRange[1] >= maxIdx}
+                  className="p-1 rounded hover:bg-slate-700 text-slate-400 hover:text-white disabled:opacity-30"
+                >
+                  <ChevronRight size={16} />
+                </button>
+              </div>
+            </div>
+
+            <Slider
+              min={0}
+              max={maxIdx}
+              step={1}
+              value={dateRange}
+              onValueChange={(v) => setDateRange(v as [number, number])}
+              className="my-2"
+            />
+
+            <div className="flex justify-between text-slate-500 text-xs mt-1">
+              <span>{dates?.[0] ?? "Jan 2024"}</span>
+              <span className="text-slate-600 text-xs">
+                drag to select date or range · {dates?.length ?? 0} days available
+              </span>
+              <span>{dates?.[maxIdx] ?? "latest"}</span>
+            </div>
           </div>
-          <SupplyStack date={stackDate} />
+
+          <SupplyStack start={startDate} end={endDate} />
         </TabsContent>
 
         <TabsContent value="capacity-factors">
           <CapacityFactors />
+        </TabsContent>
+
+        <TabsContent value="capture-prices">
+          <CapturePrices />
+        </TabsContent>
+
+        <TabsContent value="capture-rates">
+          <CaptureRates />
         </TabsContent>
 
         <TabsContent value="about">
