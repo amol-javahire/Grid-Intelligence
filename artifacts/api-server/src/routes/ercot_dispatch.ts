@@ -208,17 +208,17 @@ router.get("/ercot/dispatch/capture", async (req, res) => {
 // GET /api/ercot/dispatch/seed-status
 router.get("/ercot/dispatch/seed-status", async (req, res) => {
   try {
+    // Fast: read counts from the small seed_log + MV instead of scanning 25M rows.
     const stats = await db.execute<{
       total_rows: number; total_resources: number;
       min_hour: string; max_hour: string; days_seeded: number;
     }>(sql`
       SELECT
-        COUNT(*)                         AS total_rows,
-        COUNT(DISTINCT resource_name)    AS total_resources,
-        MIN(hour)                        AS min_hour,
-        MAX(hour)                        AS max_hour,
-        (SELECT COUNT(*) FROM ercot_dispatch_seed_log WHERE rows_inserted >= 0) AS days_seeded
-      FROM ercot_hourly_dispatch
+        (SELECT COALESCE(SUM(rows_inserted), 0) FROM ercot_dispatch_seed_log WHERE rows_inserted > 0) AS total_rows,
+        (SELECT COUNT(DISTINCT resource_name) FROM mv_dispatch_monthly)                                AS total_resources,
+        (SELECT MIN(seed_date)::text FROM ercot_dispatch_seed_log WHERE rows_inserted > 0)             AS min_hour,
+        (SELECT MAX(seed_date)::text FROM ercot_dispatch_seed_log WHERE rows_inserted > 0)             AS max_hour,
+        (SELECT COUNT(*) FROM ercot_dispatch_seed_log WHERE rows_inserted >= 0)                        AS days_seeded
     `);
     res.json(stats.rows[0] ?? {});
   } catch (err) {
