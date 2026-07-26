@@ -16,6 +16,13 @@
 SET work_mem = '512MB';
 SET statement_timeout = 0;
 
+-- The table existed on Azure without its Drizzle-defined indexes; create them
+-- (needed for ON CONFLICT below, and for the app's node/time lookups).
+CREATE UNIQUE INDEX IF NOT EXISTS ercot_hub_hourly_uq
+  ON ercot_hub_hourly (node, year, month, day, hour);
+CREATE INDEX IF NOT EXISTS ercot_hub_hourly_node_idx ON ercot_hub_hourly (node);
+CREATE INDEX IF NOT EXISTS ercot_hub_hourly_time_idx ON ercot_hub_hourly (year, month, day, hour);
+
 DELETE FROM ercot_hub_hourly WHERE year >= 2025;
 
 INSERT INTO ercot_hub_hourly (node, node_type, year, month, day, hour, da_price, rt_price)
