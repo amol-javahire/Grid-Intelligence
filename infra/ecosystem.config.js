@@ -49,8 +49,11 @@ module.exports = {
       autorestart: true,
       watch:       false,
 
-      // PyPSA can spike to ~600MB during OPF; 4 GB RAM gives headroom but still restart before OOM
-      max_memory_restart: '600M',
+      // PyPSA spikes well past 600M on multi-period solves (battery = 24 hourly
+      // periods, expansion = 4 planning horizons) — the old 600M ceiling killed
+      // the process mid-request and the UI lost its backend. VM has 8 GB and
+      // idles ~17%, so 3 GB is safe headroom while still catching a real leak.
+      max_memory_restart: '3000M',
 
       env: {
         // FastAPI/Uvicorn don't read .env automatically; pass vars explicitly.
