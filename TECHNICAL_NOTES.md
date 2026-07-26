@@ -157,9 +157,41 @@ ORDER BY year, month;
 - **Tier 1 (5-bus):** Abstract ERCOT with 5 buses mapped to real load zones (NORTH, HOUSTON, SOUTH, WEST, PANHANDLE). Fast (<1s), used for all user-facing scenario simulators.
 - **Tier 2 (340-bus):** Full ERCOT 345kV topology from HIFLD + CDR 10008. DC OPF (B-matrix). Used for nodal congestion analysis and PTDF shift factors.
 
-**CRITICAL BUG — Tier isolation:**
-`simulators.py` must always call `_build_tier1()` directly — NEVER `build_network()`.
-`build_network()` routes to Tier-2 if topology data is in DB. Tier-2 bus names don't match short names ("NORTH_WIND", "SOUTH_SOLAR") → 100% curtailment on every scenario. This bug will silently return wrong results.
+**CRITICAL — Tier isolation (the 100%-curtailment trap):**
+The failure mode is **iterating Tier-1's hardcoded name constants (`GENERATORS`, `BUSES`, `LINES`) against a Tier-2 network.** Tier-2 bus names are real substation IDs, so lookups like `n.generators_t.p["NOR-wind"]` match nothing → dispatch reads 0 → **100% curtailment reported on every scenario, silently, with no error.**
+
+The safe pattern (proven by `run_scarcity`, now also `run_curtailment`) is:
+1. Build with `_build_network_real(...)`.
+2. Iterate the **real network objects** — `n.generators.index`, `n.buses.index`, `n.lines.index` — never the constants.
+3. Read availability as `p_nom × p_max_pu` (the builder bakes CF/derates into `p_max_pu`).
+4. Roll 340 buses into the 5 hub labels the frontend expects via `bus_hub_map(buses_db)`, and merge hub-level LMPs back under the hub-label keys for backward compat.
+5. Restrict LMP stats to **loaded buses** — a 340-bus network has many unloaded buses whose LMP is meaningless.
+6. Cap the `lines` payload (sort by loading, send top ~60) — 1,807 lines is too much to serialize.
+
+A sim that still calls `_build_tier1()` is fine; the bug only appears when a Tier-2 network is combined with Tier-1 constants.
+
+### 5b. Which simulator runs which tier — and why
+
+| Simulator | Tier | Rationale |
+|-----------|------|-----------|
+| Network OPF | **2** (340-bus) | Map-based display, bus-agnostic rendering |
+| Scarcity | **2** | Load-shed is a locational phenomenon; aggregates via `bus_hub_map` |
+| Curtailment | **2** | Curtailment IS a transmission-constraint phenomenon — local congestion pockets that Tier-1 averages away are exactly the signal |
+| Battery | **1** + real prices | See below — no longer relies on modelled LMPs at all |
+| TX-Relief | **1** (deliberate) | See blocker below |
+| Expansion | n/a | Capacity LP, builds no network |
+
+**Battery Revenue — real prices, not modelled (changed 2026-07-26).**
+Phase 1 used to run **24 single-snapshot Tier-1 OPFs** to model an hourly zone LMP. Two problems: (a) Tier-2 would be 24 × ~10s ≈ **4 min**, past the API proxy timeout; (b) more fundamentally, Battery Revenue is a **historical backtest**, and per §5a historical questions must use actual settled prices. It now reads:
+- **zone price** ← `ercot_node_prices` RT at the storage zone's load zone(s). RT embeds the real congestion/curtailment signal the model only approximated — negative RT hours *are* curtailment events.
+- **curtailment MW** ← `ercot_hourly_dispatch` `SUM(GREATEST(hsl − avg_mw, 0))` over wind/solar in that zone (real SCED 60-day disclosure), joined via `ercot_node_locations.load_zone`.
+
+Two indexed queries replace 24 LP solves (~100× faster) and the numbers are actuals. Revenue is still settled at the real DA hub price so $/day stays comparable to merchant proformas. Hub→load-zone map: HOUSTON→LZ_HOUSTON, NORTH→LZ_NORTH, WEST/PAN→LZ_WEST, SOUTH→LZ_SOUTH+AEN+CPS+LCRA.
+
+**TX-Relief stays Tier-1 — the blocker is modelling, not code.**
+The UI lets the user upgrade one of **six named corridors** (NORTH-WEST, NORTH-HOUSTON, …). Tier-2 has **1,807 lines with generic IDs** — there is no single line that *is* "NORTH-WEST." Upgrading it on Tier-2 requires first defining **which set of real lines constitutes each corridor** (by endpoint hub pair, voltage, or a curated list). That's a modelling decision to make deliberately; until then Tier-1's six explicit corridors are the honest representation.
+
+**Dependency:** Tier-2 sims need `ercot_buses` (340) + `ercot_lines` (1,807) seeded. If empty, `_build_network_real` silently falls back to Tier-1 — check `model_version` / `tier` in the response to know which ran.
 
 **OPF Infeasibility:**
 HiGHS doesn't raise exception on infeasible OPF — returns silently.

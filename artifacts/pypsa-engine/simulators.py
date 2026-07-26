@@ -37,20 +37,43 @@ def run_curtailment(
     west_wind_bonus_pct: float = 0.0,
 ) -> dict[str, Any]:
     """
-    Run OPF and compute curtailment per generator.
-    Curtailment = available capacity - dispatched MW for zero-MC generators.
-    Negative price exposure from buses where LMP < 0.
+    Run OPF and compute curtailment per generator, using the real Tier-2 340-bus
+    ERCOT topology (falls back to the 5-bus Tier-1 model only if the DB has no
+    topology seeded).
+
+    Curtailment is fundamentally a transmission-constraint phenomenon, so the
+    real 340-bus network with 1,807 lines gives a materially better answer than
+    the 5-bus reduction — local pockets of congestion that Tier-1 averages away
+    show up as genuine curtailment here.
+
+    Curtailment = available capacity (p_nom × p_max_pu) − dispatched MW for
+    zero-MC generators. Results are read from the REAL network objects
+    (n.generators / n.buses / n.lines), never Tier-1's fixed name constants —
+    iterating the hardcoded GENERATORS list against a Tier-2 network silently
+    matches nothing and reports 100% curtailment (see TECHNICAL_NOTES §5).
+    Per-bus results are then rolled into the 5 ERCOT hub buckets the frontend
+    expects, exactly as run_scarcity does.
     """
     adj_wind = wind_cf * (1 + west_wind_bonus_pct / 100)
+    eff_wind = min(adj_wind, 0.95)
 
-    n = build_network(system_load_mw, min(adj_wind, 0.95), solar_cf, gas_price_mmbtu)
-    n.optimize(solver_name="highs")
-
+    n = _build_network_real(system_load_mw, eff_wind, solar_cf, gas_price_mmbtu)
+    try:
+        n.optimize(solver_name="highs")
+    except Exception as e:
+        return {"error": f"Optimization failed: {e}"}
     if n.objective is None:
         return {"error": "Optimization failed"}
 
+    buses_db, _ = _load_topology_from_db()
+    tier = 2 if buses_db else 1
+    hub_of: dict[str, str] = (
+        bus_hub_map(buses_db) if tier == 2
+        else {bus_id: bus_id for bus_id in n.buses.index}
+    )
+
     lmp: dict[str, float] = {}
-    for bus_id in BUSES:
+    for bus_id in n.buses.index:
         try:
             val = float(n.buses_t.marginal_price.get(bus_id, pd.Series([0.0])).iloc[0])
         except Exception:
@@ -63,21 +86,16 @@ def run_curtailment(
     total_solar_avail = 0.0
     total_solar_dispatch = 0.0
 
-    for gen in GENERATORS:
-        if gen["carrier"] in HIDDEN_CARRIERS:
+    for name in n.generators.index:
+        carrier = str(n.generators.at[name, "carrier"])
+        if carrier in HIDDEN_CARRIERS or carrier not in ("wind", "solar"):
             continue
-        carrier = gen["carrier"]
-        name = gen["name"]
-        p_nom = float(gen["p_nom"])
+        bus_id = str(n.generators.at[name, "bus"])
 
-        if carrier == "wind":
-            cf = min(adj_wind, 0.95)
-        elif carrier == "solar":
-            cf = solar_cf
-        else:
-            continue
-
-        available_mw = p_nom * cf
+        # The builder already baked the CF into p_max_pu (incl. any derates).
+        available_mw = float(n.generators.at[name, "p_nom"]) * float(
+            n.generators.at[name, "p_max_pu"]
+        )
         try:
             dispatched_mw = float(n.generators_t.p[name].iloc[0])
         except Exception:
@@ -95,13 +113,14 @@ def run_curtailment(
 
         curtailment_results.append({
             "name": name,
-            "bus": gen["bus"],
+            "bus": bus_id,
+            "hub": hub_of.get(bus_id, "SOUTH"),
             "carrier": carrier,
             "available_mw": round(available_mw, 1),
             "dispatched_mw": round(dispatched_mw, 1),
             "curtailed_mw": round(curtailed_mw, 1),
             "curtail_pct": round(curtail_pct, 1),
-            "lmp": lmp.get(gen["bus"], 0.0),
+            "lmp": lmp.get(bus_id, 0.0),
         })
 
     total_curtailed = sum(r["curtailed_mw"] for r in curtailment_results)
@@ -109,46 +128,73 @@ def run_curtailment(
     total_wind_curtailed = total_wind_avail - total_wind_dispatch
     total_solar_curtailed = total_solar_avail - total_solar_dispatch
 
-    neg_price_buses = [b for b, v in lmp.items() if v < 0]
-    min_lmp = min(lmp.values())
+    # Negative-price exposure: only loaded buses have a meaningful LMP in a
+    # 340-bus network (many buses carry no load).
+    loaded_buses = {str(n.loads.at[l, "bus"]) for l in n.loads.index}
+    meaningful_lmp = {b: v for b, v in lmp.items() if b in loaded_buses} or lmp
+    neg_price_buses = [b for b, v in meaningful_lmp.items() if v < 0]
+    min_lmp = min(meaningful_lmp.values())
 
-    lines_result = []
-    for line in LINES:
-        name = line["name"]
+    # Lines: report the most-loaded first — 1,807 lines is far too many to send,
+    # and the congested ones are the only interesting ones.
+    lines_all = []
+    for line_id in n.lines.index:
         try:
-            flow = float(n.lines_t.p0[name].iloc[0])
+            flow = float(n.lines_t.p0[line_id].iloc[0])
         except Exception:
             flow = 0.0
-        cap = float(line["s_nom"])
+        cap = float(n.lines.at[line_id, "s_nom"])
         loading_pct = abs(flow) / cap * 100 if cap > 0 else 0.0
-        lines_result.append({
-            "name": name,
-            "bus0": line["bus0"],
-            "bus1": line["bus1"],
+        b0 = str(n.lines.at[line_id, "bus0"])
+        b1 = str(n.lines.at[line_id, "bus1"])
+        lines_all.append({
+            "name": line_id,
+            "bus0": b0,
+            "bus1": b1,
+            "hub0": hub_of.get(b0, "SOUTH"),
+            "hub1": hub_of.get(b1, "SOUTH"),
             "flow_mw": round(flow, 1),
             "capacity_mw": cap,
             "loading_pct": round(loading_pct, 1),
             "is_congested": loading_pct >= 95.0,
         })
+    lines_all.sort(key=lambda r: r["loading_pct"], reverse=True)
+    lines_result = lines_all[:60]
+    congested_count = sum(1 for r in lines_all if r["is_congested"])
+
+    # Roll per-bus curtailment into the 5 hub buckets the frontend charts.
+    hub_curt: dict[str, float] = {}
+    hub_avail: dict[str, float] = {}
+    hub_lmp_w: dict[str, float] = {}
+    for r in curtailment_results:
+        h = r["hub"]
+        hub_curt[h] = hub_curt.get(h, 0.0) + r["curtailed_mw"]
+        hub_avail[h] = hub_avail.get(h, 0.0) + r["available_mw"]
+        hub_lmp_w[h] = hub_lmp_w.get(h, 0.0) + r["available_mw"] * r["lmp"]
 
     zone_summary = []
-    for bus_id in BUSES:
-        zone_gens = [r for r in curtailment_results if r["bus"] == bus_id]
-        zone_curtailed = sum(r["curtailed_mw"] for r in zone_gens)
-        zone_avail = sum(r["available_mw"] for r in zone_gens)
+    for hub in sorted(hub_avail.keys()):
+        avail = hub_avail[hub]
+        avg_hub_lmp = hub_lmp_w[hub] / max(avail, 1.0)
         zone_summary.append({
-            "zone": bus_id,
-            "hub": HUB_MAP[bus_id],
-            "lmp": lmp.get(bus_id, 0.0),
-            "curtailed_mw": round(zone_curtailed, 1),
-            "available_mw": round(zone_avail, 1),
-            "curtail_pct": round(zone_curtailed / max(zone_avail, 1) * 100, 1),
+            "zone": hub,
+            "hub": f"HB_{hub}",
+            "lmp": round(avg_hub_lmp, 2),
+            "curtailed_mw": round(hub_curt.get(hub, 0.0), 1),
+            "available_mw": round(avail, 1),
+            "curtail_pct": round(hub_curt.get(hub, 0.0) / max(avail, 1) * 100, 1),
         })
+        # Backward-compat: the legacy page reads lmp[<HUB LABEL>].
+        lmp[hub] = round(avg_hub_lmp, 2)
 
     return {
         "status": "optimal",
+        "model_version": f"tier{tier}_{'db' if tier == 2 else 'eia860'}",
+        "tier": tier,
+        "bus_count": len(n.buses.index),
+        "line_count": len(n.lines.index),
         "system_load_mw": system_load_mw,
-        "wind_cf": round(min(adj_wind, 0.95), 3),
+        "wind_cf": round(eff_wind, 3),
         "solar_cf": solar_cf,
         "total_curtailed_mw": round(total_curtailed, 1),
         "curtail_pct": round(total_curtailed / max(total_avail, 1) * 100, 1),
@@ -157,11 +203,13 @@ def run_curtailment(
         "neg_price_buses": neg_price_buses,
         "neg_price_count": len(neg_price_buses),
         "min_lmp": round(min_lmp, 2),
-        "avg_lmp": round(sum(lmp.values()) / len(lmp), 2),
+        # Load-weighted over loaded buses only (hub-label aliases excluded).
+        "avg_lmp": round(sum(meaningful_lmp.values()) / max(len(meaningful_lmp), 1), 2),
         "lmp": lmp,
         "curtailment": curtailment_results,
         "zone_summary": zone_summary,
         "lines": lines_result,
+        "congested_lines": congested_count,
     }
 
 
@@ -550,41 +598,64 @@ def run_battery(
     rt_prices = [float(np.mean(hourly[h]["rt"])) for h in hours_sorted]
     n_hours   = len(hours_sorted)
 
-    # ── Phase 1: 24 Tier-1 OPFs → zone LMPs + curtailment ────────────────────
-    base_load      = _SEASONAL_BASE.get(month, 50_000)
-    zone_lmps:     list[float] = []
+    # ── Phase 1: REAL hourly zone prices + REAL SCED curtailment ─────────────
+    # Previously this ran 24 single-snapshot Tier-1 OPFs to *model* a zone LMP.
+    # Battery Revenue is a historical backtest ("what would this battery have
+    # earned in June 2025?"), so per TECHNICAL_NOTES §5a it must use actual
+    # settled prices, not modelled ones. Two real sources replace the model:
+    #   • zone price  ← ercot_node_prices RT at the storage zone's load zone
+    #                   (RT embeds the congestion + curtailment signal the
+    #                    modelled LMP was only approximating; negative RT hours
+    #                    ARE curtailment events)
+    #   • curtailment ← ercot_hourly_dispatch (HSL − actual output) for wind and
+    #                   solar resources in that zone, from SCED 60-day disclosure
+    # Also ~100× faster: two indexed queries instead of 24 LP solves.
+    _HUB_TO_LZ: dict[str, tuple[str, ...]] = {
+        "HOUSTON": ("LZ_HOUSTON",),
+        "NORTH":   ("LZ_NORTH",),
+        "WEST":    ("LZ_WEST",),
+        "PAN":     ("LZ_WEST",),   # Panhandle settles into the West load zone
+        "SOUTH":   ("LZ_SOUTH", "LZ_AEN", "LZ_CPS", "LZ_LCRA"),
+    }
+    zone_nodes = _HUB_TO_LZ.get(str(storage_bus).upper(), ("LZ_WEST",))
+
+    zone_rows = fetch_all(
+        """SELECT EXTRACT(hour FROM hour)::int + 1 AS he,
+                  AVG(rt_price) AS rt, AVG(da_price) AS da
+             FROM ercot_node_prices
+            WHERE node_name = ANY(%s)
+              AND EXTRACT(year  FROM hour) = %s
+              AND EXTRACT(month FROM hour) = %s
+            GROUP BY 1 ORDER BY 1""",
+        (list(zone_nodes), year, month),
+    )
+    zone_by_he = {int(r["he"]): float(r["rt"] or 0.0) for r in zone_rows}
+
+    # Real curtailment: SUM(HSL − output) over wind+solar in the zone, by hour.
+    curt_rows = fetch_all(
+        """SELECT EXTRACT(hour FROM d.hour AT TIME ZONE 'America/Chicago')::int + 1 AS he,
+                  AVG(GREATEST(d.hsl - d.avg_mw, 0)) * COUNT(DISTINCT d.resource_name) AS curt
+             FROM ercot_hourly_dispatch d
+             JOIN ercot_node_locations nl ON nl.node_name = d.resource_name
+            WHERE nl.load_zone = ANY(%s)
+              AND d.resource_type IN ('wind','solar')
+              AND EXTRACT(year  FROM d.hour AT TIME ZONE 'America/Chicago') = %s
+              AND EXTRACT(month FROM d.hour AT TIME ZONE 'America/Chicago') = %s
+            GROUP BY 1 ORDER BY 1""",
+        (list(zone_nodes), year, month),
+    )
+    curt_by_he = {int(r["he"]): float(r["curt"] or 0.0) for r in curt_rows}
+
+    zone_lmps: list[float] = []
     curtailment_mw: list[float] = []
+    for i, h in enumerate(hours_sorted):
+        # Fall back to the hub DA price only if that hour has no zone data.
+        zone_lmps.append(zone_by_he.get(int(h), da_prices[i]))
+        curtailment_mw.append(round(curt_by_he.get(int(h), 0.0), 1))
 
-    for h in hours_sorted:
-        idx        = h % 24
-        load_mw    = base_load * _LOAD_DIURNAL[idx]
-        solar_cf_h = solar_cf  * _SOLAR_DIURNAL[idx]
-        try:
-            net = _build_tier1(load_mw, wind_cf, solar_cf_h, gas_price_mmbtu)
-            net.optimize(solver_name="highs")
-            if net.objective is None or net.buses_t.marginal_price.empty:
-                raise ValueError("infeasible")
-            bus_lmp = float(net.buses_t.marginal_price[storage_bus].iloc[0])
-            curt = 0.0
-            for gen_name, row in net.generators.iterrows():
-                carrier = row.get("carrier", "")
-                if carrier not in ("wind", "solar"):
-                    continue
-                avail = float(row["p_nom"]) * (wind_cf if carrier == "wind" else solar_cf_h)
-                try:
-                    disp = float(net.generators_t.p[gen_name].iloc[0])
-                except Exception:
-                    disp = avail
-                curt += max(0.0, avail - disp)
-        except Exception:
-            bus_lmp = da_prices[hours_sorted.index(h)]
-            curt    = 0.0
-
-        zone_lmps.append(bus_lmp)
-        curtailment_mw.append(round(curt, 1))
-
-    # Blended price signal: zone LMP brings curtailment/congestion signal,
-    # DA price anchors to actual market outturn
+    # Blended signal: real zone RT brings the local congestion/curtailment
+    # signal, real hub DA anchors to market outturn. Revenue below is always
+    # settled at DA so the $/day stays comparable to merchant proformas.
     effective_prices = [
         round(0.5 * da_prices[i] + 0.5 * zone_lmps[i], 4)
         for i in range(n_hours)
