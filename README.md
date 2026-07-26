@@ -1,4 +1,4 @@
-# Grid Origination Intelligence Platform
+# Grid Intelligence Platform
 
 [![AESO Live Demo](https://img.shields.io/badge/AESO%20Live%20Demo-origination--intelligence--platform.replit.app%2Faeso-14b8a6?style=for-the-badge&logo=replit&logoColor=white)](https://origination-intelligence-platform.replit.app/aeso/)
 [![Full Platform](https://img.shields.io/badge/Full%20Platform-origination--intelligence--platform.replit.app-8b5cf6?style=for-the-badge&logo=replit&logoColor=white)](https://origination-intelligence-platform.replit.app)
