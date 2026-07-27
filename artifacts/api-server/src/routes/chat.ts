@@ -8,6 +8,14 @@ const router = Router();
 
 const TABLE_DISPLAY_LIMIT = 100;
 
+// Chat model is env-configurable so the provider can be swapped without a code
+// change. The client reads AI_INTEGRATIONS_OPENAI_BASE_URL / _API_KEY, so any
+// OpenAI-compatible endpoint works — e.g. NVIDIA NIM at
+// https://integrate.api.nvidia.com/v1 with a matching model id.
+// NOTE: tool-calling is required by this route; verify the chosen model
+// supports function calling before switching.
+const CHAT_MODEL = process.env.CHAT_MODEL ?? "gpt-5.4";
+
 function isTimeSeries(columns: string[]): boolean {
   return columns.includes("year") && columns.includes("month");
 }
@@ -348,7 +356,7 @@ Supported routes (use exact format [Label](/path?params)):
 
     while (toolRounds < MAX_TOOL_ROUNDS) {
       const response = await openai.chat.completions.create({
-        model: "gpt-5.4",
+        model: CHAT_MODEL,
         max_completion_tokens: 8192,
         messages: apiMessages,
         tools,
@@ -447,7 +455,7 @@ Supported routes (use exact format [Label](/path?params)):
     }
 
     const stream = await openai.chat.completions.create({
-      model: "gpt-5.4",
+      model: CHAT_MODEL,
       max_completion_tokens: 8192,
       messages: apiMessages,
       stream: true,
@@ -789,7 +797,7 @@ ${msaDocLines ? `━━━ MSA RECENT DOCUMENTS (live from albertamsa.ca, cached
 
     while (toolRounds < MAX_TOOL_ROUNDS) {
       const response = await openai.chat.completions.create({
-        model: "gpt-5.4",
+        model: CHAT_MODEL,
         max_completion_tokens: 8192,
         messages: apiMessages,
         tools,
@@ -829,7 +837,7 @@ ${msaDocLines ? `━━━ MSA RECENT DOCUMENTS (live from albertamsa.ca, cached
     }
 
     const stream = await openai.chat.completions.create({
-      model: "gpt-5.4",
+      model: CHAT_MODEL,
       max_completion_tokens: 8192,
       messages: apiMessages,
       stream: true,
