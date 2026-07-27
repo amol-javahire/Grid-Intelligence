@@ -34,23 +34,62 @@ const TOOLTIP_STYLE = {
 //          Growth ~13–18% CAGR near-term, decelerating. Load: 1.40 kW avg per vehicle.
 //   Zone splits: Texas regional DMV shares; CAISO from CEC/CPUC ZEV distribution data.
 
-const ERCOT_ANNUAL: { year: number; totalMw: number; evCount: number }[] = [
-  { year: 2024, totalMw: 575,  evCount: 380_000 },  // ~380K (TxDMV backcast from end-2025)
-  { year: 2025, totalMw: 690,  evCount: 457_000 },  // 456,667 confirmed (TxDMV)
-  { year: 2026, totalMw: 800,  evCount: 530_000 },  // +73K/yr at ~1,500/wk pace
-  { year: 2027, totalMw: 930,  evCount: 615_000 },
-  { year: 2028, totalMw: 1080, evCount: 715_000 },
-  { year: 2029, totalMw: 1250, evCount: 830_000 },  // ~16% CAGR vs prior model's 41%
-];
+// ── Measured anchors vs projected years ──────────────────────────────────────
+// Only the ANCHOR years below are observed registration data. Everything after
+// is projected from the user-adjustable CAGR and kW/vehicle sliders, so the
+// forecast assumptions are explicit and auditable rather than baked into a
+// hardcoded array. `isActual` drives the "measured vs projected" UI treatment.
 
-const CAISO_ANNUAL: { year: number; totalMw: number; evCount: number }[] = [
-  { year: 2024, totalMw: 2660, evCount: 1_900_000 }, // 1.9M ZEVs on-road (AFDC/Experian)
-  { year: 2025, totalMw: 3150, evCount: 2_250_000 }, // +18% growth (CEC IEPR trajectory)
-  { year: 2026, totalMw: 3575, evCount: 2_550_000 }, // decelerating vs prior high-growth model
-  { year: 2027, totalMw: 4000, evCount: 2_860_000 },
-  { year: 2028, totalMw: 4480, evCount: 3_200_000 },
-  { year: 2029, totalMw: 4975, evCount: 3_555_000 }, // ~13% CAGR vs prior model's 31%
-];
+type EvYear = { year: number; totalMw: number; evCount: number; isActual: boolean };
+
+// Observed fleet counts — the only non-assumption numbers on this page.
+const ANCHORS = {
+  ERCOT: [
+    { year: 2024, evCount: 380_000 },   // TxDMV backcast from end-2025 registrations
+    { year: 2025, evCount: 457_000 },   // 456,667 confirmed on-road (TxDMV)
+  ],
+  CAISO: [
+    { year: 2024, evCount: 1_900_000 }, // ZEVs on-road incl. PHEV (DOE AFDC / Experian)
+    { year: 2025, evCount: 2_250_000 }, // CEC 2025 IEPR trajectory
+  ],
+} as const;
+
+// Defaults reflect the cited sources; both are slider-adjustable at runtime.
+const DEFAULTS = {
+  ERCOT: { cagrPct: 16, kwPerVehicle: 1.51 },  // ERCOT LTLF L1/L2/DCFC blend
+  CAISO: { cagrPct: 13, kwPerVehicle: 1.40 },  // CEC IEPR, decelerating growth
+} as const;
+
+const PROJECTION_END_YEAR = 2029;
+
+/** Build the annual series: measured anchors held fixed, later years compounded
+ *  at the chosen CAGR. Load MW = fleet × kW/vehicle ÷ 1,000. */
+function buildProjection(
+  market: "ERCOT" | "CAISO",
+  cagrPct: number,
+  kwPerVehicle: number,
+): EvYear[] {
+  const anchors = ANCHORS[market];
+  const out: EvYear[] = anchors.map(a => ({
+    year: a.year,
+    evCount: a.evCount,
+    totalMw: Math.round((a.evCount * kwPerVehicle) / 1000),
+    isActual: true,
+  }));
+
+  const last = out[out.length - 1];
+  let count = last.evCount;
+  for (let y = last.year + 1; y <= PROJECTION_END_YEAR; y++) {
+    count = count * (1 + cagrPct / 100);
+    out.push({
+      year: y,
+      evCount: Math.round(count),
+      totalMw: Math.round((count * kwPerVehicle) / 1000),
+      isActual: false,
+    });
+  }
+  return out;
+}
 
 // Zone breakdown (share of total fleet by region)
 // ERCOT: Texas DMV regional shares (DFW=36-37%, Houston=25%, Austin/SA=20%; TxDMV 2025)
@@ -134,13 +173,29 @@ function KpiCard({
 export default function EvChargingPage() {
   const [market, setMarket] = useState<"ERCOT" | "CAISO">("ERCOT");
 
-  const annual = market === "ERCOT" ? ERCOT_ANNUAL : CAISO_ANNUAL;
+  // Forecast assumptions — user-adjustable, seeded from the cited sources.
+  const [cagrPct, setCagrPct]   = useState<number>(DEFAULTS.ERCOT.cagrPct);
+  const [kwPerVeh, setKwPerVeh] = useState<number>(DEFAULTS.ERCOT.kwPerVehicle);
+
+  // Reset assumptions to that market's sourced defaults when switching market.
+  const switchMarket = (m: "ERCOT" | "CAISO") => {
+    setMarket(m);
+    setCagrPct(DEFAULTS[m].cagrPct);
+    setKwPerVeh(DEFAULTS[m].kwPerVehicle);
+  };
+
+  const annual = useMemo(
+    () => buildProjection(market, cagrPct, kwPerVeh),
+    [market, cagrPct, kwPerVeh],
+  );
   const zones  = market === "ERCOT" ? ERCOT_ZONES  : CAISO_ZONES;
 
   // Current and future values for KPIs
-  const current = annual.find(r => r.year === 2026)!;
+  const current = annual.find(r => r.year === 2026) ?? annual[annual.length - 1];
   const future  = annual[annual.length - 1];
-  const cagr    = (Math.pow(future.totalMw / annual[0].totalMw, 1 / (future.year - annual[0].year)) - 1) * 100;
+  const cagr    = cagrPct;
+  const isDefault = cagrPct === DEFAULTS[market].cagrPct
+                 && kwPerVeh === DEFAULTS[market].kwPerVehicle;
 
   // Zone breakdown chart data for current year
   const zoneBarData = useMemo(() =>
@@ -212,7 +267,7 @@ export default function EvChargingPage() {
           {(["ERCOT", "CAISO"] as const).map(m => (
             <button
               key={m}
-              onClick={() => setMarket(m)}
+              onClick={() => switchMarket(m)}
               className={`px-6 py-1.5 rounded-md text-sm font-medium transition-colors ${
                 market === m ? "bg-teal-500 text-white" : "text-slate-400 hover:text-slate-200"
               }`}
@@ -222,6 +277,74 @@ export default function EvChargingPage() {
           ))}
         </div>
       </div>
+
+      {/* Forecast assumptions — everything past 2025 is driven by these */}
+      <Card className="bg-slate-800/50 border-slate-700/50">
+        <CardContent className="pt-5 pb-4">
+          <div className="flex items-start justify-between mb-4 gap-4">
+            <div>
+              <div className="text-sm font-semibold text-slate-100">Forecast assumptions</div>
+              <p className="text-xs text-slate-400 mt-0.5">
+                2024–2025 fleet counts are observed registrations. 2026–2029 is projected from these inputs.
+              </p>
+            </div>
+            {!isDefault && (
+              <button
+                onClick={() => { setCagrPct(DEFAULTS[market].cagrPct); setKwPerVeh(DEFAULTS[market].kwPerVehicle); }}
+                className="shrink-0 px-3 py-1 rounded-md text-xs font-medium bg-slate-700/60 text-slate-300 hover:text-white transition-colors"
+              >
+                Reset to sourced defaults
+              </button>
+            )}
+          </div>
+
+          <div className="grid md:grid-cols-2 gap-6">
+            <div>
+              <div className="flex items-baseline justify-between text-sm mb-2">
+                <span className="text-slate-300">Fleet growth (CAGR)</span>
+                <span className="font-bold text-teal-400">{cagrPct.toFixed(0)}%</span>
+              </div>
+              <Slider
+                value={[cagrPct]}
+                onValueChange={(v) => setCagrPct(v[0])}
+                min={0} max={40} step={1}
+              />
+              <p className="text-[11px] text-slate-500 mt-1.5">
+                Source default {DEFAULTS[market].cagrPct}% —{" "}
+                {market === "ERCOT" ? "TxDMV registration trend" : "CEC 2025 IEPR, decelerating"}
+              </p>
+            </div>
+
+            <div>
+              <div className="flex items-baseline justify-between text-sm mb-2">
+                <span className="text-slate-300">Average load per vehicle</span>
+                <span className="font-bold text-teal-400">{kwPerVeh.toFixed(2)} kW</span>
+              </div>
+              <Slider
+                value={[kwPerVeh]}
+                onValueChange={(v) => setKwPerVeh(v[0])}
+                min={0.5} max={3} step={0.01}
+              />
+              <p className="text-[11px] text-slate-500 mt-1.5">
+                Source default {DEFAULTS[market].kwPerVehicle} kW — L1/L2/DCFC blend
+                {market === "ERCOT" ? " (ERCOT LTLF methodology)" : " (CEC charging profile)"}
+              </p>
+            </div>
+          </div>
+
+          <div className="mt-4 pt-3 border-t border-slate-700/50 text-xs text-slate-400">
+            {PROJECTION_END_YEAR} fleet{" "}
+            <span className="font-semibold text-slate-200">
+              {future.evCount >= 1_000_000
+                ? `${(future.evCount / 1_000_000).toFixed(2)}M`
+                : `${(future.evCount / 1000).toFixed(0)}k`}
+            </span>{" "}
+            vehicles →{" "}
+            <span className="font-semibold text-teal-400">{future.totalMw.toLocaleString()} MW</span>{" "}
+            of charging load at the selected assumptions.
+          </div>
+        </CardContent>
+      </Card>
 
       {/* KPI row */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
