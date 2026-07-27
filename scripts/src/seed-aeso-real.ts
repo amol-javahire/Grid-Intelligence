@@ -1090,7 +1090,9 @@ async function seedUnitCommitment(): Promise<void> {
 async function main(): Promise<void> {
   console.log("🍁 AESO Real Data Seeder");
   console.log("   Base URL:", BASE);
-  console.log("   API key:", API_KEY.slice(0, 8) + "...");
+  // Never log any portion of the key — a prefix still narrows a brute-force
+  // search and can leak into shared CI/PM2 logs. Confirm presence only.
+  console.log("   API key:", API_KEY ? "configured" : "MISSING");
   console.log("   Date range: Jan 2024 → today");
   console.log("");
 
