@@ -76,29 +76,51 @@ def fetch() -> str:
 
 
 def parse(text: str):
-    """Return (summary {fuel: mc}, blocks [ {fuel|None, assets [(id,name,mc)]} ])."""
+    """Return (summary {fuel: mc}, blocks [ {fuel|None, assets [(id,name,mc)]} ]).
+
+    Two hazards this has to survive, both found the hard way (2026-07-27):
+
+    1. BLANK LINES ARE THE ONLY SECTION BOUNDARY for the unlabelled fuels.
+       Hydro / Energy Storage / Solar / Wind / Other carry no header at all, so
+       skipping blank rows merges all five into whichever labelled section came
+       last (Gas Fired Steam). Blank rows are therefore delimiters, not noise.
+
+    2. THE SUMMARY BLOCK CONTAINS PARENTHESISED ABBREVIATIONS.
+       "Alberta Internal Load (AIL)" and "Dispatched Contingency Reserve (DCR)"
+       match the asset-name pattern exactly, so the preamble parses as two
+       enormous generators (~12.5 GW combined). Asset collection must not begin
+       until the first real section header.
+    """
     rows = list(csv.reader(io.StringIO(text)))
     summary, blocks = {}, []
     cur = None
+    in_assets = False        # guard 2: nothing before the first section header counts
+
+    def close():
+        nonlocal cur
+        if cur and cur["assets"]:
+            blocks.append(cur)
+        cur = None
 
     for row in rows:
         cells = [c.strip() for c in row]
+
+        # guard 1: blank row ends the current section
         if not any(cells):
+            close()
             continue
 
-        # Section header, when present.
         m = HEADER_RE.search(cells[0]) if cells else None
         if m:
-            if cur and cur["assets"]:
-                blocks.append(cur)
+            close()
+            in_assets = True
             cur = {"fuel": m.group(1).strip().upper(), "assets": []}
             continue
 
-        # Column header line starts a block that may have had no name header.
+        # Column header. Starts an unlabelled section when no name header preceded it.
         if len(cells) >= 4 and cells[0].upper() == "ASSET" and cells[1].upper() == "MC":
-            if cur is None or cur["assets"]:
-                if cur and cur["assets"]:
-                    blocks.append(cur)
+            in_assets = True
+            if cur is None:
                 cur = {"fuel": None, "assets": []}
             continue
 
@@ -107,17 +129,20 @@ def parse(text: str):
 
         label, val = cells[0], cells[1]
 
-        # Summary fuel totals: "WIND","5684","2662","0"
-        if label.upper() in SUMMARY_FUELS and len(cells) >= 3 and not ASSET_RE.match(label):
+        # Summary fuel totals: "WIND","5684","2662","0" — these precede in_assets.
+        if label.upper() in SUMMARY_FUELS and len(cells) >= 3:
             try:
                 summary[label.upper()] = float(val)
             except ValueError:
                 pass
             continue
 
+        if not in_assets:
+            continue
+
         # Asset row: "Travers (TVS1)","465","466","0"
         am = ASSET_RE.match(label)
-        if am and len(cells) >= 2:
+        if am:
             try:
                 mc = float(val)
             except ValueError:
@@ -127,8 +152,7 @@ def parse(text: str):
                 cur = {"fuel": None, "assets": []}
             cur["assets"].append((aid, name, mc))
 
-    if cur and cur["assets"]:
-        blocks.append(cur)
+    close()
     return summary, blocks
 
 
@@ -185,6 +209,14 @@ def main():
              f"assets: {sum(len(b['assets']) for b in blocks)}")
     for f, mc in sorted(summary.items(), key=lambda kv: -kv[1]):
         log.info(f"    {f:16s} {mc:8.0f} MW")
+
+    # Print every block before reconciling — when this fails, the block sizes and
+    # MC sums are what identify the cause immediately.
+    for i, b in enumerate(blocks):
+        got = sum(a[2] for a in b["assets"])
+        log.info(f"  block {i}: {b['fuel'] or '(unlabelled)':16s} "
+                 f"{len(b['assets']):3d} assets  {got:7.0f} MW  "
+                 f"first={b['assets'][0][0] if b['assets'] else '-'}")
 
     blocks, problems = resolve(summary, blocks)
 
