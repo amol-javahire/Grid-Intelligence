@@ -17,7 +17,7 @@ Key constraint: SOUTH → CENTRAL Southern Export Corridor (2,800 MW limit)
 Interties: BC import (1,200 MW max) and SK (150 MW) wired at CENTRAL.
 
 Alberta runs a single pool price today; this model is a planning/research
-tool for AESO's planned Renewable Electricity Market (REM) with nodal LMP
+tool for AESO's planned Restructured Energy Market (REM) with nodal LMP
 (targeted mid-2027). Results show indicative spatial price spreads that
 would form under REM-style dispatch.
 
@@ -378,7 +378,7 @@ def get_topology() -> dict:
         "disclaimer": (
             "Alberta operates a single pool price today. This 3-node model is a "
             "planning/research tool illustrating spatial price formation analogous to "
-            "AESO's planned Renewable Electricity Market (REM, targeted mid-2027). "
+            "AESO's planned Restructured Energy Market (REM, targeted mid-2027). "
             "Node boundaries are academic aggregations, not official AESO designations."
         ),
         "buses": [

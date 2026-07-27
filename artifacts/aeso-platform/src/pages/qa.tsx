@@ -164,7 +164,7 @@ export default function AesoQACopilot() {
     {
       role: "assistant",
       content:
-        "I'm the AESO Market Copilot, with full awareness of every tab on this platform.\n\n**Live market data:** Pool prices, generation mix, SMP congestion spreads, supply & demand, operating reserves, interchange flows, and the interconnection queue.\n\n**Regulatory & policy:** REM (Renewable Electricity Market) auctions and CFD mechanics, AUC rules and rate-setting process, MSA market surveillance reports and live document listings.\n\nAsk me anything about Alberta's power market — from the latest pool price trends to how a REM contract works.",
+        "I'm the AESO Market Copilot, with full awareness of every tab on this platform.\n\n**Live market data:** Pool prices, generation mix, SMP congestion spreads, supply & demand, operating reserves, interchange flows, and the interconnection queue.\n\n**Regulatory & policy:** REM (Restructured Energy Market) design and rules, AUC rules and rate-setting process, MSA market surveillance reports and live document listings.\n\nAsk me anything about Alberta's power market — from the latest pool price trends to how a REM contract works.",
     },
   ]);
   const [input, setInput] = useState("");
