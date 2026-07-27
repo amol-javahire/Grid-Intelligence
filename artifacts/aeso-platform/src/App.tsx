@@ -17,6 +17,8 @@ import LTA from "@/pages/lta";
 import REM from "@/pages/rem";
 import AUC from "@/pages/auc";
 import MSA from "@/pages/msa";
+import AesoRankings from "@/pages/rankings";
+import NpvCalculator from "@/pages/npv";
 import Guide from "@/pages/guide";
 import NotFound from "@/pages/not-found";
 
@@ -38,6 +40,8 @@ function Router() {
         <Route path="/rem" component={REM} />
         <Route path="/auc" component={AUC} />
         <Route path="/msa" component={MSA} />
+        <Route path="/rankings" component={AesoRankings} />
+        <Route path="/npv" component={NpvCalculator} />
         <Route path="/qa" component={AesoQACopilot} />
         <Route path="/guide" component={Guide} />
         <Route component={NotFound} />

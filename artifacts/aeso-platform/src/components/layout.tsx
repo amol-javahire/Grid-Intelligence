@@ -13,8 +13,7 @@ import {
   TrendingUp,
   Workflow,
   Eye,
-  BookOpen,
-} from "lucide-react";
+  BookOpen, Calculator } from "lucide-react";
 
 const navItems = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
@@ -25,6 +24,8 @@ const navItems = [
   { href: "/7day-capacity", label: "7-Day Capacity", icon: CalendarDays },
   { href: "/queue", label: "Queue", icon: ListOrdered },
   { href: "/congestion", label: "Congestion", icon: Route },
+  { href: "/rankings", label: "Asset Rankings", icon: ListOrdered },
+  { href: "/npv", label: "Project NPV", icon: Calculator },
   { href: "/lta", label: "LTA Metrics", icon: TrendingUp },
   { href: "/rem", label: "REM", icon: Workflow },
   { href: "/auc", label: "AUC", icon: Scale },
