@@ -47,9 +47,14 @@ MODE  = argv[0] if len(argv) > 0 else "both"
 START = datetime.date.fromisoformat(argv[1]) if len(argv) > 1 else datetime.date(2025, 1, 1)
 END   = datetime.date.fromisoformat(argv[2]) if len(argv) > 2 else datetime.date.today() - datetime.timedelta(days=1)
 
-RT_QUERY  = flags.get("--rt-query", "PRC_HASP_LMP")
-RT_MARKET = flags.get("--rt-market", "HASP")
-RT_VERSION = flags.get("--rt-version", "1")
+# Probe finding (2026-07-27): OASIS silently caps ALL_APNODES real-time queries
+# at ONE HOUR per request — asking for 24h returns only the first hour. HASP and
+# RTM both do this, so they cost the same 24 requests/day; RTM wins on
+# granularity (5-min vs 15-min) and is the actual RT settlement price.
+# NOTE: RTM names its price column VALUE, while DAM/HASP use MW.
+RT_QUERY   = flags.get("--rt-query", "PRC_INTVL_LMP")
+RT_MARKET  = flags.get("--rt-market", "RTM")
+RT_VERSION = flags.get("--rt-version", "3")
 
 _last = {"t": 0.0}
 
@@ -60,15 +65,26 @@ def throttle():
     _last["t"] = time.time()
 
 
+def _dst(dd: datetime.date) -> bool:
+    """US DST window: 2nd Sunday of March → 1st Sunday of November."""
+    mar = datetime.date(dd.year, 3, 8)
+    start = mar + datetime.timedelta(days=(6 - mar.weekday()) % 7)
+    nov = datetime.date(dd.year, 11, 1)
+    end = nov + datetime.timedelta(days=(6 - nov.weekday()) % 7)
+    return start <= dd < end
+
+
+def gmt_hour_window(d: datetime.date, local_hour: int) -> tuple[str, str]:
+    """One Pacific hour expressed as a GMT window. Required for RT: OASIS caps
+    ALL_APNODES real-time queries at 1 hour per request (confirmed by probe)."""
+    off = 7 if _dst(d) else 8
+    start = datetime.datetime(d.year, d.month, d.day) + datetime.timedelta(hours=local_hour + off)
+    end = start + datetime.timedelta(hours=1)
+    return start.strftime("%Y%m%dT%H:00-0000"), end.strftime("%Y%m%dT%H:00-0000")
+
+
 def gmt_window(d: datetime.date) -> tuple[str, str]:
-    """CAISO wants GMT. Pacific midnight is 08:00Z in PST, 07:00Z in PDT.
-    US DST 2025+: second Sunday of March → first Sunday of November."""
-    def _dst(dd: datetime.date) -> bool:
-        mar = datetime.date(dd.year, 3, 8)
-        start = mar + datetime.timedelta(days=(6 - mar.weekday()) % 7)      # 2nd Sun Mar
-        nov = datetime.date(dd.year, 11, 1)
-        end = nov + datetime.timedelta(days=(6 - nov.weekday()) % 7)        # 1st Sun Nov
-        return start <= dd < end
+    """Full Pacific day as a GMT window. Pacific midnight is 08:00Z (PST) / 07:00Z (PDT)."""
     off_s = 7 if _dst(d) else 8
     nxt = d + datetime.timedelta(days=1)
     off_e = 7 if _dst(nxt) else 8
@@ -220,24 +236,50 @@ def upsert(conn, df: pl.DataFrame, col: str) -> int:
 
 # ── per-day seeding ──────────────────────────────────────────────────────────
 def seed_day(conn, d: datetime.date, ptype: str) -> int:
-    s, e = gmt_window(d)
+    col = "da_price" if ptype == "DA" else "rt_price"
+
     if ptype == "DA":
-        params = {"queryname": "PRC_LMP", "market_run_id": "DAM", "version": "1",
-                  "startdatetime": s, "enddatetime": e,
-                  "grp_type": "ALL_APNODES", "resultformat": "6"}
-        col = "da_price"
+        # Day-ahead returns the whole day in a single request.
+        s, e = gmt_window(d)
+        csv_text = fetch_csv({
+            "queryname": "PRC_LMP", "market_run_id": "DAM", "version": "1",
+            "startdatetime": s, "enddatetime": e,
+            "grp_type": "ALL_APNODES", "resultformat": "6",
+        }, f"DA {d}")
+        if not csv_text:
+            log_date(conn, d, ptype, -1)
+            return -1
+        df = parse_lmp(csv_text, col)
     else:
-        params = {"queryname": RT_QUERY, "market_run_id": RT_MARKET, "version": RT_VERSION,
-                  "startdatetime": s, "enddatetime": e,
-                  "grp_type": "ALL_APNODES", "resultformat": "6"}
-        col = "rt_price"
+        # Real-time is capped at one hour per ALL_APNODES request, so walk the
+        # 24 Pacific hours and concatenate. A few missing hours are tolerated;
+        # a whole failed day is logged as an error and retried on the next run.
+        frames, missed = [], 0
+        for h in range(24):
+            s, e = gmt_hour_window(d, h)
+            csv_text = fetch_csv({
+                "queryname": RT_QUERY, "market_run_id": RT_MARKET, "version": RT_VERSION,
+                "startdatetime": s, "enddatetime": e,
+                "grp_type": "ALL_APNODES", "resultformat": "6",
+            }, f"RT {d} h{h:02d}")
+            if not csv_text:
+                missed += 1
+                continue
+            part = parse_lmp(csv_text, col)
+            if part is not None and part.height:
+                frames.append(part)
+        if not frames:
+            log.warning(f"  RT {d}: all 24 hours failed")
+            log_date(conn, d, ptype, -1)
+            return -1
+        if missed:
+            log.info(f"  RT {d}: {missed}/24 hours missing")
+        # Re-aggregate: each hourly pull already grouped, but concatenating
+        # separate windows can yield duplicate (node, hour) keys at boundaries.
+        df = (pl.concat(frames)
+                .group_by(["node_name", "hour"])
+                .agg(pl.col(col).mean()))
 
-    csv_text = fetch_csv(params, f"{ptype} {d}")
-    if not csv_text:
-        log_date(conn, d, ptype, -1)
-        return -1
-
-    df = parse_lmp(csv_text, col)
     if df is None or df.height == 0:
         log.warning(f"  {ptype} {d}: parsed 0 rows")
         log_date(conn, d, ptype, 0)
