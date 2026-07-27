@@ -16,6 +16,26 @@ const TABLE_DISPLAY_LIMIT = 100;
 // supports function calling before switching.
 const CHAT_MODEL = process.env.CHAT_MODEL ?? "gpt-5.4";
 
+// Sampling params, env-tunable so a provider swap needs no code change.
+//
+// Token-limit parameter name differs by provider: OpenAI's newer models want
+// `max_completion_tokens`, while NVIDIA NIM / Llama and most OpenAI-compatible
+// gateways want `max_tokens`. Sending the wrong one is either rejected or
+// silently ignored, so it is selected explicitly via CHAT_TOKEN_PARAM.
+const CHAT_MAX_TOKENS  = Number(process.env.CHAT_MAX_TOKENS ?? 8192);
+const CHAT_TEMPERATURE = process.env.CHAT_TEMPERATURE !== undefined
+  ? Number(process.env.CHAT_TEMPERATURE) : undefined;
+const CHAT_TOP_P = process.env.CHAT_TOP_P !== undefined
+  ? Number(process.env.CHAT_TOP_P) : undefined;
+// "max_tokens" (default — NVIDIA NIM, Llama, most gateways) | "max_completion_tokens" (OpenAI)
+const CHAT_TOKEN_PARAM = process.env.CHAT_TOKEN_PARAM ?? "max_tokens";
+
+const SAMPLING: Record<string, unknown> = {
+  [CHAT_TOKEN_PARAM]: CHAT_MAX_TOKENS,
+  ...(CHAT_TEMPERATURE !== undefined ? { temperature: CHAT_TEMPERATURE } : {}),
+  ...(CHAT_TOP_P !== undefined ? { top_p: CHAT_TOP_P } : {}),
+};
+
 function isTimeSeries(columns: string[]): boolean {
   return columns.includes("year") && columns.includes("month");
 }
@@ -357,7 +377,7 @@ Supported routes (use exact format [Label](/path?params)):
     while (toolRounds < MAX_TOOL_ROUNDS) {
       const response = await openai.chat.completions.create({
         model: CHAT_MODEL,
-        max_completion_tokens: 8192,
+        ...SAMPLING,
         messages: apiMessages,
         tools,
         tool_choice: "auto",
@@ -456,7 +476,7 @@ Supported routes (use exact format [Label](/path?params)):
 
     const stream = await openai.chat.completions.create({
       model: CHAT_MODEL,
-      max_completion_tokens: 8192,
+      ...SAMPLING,
       messages: apiMessages,
       stream: true,
     });
@@ -798,7 +818,7 @@ ${msaDocLines ? `━━━ MSA RECENT DOCUMENTS (live from albertamsa.ca, cached
     while (toolRounds < MAX_TOOL_ROUNDS) {
       const response = await openai.chat.completions.create({
         model: CHAT_MODEL,
-        max_completion_tokens: 8192,
+        ...SAMPLING,
         messages: apiMessages,
         tools,
         tool_choice: "auto",
@@ -838,7 +858,7 @@ ${msaDocLines ? `━━━ MSA RECENT DOCUMENTS (live from albertamsa.ca, cached
 
     const stream = await openai.chat.completions.create({
       model: CHAT_MODEL,
-      max_completion_tokens: 8192,
+      ...SAMPLING,
       messages: apiMessages,
       stream: true,
     });
