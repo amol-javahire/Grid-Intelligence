@@ -193,6 +193,16 @@ def seed_assets(conn) -> int:
             (r.get("operating_status") or "").strip() or None,
         ))
 
+    # AESO returns duplicate asset_ID entries; Postgres rejects ON CONFLICT DO
+    # UPDATE touching the same key twice in one statement, so dedupe (last wins).
+    before = len(batch)
+    seen = {}
+    for row in batch:
+        seen[row[0]] = row          # row[0] is asset_id
+    batch = list(seen.values())
+    if before != len(batch):
+        log.info(f"  deduped {before - len(batch)} duplicate asset IDs")
+
     if not batch:
         return 0
     with conn.cursor() as c:

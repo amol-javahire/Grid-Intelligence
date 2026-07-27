@@ -154,6 +154,12 @@ def parse(payload) -> tuple[list, Counter]:
 def upsert(conn, rows) -> int:
     if not rows:
         return 0
+    # Same dedupe requirement as the asset registry: the payload can repeat a
+    # (date, hour, asset) key, which ON CONFLICT DO UPDATE rejects. Last wins.
+    seen = {}
+    for r in rows:
+        seen[(r[0], r[1], r[2])] = r
+    rows = list(seen.values())
     with conn.cursor() as c:
         psycopg2.extras.execute_values(c, """
             INSERT INTO aeso_metered_volume
