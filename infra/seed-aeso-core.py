@@ -145,6 +145,18 @@ def seed_pool_price(conn) -> int:
                 continue
             batch.append((d, he, f(r.get("pool_price")), f(r.get("forecast_pool_price"))))
 
+        # DST fall-back: on the November transition day 01:00 MPT occurs TWICE,
+        # so two records map to the same (date, hour_ending). Postgres rejects
+        # ON CONFLICT DO UPDATE hitting one key twice, so collapse first.
+        # Last-wins is fine for screening; the repeated hour is one of 8,760.
+        before = len(batch)
+        seen = {}
+        for row in batch:
+            seen[(row[0], row[1])] = row
+        batch = list(seen.values())
+        if before != len(batch):
+            log.info(f"  collapsed {before - len(batch)} duplicate hour(s) — DST fall-back")
+
         if batch:
             with conn.cursor() as c:
                 psycopg2.extras.execute_values(c, """
