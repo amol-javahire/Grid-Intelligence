@@ -262,6 +262,49 @@ export default function Guide() {
 
       <Card className="border-border">
         <CardHeader className="pb-2">
+          <CardTitle className="text-sm">Data provenance and refresh cadence</CardTitle>
+          <CardDescription className="text-xs">
+            "Live" identifies an available feature, not a guaranteed ingestion schedule. No AESO cron or Replit scheduled job is configured in this repository.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b border-border text-left text-muted-foreground">
+                  <th className="py-2 pr-4 font-medium">Tabs / data</th>
+                  <th className="py-2 pr-4 font-medium">Source and classification</th>
+                  <th className="py-2 font-medium">Actual application refresh</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {[
+                  ["Dashboard / Pool Price", "AESO Public API poolprice-api/v1.1 -> aeso_pool_price (real)", "Manual seed-aeso-real run; no scheduler."],
+                  ["Generation Mix", "aeso_generation_mix from seed-aeso-data (calibrated synthetic)", "Manual synthetic reseed; seed-aeso-real does not populate this table."],
+                  ["Supply & Demand", "Live AESO ETS CSDReportServlet plus stored aeso_supply_demand history", "CSD polls every 5 minutes while open; stored history is not scheduled."],
+                  ["Outages", "AESO ETS daily and monthly outage reports (live scrape)", "Fetched on tab load/revisit after the 5-minute client cache; no background poll."],
+                  ["7-Day Capacity", "AESO ETS SevenDaysHourlyAvailableCapabilityReportServlet (real)", "Polled every 10 minutes while the tab is open."],
+                  ["Queue / Transmission Corridors", "aeso_queue_projects and aeso_transmission_corridors from seed-aeso-data (synthetic)", "Manual reseed; no live AESO queue or corridor sync."],
+                  ["Congestion history", "AESO SMP and interchange APIs -> aeso_smp / aeso_interchange (real); PyPSA result is modelled", "Historical tables update on manual seed-aeso-real; OPF runs on user input if the service is available."],
+                  ["LTA Metrics", "AESO quarterly LTA PDFs parsed on demand (real)", "AESO publishes Feb/May/Aug/Nov; report URLs are maintained manually in code."],
+                  ["AUC", "Curated rules plus auc.ab.ca WordPress RSS (partial feed)", "Fetched on demand; 1-hour client/memory cache and up to 7-day server disk cache."],
+                  ["MSA", "albertamsa.ca document pages scraped by category (real)", "Fetched on demand; 24-hour client cache and up to 7-day server disk cache."],
+                  ["REM", "Curated AESO REM and AESO Engage reference content", "Manual editorial update; last audited July 27, 2026."],
+                  ["Market Copilot", "GPT-4o with SQL tools scoped to aeso_* tables", "Generated on demand; freshness follows the underlying dataset above."],
+                ].map(([label, source, cadence]) => (
+                  <tr key={label} className="align-top">
+                    <td className="py-2.5 pr-4 font-medium text-foreground">{label}</td>
+                    <td className="py-2.5 pr-4 text-muted-foreground">{source}</td>
+                    <td className="py-2.5 text-muted-foreground">{cadence}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </CardContent>
+      </Card>
+      <Card className="border-border">
+        <CardHeader className="pb-2">
           <CardTitle className="text-sm">Data Status</CardTitle>
           <CardDescription className="text-xs">What's real, what's modelled, what's planned</CardDescription>
         </CardHeader>
@@ -270,13 +313,13 @@ export default function Guide() {
             {[
               {
                 label: "Pool Price / Generation / Supply-Demand",
-                status: "real",
-                detail: "~21k hourly rows each, Jan 2024–May 2026. Real from AESO Pool Price, AIES Gen Capacity, and Current Supply/Demand APIs.",
+                status: "partial",
+                detail: "Pool price is real AESO API history. Generation mix and stored supply-demand history currently include calibrated synthetic seed data; the CSD panel is live.",
               },
               {
                 label: "Outages / Queue / 7-Day Capability",
-                status: "real",
-                detail: "Real records from AESO's outage report, connection project list, and forward capability APIs.",
+                status: "partial",
+                detail: "Outage and 7-day panels scrape real AESO ETS reports. Queue records are currently synthetic seed data and do not have a live AESO sync.",
               },
               {
                 label: "LTA Metrics",
@@ -285,8 +328,8 @@ export default function Guide() {
               },
               {
                 label: "3-Zone Alberta OPF",
-                status: "real",
-                detail: "PyPSA DC OPF calibrated to real AESO zone-level generation capacity (South/Central/North). Locational pricing itself is a REM preview model, not live — Alberta has no nodal LMPs yet.",
+                status: "modelled",
+                detail: "Single-snapshot, three-zone academic PyPSA DC OPF. It is a REM scenario illustration, not a validated nodal forecast, SCED replica, or live market result.",
               },
               {
                 label: "REM Timeline",
@@ -295,13 +338,13 @@ export default function Guide() {
               },
               {
                 label: "AUC Rules & Filings",
-                status: "real",
-                detail: "Rule/Act reference list curated from auc.ab.ca. Filings feed is live RSS from the AUC site.",
+                status: "partial",
+                detail: "Rules and Acts are curated. The recent-items panel reads a partial WordPress RSS feed with an effective server cache of up to seven days; it is not a complete filings feed.",
               },
               {
                 label: "MSA Documents",
                 status: "real",
-                detail: "Live document listing scraped from AESO's MSA site by category.",
+                detail: "Real MSA document listings scraped on demand, with a 24-hour client cache and an effective server disk cache of up to seven days.",
               },
               {
                 label: "Market Copilot",
