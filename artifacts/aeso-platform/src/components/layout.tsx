@@ -13,11 +13,12 @@ import {
   TrendingUp,
   Workflow,
   Eye,
-  BookOpen, Calculator, BarChart3 } from "lucide-react";
+  BookOpen, Calculator, BarChart3, Flame } from "lucide-react";
 
 const navItems = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
   { href: "/pool-price", label: "Pool Price", icon: DollarSign },
+  { href: "/aeco-gas", label: "AECO Gas & Power Fwd", icon: Flame },
   { href: "/generation", label: "Generation Mix", icon: Factory },
   { href: "/generation-stack", label: "Generation Stack", icon: BarChart3 },
   { href: "/supply-demand", label: "Supply & Demand", icon: Scale },

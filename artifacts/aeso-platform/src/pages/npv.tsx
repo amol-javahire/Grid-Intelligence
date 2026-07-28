@@ -1,4 +1,5 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Slider } from "@/components/ui/slider";
 import {
@@ -94,6 +95,45 @@ const CAPEX_BANDS: Record<TechKey, [number, number, number]> = {
 const EMISSIONS_T_PER_GJ = 0.0561;   // tCO2e per GJ
 const AESO_TRADING_CHARGE = 0.606;   // C$/MWh
 const OUTAGE_DERATE = 0.14;          // forced + planned, gas
+
+// Visual metadata for the cost-reference cards — mirrors the ERCOT platform's
+// Project Development Cost Reference layout (artifacts/grid-platform/src/pages/
+// ppa-calculator.tsx CAPEX_BENCHMARKS) so the two apps read as one family.
+const TECH_META: Record<TechKey, { emoji: string; color: string }> = {
+  wind:  { emoji: "🌬️", color: "border-teal-500/40 bg-teal-900/10" },
+  solar: { emoji: "☀️", color: "border-amber-500/40 bg-amber-900/10" },
+  bess:  { emoji: "🔋", color: "border-emerald-500/40 bg-emerald-900/10" },
+  ccgt:  { emoji: "⚡", color: "border-orange-500/40 bg-orange-900/10" },
+  scgt:  { emoji: "🔥", color: "border-red-500/40 bg-red-900/10" },
+};
+
+// Maps a CSD fuel_type onto the nearest cost model. HYDRO, COGENERATION, GAS
+// FIRED STEAM and OTHER have no dedicated Alberta cost model yet — assets in
+// those fuels are excluded from the project picker rather than silently
+// mapped onto a technology they aren't (e.g. cogen forced into CCGT).
+const FUEL_TO_TECH: Partial<Record<string, TechKey>> = {
+  WIND: "wind",
+  SOLAR: "solar",
+  "ENERGY STORAGE": "bess",
+  "COMBINED CYCLE": "ccgt",
+  "SIMPLE CYCLE": "scgt",
+};
+
+interface StackAsset {
+  asset_id: string;
+  asset_name: string | null;
+  fuel_type: string;
+  mc_mw: number;
+  capture_rate: number | null;
+  capacity_factor: number | null;
+  months_present: number;
+}
+
+async function getJson<T>(url: string): Promise<T> {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`${r.status}`);
+  return r.json();
+}
 
 /* ── finance helpers ─────────────────────────────────────────────────────── */
 
@@ -270,6 +310,29 @@ export default function NpvCalculator() {
   const [mode, setMode] = useState<"project" | "ppa">("project");
   const [tech, setTech] = useState<TechKey>("wind");
 
+  // ── Real-project picker (PPA/VPPA mode) ─────────────────────────────────
+  // Fuel → asset, backed by the same aeso_asset_ttm view as the Generation
+  // Stack tab, so MW and capture rate here are measured, not assumed.
+  const [pickerFuel, setPickerFuel] = useState<string>("");
+  const [pickerAssetId, setPickerAssetId] = useState<string>("");
+
+  const { data: pickerFuels } = useQuery({
+    queryKey: ["npv-picker-fuels"],
+    queryFn: () => getJson<{ fuels: { fuel_type: string; assets: number }[] }>(
+      "/api/aeso/generation-stack/fuels"),
+  });
+
+  const pickableFuels = (pickerFuels?.fuels ?? []).filter(f => FUEL_TO_TECH[f.fuel_type]);
+
+  const { data: pickerAssets } = useQuery({
+    queryKey: ["npv-picker-assets", pickerFuel],
+    queryFn: () => getJson<{ assets: StackAsset[] }>(
+      `/api/aeso/generation-stack/assets?fuel=${encodeURIComponent(pickerFuel)}`),
+    enabled: !!pickerFuel,
+  });
+
+  const pickedAsset = (pickerAssets?.assets ?? []).find(a => a.asset_id === pickerAssetId) ?? null;
+
   const d = TECH[tech];
   const [i, setI] = useState<Inputs>(() => ({
     tech: "wind", mw: 100, durationHrs: 4,
@@ -290,6 +353,17 @@ export default function NpvCalculator() {
 
   const set = <K extends keyof Inputs>(k: K, v: Inputs[K]) => setI(p => ({ ...p, [k]: v }));
 
+  // Cost-reference grid has its own size slider — a general benchmark, not
+  // tied to the specific scenario being computed above (mirrors ERCOT's
+  // ppa-calculator.tsx, where the CAPEX reference is independent of the
+  // selected candidate's actual MW).
+  const [costRefMw, setCostRefMw] = useState(910);
+
+  // Live pool-price sensitivity scrubber, -30%..+30%. Independent of the
+  // fixed ±25% P10/P90 band below — this one is user-driven and recomputes
+  // on every drag, not a fixed screening assumption.
+  const [priceSensPct, setPriceSensPct] = useState(0);
+
   const switchTech = (k: TechKey) => {
     const t = TECH[k];
     setTech(k);
@@ -301,6 +375,25 @@ export default function NpvCalculator() {
       variableOmPerMwh: t.variableOmPerMwh, captureRate: t.captureRate,
     }));
   };
+
+  function pickFuel(f: string) {
+    setPickerFuel(f);
+    setPickerAssetId("");
+  }
+
+  // Prefill MW and capture rate from the selected asset's measured TTM
+  // performance — real numbers from aeso_asset_ttm, not screening defaults.
+  useEffect(() => {
+    if (!pickedAsset) return;
+    const mappedTech = FUEL_TO_TECH[pickedAsset.fuel_type];
+    if (mappedTech) switchTech(mappedTech);
+    set("mw", Math.round(pickedAsset.mc_mw));
+    if (pickedAsset.capture_rate != null) {
+      // Clamp: single-asset TTM capture rate can be noisy for low-generation
+      // or partial-year assets — keep it in a sane screening band.
+      set("captureRate", Math.max(0.2, Math.min(2.0, pickedAsset.capture_rate)));
+    }
+  }, [pickedAsset?.asset_id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const res = useMemo(() => runModel(i), [i]);
 
@@ -328,6 +421,13 @@ export default function NpvCalculator() {
                swing: Math.abs(up - down) };
     }).sort((a, b) => b.swing - a.swing);
   }, [i, res.npv]);
+
+  // Live scenario at the current slider position — recomputed on every drag.
+  const sensRes = useMemo(
+    () => runModel({ ...i, poolPrice: i.poolPrice * (1 + priceSensPct / 100) }),
+    [i, priceSensPct]
+  );
+  const sensDelta = sensRes.npv - res.npv;
 
   const cashflowData = res.rows.map(r => ({
     year: `Y${r.year}`, ebitda: Math.round(r.ebitda / 1e6 * 10) / 10,
@@ -369,6 +469,74 @@ export default function NpvCalculator() {
           </button>
         ))}
       </div>
+
+      {/* Real-project picker — PPA/VPPA mode only */}
+      {mode === "ppa" && (
+        <Card className="border-primary/30">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm font-medium">Load a real project</CardTitle>
+            <p className="text-xs text-muted-foreground">
+              Pick an Alberta generator by fuel type — MW and capture rate prefill from its
+              trailing-12-month metered performance (same data as the Generation Stack tab),
+              not a screening default.
+            </p>
+          </CardHeader>
+          <CardContent className="flex flex-wrap gap-3 items-end">
+            <div>
+              <label className="text-xs text-muted-foreground block mb-1">Fuel type</label>
+              <select
+                value={pickerFuel}
+                onChange={(e) => pickFuel(e.target.value)}
+                className="bg-background border border-border rounded-md px-2 py-1.5 text-sm min-w-[180px]"
+              >
+                <option value="">— Select fuel —</option>
+                {pickableFuels.map((f) => (
+                  <option key={f.fuel_type} value={f.fuel_type}>
+                    {f.fuel_type} ({f.assets})
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="text-xs text-muted-foreground block mb-1">Project</label>
+              <select
+                value={pickerAssetId}
+                onChange={(e) => setPickerAssetId(e.target.value)}
+                disabled={!pickerFuel}
+                className="bg-background border border-border rounded-md px-2 py-1.5 text-sm min-w-[240px] disabled:opacity-40"
+              >
+                <option value="">— Select a project —</option>
+                {(pickerAssets?.assets ?? []).map((a) => (
+                  <option key={a.asset_id} value={a.asset_id}>
+                    {a.asset_name ?? a.asset_id} · {Math.round(a.mc_mw)} MW
+                  </option>
+                ))}
+              </select>
+            </div>
+            {pickedAsset && (
+              <div className="text-xs text-muted-foreground flex gap-4 pb-1.5">
+                <span>
+                  Measured capture rate:{" "}
+                  <span className="font-semibold text-foreground">
+                    {pickedAsset.capture_rate != null ? `${(pickedAsset.capture_rate * 100).toFixed(0)}%` : "—"}
+                  </span>
+                </span>
+                <span>
+                  Measured capacity factor:{" "}
+                  <span className="font-semibold text-foreground">
+                    {pickedAsset.capacity_factor != null ? `${(pickedAsset.capacity_factor * 100).toFixed(0)}%` : "—"}
+                  </span>
+                </span>
+                {pickedAsset.months_present < 12 && (
+                  <span className="text-amber-500">
+                    only {pickedAsset.months_present}/12 months metered
+                  </span>
+                )}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       {/* ITC double-count warning — the single most important note on this page */}
       <Card className="border-amber-500/40">
@@ -556,6 +724,60 @@ export default function NpvCalculator() {
             </CardContent>
           </Card>
 
+          <Card className="border-primary/30">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-sm">Price sensitivity — live scrubber</CardTitle>
+              <p className="text-xs text-muted-foreground">
+                Drag to move the Alberta pool price ±30% and watch NPV recompute in real time.
+                No forward curve backs this — Alberta has no free public power or AB-NIT gas
+                forward source comparable to ERCOT's Henry Hub strip, so this is a pure
+                what-if against your entered pool price, not a probability-weighted forecast.
+              </p>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div>
+                <div className="flex items-baseline justify-between text-xs mb-1">
+                  <span className="text-muted-foreground">Pool price adjustment</span>
+                  <span className={`font-semibold ${priceSensPct > 0 ? "text-emerald-500" : priceSensPct < 0 ? "text-red-500" : ""}`}>
+                    {priceSensPct > 0 ? "+" : ""}{priceSensPct}%
+                  </span>
+                </div>
+                <Slider value={[priceSensPct]} min={-30} max={30} step={1}
+                        onValueChange={(v) => setPriceSensPct(v[0])} />
+                <div className="flex justify-between text-[10px] text-muted-foreground mt-1">
+                  <span>−30%</span><span>base ${i.poolPrice}/MWh</span><span>+30%</span>
+                </div>
+              </div>
+
+              <div className="rounded-lg bg-muted/30 p-3 space-y-2">
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-muted-foreground">Scenario pool price</span>
+                  <span className="font-mono font-medium">
+                    C${(i.poolPrice * (1 + priceSensPct / 100)).toFixed(2)}/MWh
+                  </span>
+                </div>
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-muted-foreground">Scenario NPV</span>
+                  <span className={`font-mono font-bold ${sensRes.npv >= 0 ? "text-emerald-500" : "text-red-500"}`}>
+                    {money(sensRes.npv)}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-muted-foreground">Δ vs base case</span>
+                  <span className={`font-mono ${sensDelta >= 0 ? "text-emerald-500" : "text-red-500"}`}>
+                    {sensDelta >= 0 ? "+" : ""}{money(sensDelta)}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-muted-foreground">Scenario IRR</span>
+                  <span className="font-mono">
+                    {sensRes.projectIrr !== null ? `${(sensRes.projectIrr * 100).toFixed(1)}%` : "n/a"}
+                  </span>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
           <Card>
             <CardHeader className="pb-3"><CardTitle className="text-sm">Risks not yet modelled</CardTitle></CardHeader>
             <CardContent className="space-y-2 text-xs">
@@ -609,6 +831,111 @@ export default function NpvCalculator() {
           </ResponsiveContainer>
         </CardContent>
       </Card>
+
+      {/* ── Project Development Cost Reference ──────────────────────────────
+          Mirrors the ERCOT platform's card grid (ppa-calculator.tsx
+          CAPEX_BENCHMARKS) so both apps read as one family. CAPEX and O&M are
+          sourced (MSA Q1 2026 / AESO 2024 LTO); land, interconnection,
+          insurance and decommissioning are NOT — Alberta-specific figures for
+          those four line items haven't been sourced yet, so they're labelled
+          rather than filled with a guessed number. */}
+      <div className="border-t border-border pt-6">
+        <h2 className="text-lg font-bold">Project Development Cost Reference</h2>
+        <p className="text-xs text-muted-foreground mb-5">
+          2026 CAD · MSA Q1 2026 analysis, derived from the AESO 2024 Long-Term Outlook ·
+          renewables shown gross of the 30% Clean Technology ITC (net ÷ 0.70, derived)
+        </p>
+
+        <div className="bg-card rounded-xl border border-border p-4 mb-5">
+          <div className="flex items-center gap-4 flex-wrap">
+            <span className="text-sm font-medium">Project Size:</span>
+            <Slider value={[costRefMw]} min={10} max={2000} step={10}
+                    onValueChange={(v) => setCostRefMw(v[0])} className="w-44" />
+            <span className="text-sm font-mono text-primary w-20">{costRefMw} MW</span>
+            <span className="text-xs text-muted-foreground">
+              → total project cost and annual O&amp;M scale with size
+            </span>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+          {(Object.keys(TECH) as TechKey[]).map((k) => {
+            const b = TECH[k];
+            const meta = TECH_META[k];
+            const band = CAPEX_BANDS[k];
+            const totalLo = (band[0] * costRefMw * 1000 / 1_000_000).toFixed(0);
+            const totalHi = (band[2] * costRefMw * 1000 / 1_000_000).toFixed(0);
+            const omLo = (b.fixedOmPerKwYr * costRefMw * 1000 / 1_000_000).toFixed(1);
+
+            return (
+              <div key={k} className={`rounded-xl border p-4 ${meta.color}`}>
+                <div className="flex items-center gap-2 mb-3">
+                  <span className="text-xl">{meta.emoji}</span>
+                  <div>
+                    <p className="text-sm font-bold">{b.label}</p>
+                    <p className="text-[10px] text-muted-foreground">{b.lifeYears}-year design life</p>
+                  </div>
+                </div>
+
+                <div className="bg-background/60 rounded-lg px-3 py-2 mb-3">
+                  <p className="text-[10px] text-muted-foreground mb-0.5">
+                    All-in project cost (gross) — {costRefMw} MW
+                  </p>
+                  <p className="text-lg font-bold font-mono">${totalLo}M – ${totalHi}M</p>
+                  <p className="text-[10px] text-muted-foreground">
+                    ${band[0].toLocaleString()}–${band[2].toLocaleString()}/kW · base ${band[1].toLocaleString()}/kW
+                  </p>
+                </div>
+
+                <div className="space-y-1.5 text-xs">
+                  <div className="flex gap-2">
+                    <span className="text-muted-foreground w-24 shrink-0 leading-snug">Fixed O&amp;M</span>
+                    <span className="leading-snug">
+                      ${b.fixedOmPerKwYr}/kW-yr (${omLo}M/yr at {costRefMw} MW)
+                    </span>
+                  </div>
+                  <div className="flex gap-2">
+                    <span className="text-muted-foreground w-24 shrink-0 leading-snug">Variable O&amp;M</span>
+                    <span className="leading-snug">
+                      {b.variableOmPerMwh === 0 ? "~$0/MWh (negligible)" : `$${b.variableOmPerMwh}/MWh`}
+                      {b.heatRateGjPerMwh ? " + fuel + carbon (see Operating cost panel)" : ""}
+                    </span>
+                  </div>
+                  <div className="flex gap-2">
+                    <span className="text-muted-foreground w-24 shrink-0 leading-snug">ITC</span>
+                    <span className="leading-snug">
+                      {b.itcEligible ? `${b.defaultItcPct}% Clean Technology ITC through 2033` : "Not eligible (gas)"}
+                    </span>
+                  </div>
+                  {(["Land", "Interconnection", "Insurance", "Decommissioning"] as const).map((label) => (
+                    <div key={label} className="flex gap-2">
+                      <span className="text-muted-foreground w-24 shrink-0 leading-snug">{label}</span>
+                      <span className="leading-snug flex items-center gap-1.5">
+                        <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-muted text-muted-foreground">
+                          NOT SOURCED
+                        </span>
+                        <span className="text-muted-foreground">Alberta-specific figure not yet available</span>
+                      </span>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="mt-3 pt-3 border-t border-border/50">
+                  <p className="text-[10px] text-muted-foreground leading-snug">
+                    ▸ {b.refSize} · capacity factor {(b.capacityFactor * 100).toFixed(0)}% screening default
+                  </p>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        <p className="mt-4 text-[10px] text-muted-foreground">
+          CAPEX bands are screening ranges, not EPC quotes. Land, interconnection, insurance and
+          decommissioning are deliberately left unfilled rather than estimated from non-Alberta
+          benchmarks — get in touch if you have sourced figures for these four line items.
+        </p>
+      </div>
 
       <p className="text-[11px] text-muted-foreground leading-relaxed">
         <strong>Sources &amp; basis.</strong> Capital and O&amp;M baselines: MSA Q1 2026 analysis derived from the

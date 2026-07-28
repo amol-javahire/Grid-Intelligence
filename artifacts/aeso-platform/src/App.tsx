@@ -19,6 +19,7 @@ import AUC from "@/pages/auc";
 import MSA from "@/pages/msa";
 import AesoRankings from "@/pages/rankings";
 import GenerationStack from "@/pages/generation-stack";
+import AecoGas from "@/pages/aeco-gas";
 import NpvCalculator from "@/pages/npv";
 import Guide from "@/pages/guide";
 import NotFound from "@/pages/not-found";
@@ -33,6 +34,7 @@ function Router() {
         <Route path="/pool-price" component={PoolPrice} />
         <Route path="/generation" component={Generation} />
         <Route path="/generation-stack" component={GenerationStack} />
+        <Route path="/aeco-gas" component={AecoGas} />
         <Route path="/supply-demand" component={SupplyDemand} />
         <Route path="/outages" component={Outages} />
         <Route path="/7day-capacity" component={SevenDayCapacity} />

@@ -2,11 +2,25 @@ import { Router } from "express";
 import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { execSync } from "child_process";
-import { writeFileSync } from "fs";
-import { join } from "path";
+import { writeFileSync, existsSync } from "fs";
+import { join, resolve } from "path";
 import { tmpdir } from "os";
 
 const router = Router();
+
+// Same resolver as routes/admin.ts — process.cwd() is the workspace root in
+// production (Azure: ~/grid-intelligence) and two levels down in dev
+// (artifacts/api-server/). Previously this file hardcoded
+// /home/runner/workspace/..., a Replit-only path that does not exist on
+// Azure — every /api/aeso/lta/data request 500'd there silently.
+function findWorkspaceRoot(): string {
+  const cwd = process.cwd();
+  if (existsSync(join(cwd, "pnpm-workspace.yaml"))) return cwd;
+  const up2 = resolve(cwd, "../..");
+  if (existsSync(join(up2, "pnpm-workspace.yaml"))) return up2;
+  return cwd;
+}
+const WORKSPACE_ROOT = findWorkspaceRoot();
 
 // Dashboard summary
 router.get("/aeso/dashboard", async (req, res) => {
@@ -798,9 +812,9 @@ router.get("/aeso/lta/data", async (req, res) => {
     const pdfPath  = join(tmpdir(), `lta_${ts}.pdf`);
     writeFileSync(pdfPath, pdfBuf);
 
-    const pyPath = "/home/runner/workspace/artifacts/pypsa-engine/.venv/bin/python3";
-    const scriptPath = "/home/runner/workspace/artifacts/pypsa-engine/lta_parse.py";
-    const output = execSync(`${pyPath} ${scriptPath} ${pdfPath}`, { timeout: 60000 }).toString();
+    const pyPath = join(WORKSPACE_ROOT, "artifacts/pypsa-engine/.venv/bin/python3");
+    const scriptPath = join(WORKSPACE_ROOT, "artifacts/pypsa-engine/lta_parse.py");
+    const output = execSync(`"${pyPath}" "${scriptPath}" "${pdfPath}"`, { timeout: 60000 }).toString();
 
     res.json(JSON.parse(output));
   } catch (err) {
