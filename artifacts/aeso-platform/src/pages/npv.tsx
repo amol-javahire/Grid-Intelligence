@@ -4,11 +4,24 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Slider } from "@/components/ui/slider";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  ReferenceLine, Cell, LineChart, Line, Legend,
+  ReferenceLine, LineChart, Line, Legend,
 } from "recharts";
+import {
+  ChevronDown, ChevronUp, Settings2, DollarSign, TrendingUp, TrendingDown, Minus,
+} from "lucide-react";
 
 /* ══════════════════════════════════════════════════════════════════════════
    Alberta project economics calculator.
+
+   Structure mirrors the ERCOT platform's ppa-calculator.tsx: a narrow left
+   panel drives a 2-step Fuel -> Project wizard (real AESO asset data) that
+   auto-populates assumptions, a collapsible Assumptions panel for everything
+   else, always-visible Contract Terms sliders, and a Compute action. The
+   right panel stays empty until you compute, then shows a project header,
+   price/volume waterfall breakdown, P10/P50/P90 cards, and a cashflow chart
+   — same rhythm as ERCOT's results panel. AESO-specific extras (tornado,
+   live price scrubber, risks-not-modelled) are appended after the core
+   results rather than dropped, since they don't exist on the ERCOT page.
 
    Two modes:
      · Project Investment NPV — full economics; CAPEX and OPEX drive the result
@@ -299,6 +312,44 @@ function Kpi({ label, value, sub, tone }: {
   );
 }
 
+function WaterfallRow({ label, value, note, highlight, indent }: {
+  label: string; value: string; note?: string; highlight?: boolean; indent?: boolean;
+}) {
+  return (
+    <div className={`flex items-center justify-between py-1.5 ${highlight ? "border-t border-border mt-1 pt-2.5" : ""}`}>
+      <div className={indent ? "pl-3" : ""}>
+        <span className={`text-xs ${highlight ? "text-foreground font-semibold" : "text-muted-foreground"}`}>{label}</span>
+        {note && <span className="text-[10px] text-muted-foreground/60 ml-1.5">{note}</span>}
+      </div>
+      <span className={`text-xs font-mono ${highlight ? "text-primary font-bold" : "text-foreground/90"}`}>{value}</span>
+    </div>
+  );
+}
+
+function ScenarioCard({ label, npv, k }: { label: string; npv: number; k: "p10" | "p50" | "p90" }) {
+  const positive = npv >= 0;
+  const neutral = Math.abs(npv) < 0.05e6;
+  const Icon = neutral ? Minus : positive ? TrendingUp : TrendingDown;
+  const badge = {
+    p10: "bg-primary/15 text-primary",
+    p50: "bg-muted text-foreground",
+    p90: "bg-red-500/15 text-red-500",
+  }[k];
+  const fmt = (n: number) => n >= 0 ? `+${money(n)}` : `-${money(Math.abs(n))}`;
+  return (
+    <Card className={neutral ? "" : positive ? "border-emerald-500/40" : "border-red-500/40"}>
+      <CardContent className="pt-4 pb-4">
+        <div className="flex items-center justify-between mb-2">
+          <span className={`text-xs font-semibold px-2 py-0.5 rounded ${badge}`}>{k.toUpperCase()}</span>
+          <Icon className={`h-4 w-4 ${neutral ? "text-muted-foreground" : positive ? "text-emerald-500" : "text-red-500"}`} />
+        </div>
+        <p className="text-xs text-muted-foreground mb-1">{label}</p>
+        <p className={`text-xl font-bold ${neutral ? "" : positive ? "text-emerald-500" : "text-red-500"}`}>{fmt(npv)}</p>
+      </CardContent>
+    </Card>
+  );
+}
+
 const money = (n: number) =>
   Math.abs(n) >= 1e6 ? `C$${(n / 1e6).toFixed(1)}M`
   : Math.abs(n) >= 1e3 ? `C$${(n / 1e3).toFixed(0)}k`
@@ -310,7 +361,7 @@ export default function NpvCalculator() {
   const [mode, setMode] = useState<"project" | "ppa">("project");
   const [tech, setTech] = useState<TechKey>("wind");
 
-  // ── Real-project picker (PPA/VPPA mode) ─────────────────────────────────
+  // ── Step 1/2 — real-project wizard (mirrors ERCOT's ISO -> Tech -> Project) ──
   // Fuel → asset, backed by the same aeso_asset_ttm view as the Generation
   // Stack tab, so MW and capture rate here are measured, not assumed.
   const [pickerFuel, setPickerFuel] = useState<string>("");
@@ -324,14 +375,19 @@ export default function NpvCalculator() {
 
   const pickableFuels = (pickerFuels?.fuels ?? []).filter(f => FUEL_TO_TECH[f.fuel_type]);
 
-  const { data: pickerAssets } = useQuery({
+  const { data: pickerAssets, isLoading: assetsLoading } = useQuery({
     queryKey: ["npv-picker-assets", pickerFuel],
     queryFn: () => getJson<{ assets: StackAsset[] }>(
       `/api/aeso/generation-stack/assets?fuel=${encodeURIComponent(pickerFuel)}`),
     enabled: !!pickerFuel,
   });
 
-  const pickedAsset = (pickerAssets?.assets ?? []).find(a => a.asset_id === pickerAssetId) ?? null;
+  const projectOptions = useMemo(
+    () => (pickerAssets?.assets ?? []).slice().sort((a, b) => b.mc_mw - a.mc_mw),
+    [pickerAssets]
+  );
+
+  const pickedAsset = projectOptions.find(a => a.asset_id === pickerAssetId) ?? null;
 
   const d = TECH[tech];
   const [i, setI] = useState<Inputs>(() => ({
@@ -364,6 +420,15 @@ export default function NpvCalculator() {
   // on every drag, not a fixed screening assumption.
   const [priceSensPct, setPriceSensPct] = useState(0);
 
+  // Assumptions panel — collapsed by default, auto-expands once a project is
+  // picked (mirrors ERCOT's Risk Factors accordion behavior).
+  const [assumptionsExpanded, setAssumptionsExpanded] = useState(false);
+
+  // Results stay hidden until Compute is pressed — mirrors ERCOT's empty
+  // results panel. Unlike ERCOT, a specific real asset isn't required: this
+  // page also supports pure hypothetical technology modeling.
+  const [hasComputed, setHasComputed] = useState(false);
+
   const switchTech = (k: TechKey) => {
     const t = TECH[k];
     setTech(k);
@@ -380,6 +445,10 @@ export default function NpvCalculator() {
     setPickerFuel(f);
     setPickerAssetId("");
   }
+  function pickProject(id: string) {
+    setPickerAssetId(id);
+    setHasComputed(false);
+  }
 
   // Prefill MW and capture rate from the selected asset's measured TTM
   // performance — real numbers from aeso_asset_ttm, not screening defaults.
@@ -393,6 +462,7 @@ export default function NpvCalculator() {
       // or partial-year assets — keep it in a sane screening band.
       set("captureRate", Math.max(0.2, Math.min(2.0, pickedAsset.capture_rate)));
     }
+    setAssumptionsExpanded(true);
   }, [pickedAsset?.asset_id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const res = useMemo(() => runModel(i), [i]);
@@ -429,6 +499,37 @@ export default function NpvCalculator() {
   );
   const sensDelta = sensRes.npv - res.npv;
 
+  // ── Waterfall breakdowns (year-1 values) — same narrative shape as ERCOT's
+  //    Revenue Build-Up / Volume Waterfall cards, decomposed from runModel. ──
+  const priceWaterfall = useMemo(() => {
+    const y1 = res.rows[0];
+    const merchant = i.poolPrice * i.captureRate;
+    const contracted = i.ppaTermYears >= 1 ? i.contractedPct / 100 : 0;
+    return {
+      poolPrice: i.poolPrice,
+      captureRate: i.captureRate,
+      merchant,
+      contractedPct: contracted,
+      strike: i.ppaStrike,
+      blendedPrice: y1?.price ?? 0,
+    };
+  }, [i, res.rows]);
+
+  const volumeWaterfall = useMemo(() => {
+    const nameplateAdj = i.mw * 8760 * i.capacityFactor; // "expected" gen at nameplate × CF
+    const afterCurtailment = nameplateAdj * (1 - i.curtailmentPct / 100);
+    const afterAvailability = afterCurtailment * (i.availabilityPct / 100);
+    const delivered = res.rows[0]?.mwh ?? afterAvailability * (1 - i.lossFactorPct / 100);
+    return {
+      nameplateAdj,
+      curtailmentLoss: nameplateAdj - afterCurtailment,
+      afterCurtailment,
+      availabilityLoss: afterCurtailment - afterAvailability,
+      afterAvailability,
+      delivered,
+    };
+  }, [i, res.rows]);
+
   const cashflowData = res.rows.map(r => ({
     year: `Y${r.year}`, ebitda: Math.round(r.ebitda / 1e6 * 10) / 10,
     cumulative: Math.round(r.cumulative / 1e6 * 10) / 10,
@@ -438,18 +539,21 @@ export default function NpvCalculator() {
   const isGas = tech === "ccgt" || tech === "scgt";
   const band = CAPEX_BANDS[tech];
 
+  const selectCls = "w-full bg-background border border-border rounded-md px-2 py-1.5 text-sm disabled:opacity-40 disabled:cursor-not-allowed";
+  const projectLabel = pickedAsset ? (pickedAsset.asset_name ?? pickedAsset.asset_id) : `Generic ${d.label.toLowerCase()}`;
+
   return (
     <div className="space-y-6">
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Project Economics &amp; NPV</h1>
           <p className="text-muted-foreground text-sm mt-1">
-            Alberta project investment analysis — CAPEX, OPEX, incentives and pool-price revenue.
+            Alberta project investment analysis — pick a real project or model a generic technology.
           </p>
         </div>
         <div className="flex gap-1 bg-muted p-1 rounded-lg">
           {([["project", "Project Investment NPV"], ["ppa", "PPA / VPPA Settlement"]] as const).map(([k, label]) => (
-            <button key={k} onClick={() => setMode(k)}
+            <button key={k} onClick={() => { setMode(k); setHasComputed(false); }}
               className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${
                 mode === k ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}>
               {label}
@@ -457,86 +561,6 @@ export default function NpvCalculator() {
           ))}
         </div>
       </div>
-
-      {/* Technology selector */}
-      <div className="flex gap-2 flex-wrap">
-        {(Object.keys(TECH) as TechKey[]).map(k => (
-          <button key={k} onClick={() => switchTech(k)}
-            className={`px-4 py-2 rounded-lg text-sm font-medium border transition-colors ${
-              tech === k ? "bg-primary text-primary-foreground border-primary"
-                         : "border-border text-muted-foreground hover:text-foreground"}`}>
-            {TECH[k].label}
-          </button>
-        ))}
-      </div>
-
-      {/* Real-project picker — PPA/VPPA mode only */}
-      {mode === "ppa" && (
-        <Card className="border-primary/30">
-          <CardHeader className="pb-3">
-            <CardTitle className="text-sm font-medium">Load a real project</CardTitle>
-            <p className="text-xs text-muted-foreground">
-              Pick an Alberta generator by fuel type — MW and capture rate prefill from its
-              trailing-12-month metered performance (same data as the Generation Stack tab),
-              not a screening default.
-            </p>
-          </CardHeader>
-          <CardContent className="flex flex-wrap gap-3 items-end">
-            <div>
-              <label className="text-xs text-muted-foreground block mb-1">Fuel type</label>
-              <select
-                value={pickerFuel}
-                onChange={(e) => pickFuel(e.target.value)}
-                className="bg-background border border-border rounded-md px-2 py-1.5 text-sm min-w-[180px]"
-              >
-                <option value="">— Select fuel —</option>
-                {pickableFuels.map((f) => (
-                  <option key={f.fuel_type} value={f.fuel_type}>
-                    {f.fuel_type} ({f.assets})
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="text-xs text-muted-foreground block mb-1">Project</label>
-              <select
-                value={pickerAssetId}
-                onChange={(e) => setPickerAssetId(e.target.value)}
-                disabled={!pickerFuel}
-                className="bg-background border border-border rounded-md px-2 py-1.5 text-sm min-w-[240px] disabled:opacity-40"
-              >
-                <option value="">— Select a project —</option>
-                {(pickerAssets?.assets ?? []).map((a) => (
-                  <option key={a.asset_id} value={a.asset_id}>
-                    {a.asset_name ?? a.asset_id} · {Math.round(a.mc_mw)} MW
-                  </option>
-                ))}
-              </select>
-            </div>
-            {pickedAsset && (
-              <div className="text-xs text-muted-foreground flex gap-4 pb-1.5">
-                <span>
-                  Measured capture rate:{" "}
-                  <span className="font-semibold text-foreground">
-                    {pickedAsset.capture_rate != null ? `${(pickedAsset.capture_rate * 100).toFixed(0)}%` : "—"}
-                  </span>
-                </span>
-                <span>
-                  Measured capacity factor:{" "}
-                  <span className="font-semibold text-foreground">
-                    {pickedAsset.capacity_factor != null ? `${(pickedAsset.capacity_factor * 100).toFixed(0)}%` : "—"}
-                  </span>
-                </span>
-                {pickedAsset.months_present < 12 && (
-                  <span className="text-amber-500">
-                    only {pickedAsset.months_present}/12 months metered
-                  </span>
-                )}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      )}
 
       {/* ITC double-count warning — the single most important note on this page */}
       <Card className="border-amber-500/40">
@@ -556,281 +580,485 @@ export default function NpvCalculator() {
         </CardContent>
       </Card>
 
-      {/* KPI row */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <Kpi label={mode === "project" ? "Project NPV" : "Settlement NPV"}
-             value={money(res.npv)} tone={res.npv >= 0 ? "good" : "bad"}
-             sub={`at ${i.wacc}% WACC, ${i.lifeYears}-yr life`} />
-        <Kpi label="Project IRR"
-             value={res.projectIrr !== null ? `${(res.projectIrr * 100).toFixed(1)}%` : "n/a"}
-             tone={res.projectIrr !== null && res.projectIrr * 100 >= i.wacc ? "good" : "bad"}
-             sub={res.projectIrr === null ? "no sign change in cashflows" : `vs ${i.wacc}% hurdle`} />
-        <Kpi label="LCOE" value={`C$${res.lcoe.toFixed(1)}/MWh`}
-             sub="discounted cost ÷ discounted energy" />
-        <Kpi label="Breakeven price" value={`C$${res.breakeven.toFixed(1)}/MWh`}
-             sub="flat price for NPV = 0" />
-      </div>
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
+        {/* ── Left panel — wizard + assumptions + contract terms ─────────── */}
+        <div className="lg:col-span-1 space-y-4">
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <Kpi label="Gross CAPEX" value={money(res.grossCapex)}
-             sub={`C$${i.grossCapexPerKw.toLocaleString()}/kW${isBess ? ` · C$${(res.grossCapex / (i.mw * 1000 * i.durationHrs)).toFixed(0)}/kWh` : ""}`} />
-        <Kpi label="ITC value" value={money(res.itcValue)}
-             sub={`${i.itcPct}% — net CAPEX ${money(res.netCapex)}`} />
-        <Kpi label="Annual EBITDA (avg)" value={money(res.avgEbitda)}
-             sub={`${(res.annualMwh / 1000).toFixed(0)} GWh yr 1`} />
-        <Kpi label="Payback"
-             value={res.paybackYear ? `${res.paybackYear} yrs` : "beyond life"}
-             sub="undiscounted, from COD" />
-      </div>
-
-      <div className="grid lg:grid-cols-3 gap-6">
-        {/* ── Inputs ─────────────────────────────────────────────── */}
-        <div className="space-y-4">
+          {/* Step 1 — Fuel */}
           <Card>
-            <CardHeader className="pb-3"><CardTitle className="text-sm">Project</CardTitle></CardHeader>
-            <CardContent className="space-y-3">
-              <NumField label="Capacity" value={i.mw} onChange={v => set("mw", v)} suffix="MW" />
-              {isBess && (
-                <NumField label="Duration" value={i.durationHrs} onChange={v => set("durationHrs", v)}
-                  suffix="hrs" step={0.5}
-                  hint="AESO's published battery cost does not state duration — enter yours. Alberta's Jurassic BESS is 80 MW / 160 MWh (2-hr)." />
-              )}
+            <CardContent className="pt-4 pb-4 space-y-4">
               <div>
-                <div className="flex items-baseline justify-between text-xs mb-1">
-                  <span className="text-muted-foreground">Gross CAPEX</span>
-                  <span className="font-semibold">C${i.grossCapexPerKw.toLocaleString()}/kW</span>
-                </div>
-                <Slider value={[i.grossCapexPerKw]} min={band[0]} max={band[2]} step={10}
-                        onValueChange={v => set("grossCapexPerKw", v[0])} />
-                <div className="flex justify-between text-[10px] text-muted-foreground mt-1">
-                  <span>low {band[0]}</span><span>base {band[1]}</span><span>high {band[2]}</span>
-                </div>
-              </div>
-              <NumField label="Clean Technology ITC" value={i.itcPct} onChange={v => set("itcPct", v)}
-                suffix="%" hint={d.itcEligible ? "30% through 2033, 15% in 2034." : "Gas is not eligible — leave at 0."} />
-              <NumField label="Project life" value={i.lifeYears} onChange={v => set("lifeYears", v)} suffix="yrs" />
-              <NumField label="WACC / discount rate" value={i.wacc} onChange={v => set("wacc", v)} suffix="%" step={0.5} />
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader className="pb-3"><CardTitle className="text-sm">Production</CardTitle></CardHeader>
-            <CardContent className="space-y-3">
-              <NumField label="Capacity factor" value={+(i.capacityFactor * 100).toFixed(1)}
-                onChange={v => set("capacityFactor", v / 100)} suffix="%" step={0.5} />
-              <NumField label="Availability" value={i.availabilityPct} onChange={v => set("availabilityPct", v)}
-                suffix="%" hint={isGas ? `Gas outage assumption ~${OUTAGE_DERATE * 100}% forced + planned.` : undefined} />
-              <NumField label="Curtailment / constraint" value={i.curtailmentPct}
-                onChange={v => set("curtailmentPct", v)} suffix="%"
-                hint="UNCALIBRATED screening input. MSA measured 561 GWh of constrained intermittent generation in Q1 2026, up ~250% year-over-year — do not assume zero." />
-              <NumField label="Transmission loss factor" value={i.lossFactorPct}
-                onChange={v => set("lossFactorPct", v)} suffix="%" step={0.5} />
-              <NumField label="Annual degradation" value={i.degradationPctYr}
-                onChange={v => set("degradationPctYr", v)} suffix="%/yr" step={0.05} />
-            </CardContent>
-          </Card>
-        </div>
-
-        <div className="space-y-4">
-          <Card>
-            <CardHeader className="pb-3"><CardTitle className="text-sm">Operating cost</CardTitle></CardHeader>
-            <CardContent className="space-y-3">
-              <NumField label="Fixed O&M" value={i.fixedOmPerKwYr} onChange={v => set("fixedOmPerKwYr", v)}
-                suffix="C$/kW-yr" step={0.5} hint={`MSA ${d.label} baseline: C$${d.fixedOmPerKwYr}/kW-yr.`} />
-              <NumField label="Other fixed costs" value={i.otherOpexPerKwYr}
-                onChange={v => set("otherOpexPerKwYr", v)} suffix="C$/kW-yr" step={0.5}
-                hint="Land lease, municipal property tax, insurance, asset management, regulatory compliance, reclamation reserve. Property tax is project-specific (designated industrial property, municipal mill rate)." />
-              <NumField label="Variable O&M" value={i.variableOmPerMwh} onChange={v => set("variableOmPerMwh", v)}
-                suffix="C$/MWh" step={0.1} />
-              <NumField label="OPEX escalation" value={i.opexEscalationPct}
-                onChange={v => set("opexEscalationPct", v)} suffix="%/yr" step={0.5} />
-              {isGas && (
-                <>
-                  <NumField label="AB-NIT gas price" value={i.gasPricePerGj} onChange={v => set("gasPricePerGj", v)}
-                    suffix="C$/GJ" step={0.1}
-                    hint={`Heat rate ${d.heatRateGjPerMwh} GJ/MWh → fuel C$${res.fuelPerMwh.toFixed(2)}/MWh.`} />
-                  <NumField label="Carbon price (TIER)" value={i.carbonPricePerT}
-                    onChange={v => set("carbonPricePerT", v)} suffix="C$/t" step={5}
-                    hint={`${EMISSIONS_T_PER_GJ} tCO2e/GJ → carbon C$${res.carbonPerMwh.toFixed(2)}/MWh.`} />
-                </>
-              )}
-              <p className="text-[10px] text-muted-foreground">
-                AESO trading charge of C${AESO_TRADING_CHARGE}/MWh is applied automatically.
-              </p>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader className="pb-3"><CardTitle className="text-sm">Revenue</CardTitle></CardHeader>
-            <CardContent className="space-y-3">
-              <NumField label="Alberta pool price" value={i.poolPrice} onChange={v => set("poolPrice", v)}
-                suffix="C$/MWh" hint="Province-wide uniform price. Alberta has no locational basis today." />
-              <NumField label="Capture rate" value={+(i.captureRate * 100).toFixed(0)}
-                onChange={v => set("captureRate", v / 100)} suffix="%"
-                hint={`Technology-weighted vs pool. ${d.label} screening default ${(d.captureRate * 100).toFixed(0)}%.`} />
-              <NumField label="Price escalation" value={i.priceEscalationPct}
-                onChange={v => set("priceEscalationPct", v)} suffix="%/yr" step={0.5} />
-              <NumField label="PPA strike" value={i.ppaStrike} onChange={v => set("ppaStrike", v)} suffix="C$/MWh" />
-              <NumField label="PPA term" value={i.ppaTermYears} onChange={v => set("ppaTermYears", v)} suffix="yrs" />
-              <NumField label="Contracted share" value={i.contractedPct}
-                onChange={v => set("contractedPct", v)} suffix="%"
-                hint="Remainder settles merchant at pool × capture rate." />
-            </CardContent>
-          </Card>
-        </div>
-
-        {/* ── Results ────────────────────────────────────────────── */}
-        <div className="space-y-4">
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-sm">NPV range — pool price ±25%</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-2">
-                {([["P10 (low price)", bands.p10], ["P50 (base)", bands.p50], ["P90 (high price)", bands.p90]] as const)
-                  .map(([label, v]) => (
-                    <div key={label} className="flex items-center justify-between text-sm">
-                      <span className="text-muted-foreground">{label}</span>
-                      <span className={`font-semibold ${v >= 0 ? "text-emerald-500" : "text-red-500"}`}>{money(v)}</span>
-                    </div>
+                <label className="block text-xs text-muted-foreground mb-1">
+                  <span className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-primary text-primary-foreground text-[10px] font-bold mr-1.5">1</span>
+                  Fuel type
+                </label>
+                <select className={selectCls} value={pickerFuel} onChange={e => pickFuel(e.target.value)}>
+                  <option value="">— Generic technology (no specific project) —</option>
+                  {pickableFuels.map(f => (
+                    <option key={f.fuel_type} value={f.fuel_type}>{f.fuel_type} ({f.assets})</option>
                   ))}
+                </select>
               </div>
-              <p className="text-[10px] text-muted-foreground mt-3 leading-tight">
-                Band is a pool-price sensitivity, not a calibrated stochastic forecast.
-                Replace with a historical bootstrap once an Alberta price model is fitted.
-              </p>
-            </CardContent>
-          </Card>
 
-          <Card>
-            <CardHeader className="pb-3"><CardTitle className="text-sm">Sensitivity (±20%)</CardTitle></CardHeader>
-            <CardContent className="h-64">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={tornado} layout="vertical"
-                          margin={{ left: 10, right: 10, top: 5, bottom: 5 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" horizontal={false} />
-                  <XAxis type="number" stroke="hsl(var(--muted-foreground))" fontSize={10}
-                         tickFormatter={(v) => `${(v / 1e6).toFixed(0)}M`} />
-                  <YAxis type="category" dataKey="name" width={95}
-                         stroke="hsl(var(--muted-foreground))" fontSize={10} />
-                  <Tooltip
-                    contentStyle={{ backgroundColor: "hsl(var(--popover))", borderColor: "hsl(var(--border))" }}
-                    formatter={(v: number) => money(v)} />
-                  <ReferenceLine x={0} stroke="hsl(var(--muted-foreground))" />
-                  <Bar dataKey="low" fill="hsl(var(--destructive))" />
-                  <Bar dataKey="high" fill="hsl(var(--primary))" />
-                </BarChart>
-              </ResponsiveContainer>
-            </CardContent>
-          </Card>
-
-          <Card className="border-primary/30">
-            <CardHeader className="pb-3">
-              <CardTitle className="text-sm">Price sensitivity — live scrubber</CardTitle>
-              <p className="text-xs text-muted-foreground">
-                Drag to move the Alberta pool price ±30% and watch NPV recompute in real time.
-                No forward curve backs this — Alberta has no free public power or AB-NIT gas
-                forward source comparable to ERCOT's Henry Hub strip, so this is a pure
-                what-if against your entered pool price, not a probability-weighted forecast.
-              </p>
-            </CardHeader>
-            <CardContent className="space-y-4">
+              {/* Step 2 — Project */}
               <div>
-                <div className="flex items-baseline justify-between text-xs mb-1">
-                  <span className="text-muted-foreground">Pool price adjustment</span>
-                  <span className={`font-semibold ${priceSensPct > 0 ? "text-emerald-500" : priceSensPct < 0 ? "text-red-500" : ""}`}>
-                    {priceSensPct > 0 ? "+" : ""}{priceSensPct}%
-                  </span>
-                </div>
-                <Slider value={[priceSensPct]} min={-30} max={30} step={1}
-                        onValueChange={(v) => setPriceSensPct(v[0])} />
-                <div className="flex justify-between text-[10px] text-muted-foreground mt-1">
-                  <span>−30%</span><span>base ${i.poolPrice}/MWh</span><span>+30%</span>
-                </div>
+                <label className="block text-xs text-muted-foreground mb-1">
+                  <span className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-primary text-primary-foreground text-[10px] font-bold mr-1.5">2</span>
+                  Project
+                  {pickerFuel && <span className="ml-1.5 text-muted-foreground/70">({projectOptions.length} · sorted by MW)</span>}
+                  {assetsLoading && pickerFuel && <span className="ml-1.5 text-muted-foreground/70">loading…</span>}
+                </label>
+                <select className={selectCls} value={pickerAssetId} disabled={!pickerFuel}
+                  onChange={e => pickProject(e.target.value)}>
+                  <option value="">— Select a project —</option>
+                  {projectOptions.map(a => (
+                    <option key={a.asset_id} value={a.asset_id}>
+                      {a.asset_name ?? a.asset_id} · {Math.round(a.mc_mw)} MW
+                    </option>
+                  ))}
+                </select>
               </div>
 
-              <div className="rounded-lg bg-muted/30 p-3 space-y-2">
-                <div className="flex items-center justify-between text-sm">
-                  <span className="text-muted-foreground">Scenario pool price</span>
-                  <span className="font-mono font-medium">
-                    C${(i.poolPrice * (1 + priceSensPct / 100)).toFixed(2)}/MWh
-                  </span>
-                </div>
-                <div className="flex items-center justify-between text-sm">
-                  <span className="text-muted-foreground">Scenario NPV</span>
-                  <span className={`font-mono font-bold ${sensRes.npv >= 0 ? "text-emerald-500" : "text-red-500"}`}>
-                    {money(sensRes.npv)}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between text-sm">
-                  <span className="text-muted-foreground">Δ vs base case</span>
-                  <span className={`font-mono ${sensDelta >= 0 ? "text-emerald-500" : "text-red-500"}`}>
-                    {sensDelta >= 0 ? "+" : ""}{money(sensDelta)}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between text-sm">
-                  <span className="text-muted-foreground">Scenario IRR</span>
-                  <span className="font-mono">
-                    {sensRes.projectIrr !== null ? `${(sensRes.projectIrr * 100).toFixed(1)}%` : "n/a"}
-                  </span>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader className="pb-3"><CardTitle className="text-sm">Risks not yet modelled</CardTitle></CardHeader>
-            <CardContent className="space-y-2 text-xs">
-              {[
-                ["Locational basis (today)", "Zero — Alberta settles at a uniform province-wide pool price.", "none"],
-                ["Locational basis (REM)", "Disabled until LMP scenarios exist. REM introduces nodal pricing ~2027.", "future"],
-                ["Curtailment", "Manual input above. Uncalibrated — no project-level allocation model yet.", "manual"],
-                ["Shape / capture risk", "Technology-weighted pool price. Refine with hourly generation once seeded.", "manual"],
-              ].map(([k, v, tag]) => (
-                <div key={k as string} className="flex gap-2">
-                  <span className={`shrink-0 mt-0.5 px-1.5 py-0.5 rounded text-[9px] font-medium ${
-                    tag === "future" ? "bg-muted text-muted-foreground"
-                    : tag === "none" ? "bg-emerald-500/15 text-emerald-600"
-                    : "bg-amber-500/15 text-amber-600"}`}>
-                    {tag === "future" ? "FUTURE" : tag === "none" ? "N/A" : "MANUAL"}
-                  </span>
-                  <div>
-                    <div className="font-medium">{k}</div>
-                    <div className="text-muted-foreground leading-tight">{v}</div>
+              {!pickerFuel && (
+                <div>
+                  <label className="block text-xs text-muted-foreground mb-1">Or pick a generic technology</label>
+                  <div className="flex gap-1.5 flex-wrap">
+                    {(Object.keys(TECH) as TechKey[]).map(k => (
+                      <button key={k} onClick={() => switchTech(k)}
+                        className={`px-2.5 py-1.5 rounded-md text-xs font-medium border transition-colors ${
+                          tech === k ? "bg-primary text-primary-foreground border-primary"
+                                     : "border-border text-muted-foreground hover:text-foreground"}`}>
+                        {TECH_META[k].emoji} {TECH[k].label}
+                      </button>
+                    ))}
                   </div>
                 </div>
-              ))}
+              )}
+
+              {pickedAsset && (
+                <div className="rounded-lg bg-muted/30 p-2.5 text-xs text-muted-foreground space-y-1">
+                  <div className="flex justify-between">
+                    <span>Measured capture rate</span>
+                    <span className="font-semibold text-foreground">
+                      {pickedAsset.capture_rate != null ? `${(pickedAsset.capture_rate * 100).toFixed(0)}%` : "—"}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Measured capacity factor</span>
+                    <span className="font-semibold text-foreground">
+                      {pickedAsset.capacity_factor != null ? `${(pickedAsset.capacity_factor * 100).toFixed(0)}%` : "—"}
+                    </span>
+                  </div>
+                  {pickedAsset.months_present < 12 && (
+                    <p className="text-amber-500">only {pickedAsset.months_present}/12 months metered</p>
+                  )}
+                </div>
+              )}
             </CardContent>
           </Card>
+
+          {/* ── Assumptions (collapsible) ── */}
+          <div className="rounded-lg border border-border bg-card overflow-hidden">
+            <button
+              className="w-full flex items-center justify-between px-4 py-3 text-xs font-semibold text-foreground/90 hover:bg-muted/40 transition-colors"
+              onClick={() => setAssumptionsExpanded(v => !v)}
+            >
+              <span className="flex items-center gap-1.5">
+                <Settings2 className="h-3.5 w-3.5 text-amber-400" />
+                Assumptions
+                <span className="text-muted-foreground font-normal">
+                  · CAPEX, production, opex, revenue
+                </span>
+              </span>
+              {assumptionsExpanded ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+            </button>
+
+            {assumptionsExpanded && (
+              <div className="px-4 pb-4 space-y-5 border-t border-border pt-3">
+                <div className="space-y-3">
+                  <h4 className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">CAPEX &amp; financing</h4>
+                  <NumField label="Capacity" value={i.mw} onChange={v => set("mw", v)} suffix="MW" />
+                  {isBess && (
+                    <NumField label="Duration" value={i.durationHrs} onChange={v => set("durationHrs", v)}
+                      suffix="hrs" step={0.5}
+                      hint="AESO's published battery cost does not state duration — enter yours. Alberta's Jurassic BESS is 80 MW / 160 MWh (2-hr)." />
+                  )}
+                  <div>
+                    <div className="flex items-baseline justify-between text-xs mb-1">
+                      <span className="text-muted-foreground">Gross CAPEX</span>
+                      <span className="font-semibold">C${i.grossCapexPerKw.toLocaleString()}/kW</span>
+                    </div>
+                    <Slider value={[i.grossCapexPerKw]} min={band[0]} max={band[2]} step={10}
+                            onValueChange={v => set("grossCapexPerKw", v[0])} />
+                    <div className="flex justify-between text-[10px] text-muted-foreground mt-1">
+                      <span>low {band[0]}</span><span>base {band[1]}</span><span>high {band[2]}</span>
+                    </div>
+                  </div>
+                  <NumField label="Clean Technology ITC" value={i.itcPct} onChange={v => set("itcPct", v)}
+                    suffix="%" hint={d.itcEligible ? "30% through 2033, 15% in 2034." : "Gas is not eligible — leave at 0."} />
+                  <NumField label="Project life" value={i.lifeYears} onChange={v => set("lifeYears", v)} suffix="yrs" />
+                </div>
+
+                <div className="space-y-3">
+                  <h4 className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Production</h4>
+                  <NumField label="Capacity factor" value={+(i.capacityFactor * 100).toFixed(1)}
+                    onChange={v => set("capacityFactor", v / 100)} suffix="%" step={0.5} />
+                  <NumField label="Availability" value={i.availabilityPct} onChange={v => set("availabilityPct", v)}
+                    suffix="%" hint={isGas ? `Gas outage assumption ~${OUTAGE_DERATE * 100}% forced + planned.` : undefined} />
+                  <NumField label="Curtailment / constraint" value={i.curtailmentPct}
+                    onChange={v => set("curtailmentPct", v)} suffix="%"
+                    hint="UNCALIBRATED screening input. MSA measured 561 GWh of constrained intermittent generation in Q1 2026, up ~250% year-over-year — do not assume zero." />
+                  <NumField label="Transmission loss factor" value={i.lossFactorPct}
+                    onChange={v => set("lossFactorPct", v)} suffix="%" step={0.5} />
+                  <NumField label="Annual degradation" value={i.degradationPctYr}
+                    onChange={v => set("degradationPctYr", v)} suffix="%/yr" step={0.05} />
+                </div>
+
+                <div className="space-y-3">
+                  <h4 className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Operating cost</h4>
+                  <NumField label="Fixed O&M" value={i.fixedOmPerKwYr} onChange={v => set("fixedOmPerKwYr", v)}
+                    suffix="C$/kW-yr" step={0.5} hint={`MSA ${d.label} baseline: C$${d.fixedOmPerKwYr}/kW-yr.`} />
+                  <NumField label="Other fixed costs" value={i.otherOpexPerKwYr}
+                    onChange={v => set("otherOpexPerKwYr", v)} suffix="C$/kW-yr" step={0.5}
+                    hint="Land lease, municipal property tax, insurance, asset management, regulatory compliance, reclamation reserve." />
+                  <NumField label="Variable O&M" value={i.variableOmPerMwh} onChange={v => set("variableOmPerMwh", v)}
+                    suffix="C$/MWh" step={0.1} />
+                  <NumField label="OPEX escalation" value={i.opexEscalationPct}
+                    onChange={v => set("opexEscalationPct", v)} suffix="%/yr" step={0.5} />
+                  {isGas && (
+                    <>
+                      <NumField label="AB-NIT gas price" value={i.gasPricePerGj} onChange={v => set("gasPricePerGj", v)}
+                        suffix="C$/GJ" step={0.1}
+                        hint={`Heat rate ${d.heatRateGjPerMwh} GJ/MWh → fuel C$${res.fuelPerMwh.toFixed(2)}/MWh.`} />
+                      <NumField label="Carbon price (TIER)" value={i.carbonPricePerT}
+                        onChange={v => set("carbonPricePerT", v)} suffix="C$/t" step={5}
+                        hint={`${EMISSIONS_T_PER_GJ} tCO2e/GJ → carbon C$${res.carbonPerMwh.toFixed(2)}/MWh.`} />
+                    </>
+                  )}
+                  <p className="text-[10px] text-muted-foreground">
+                    AESO trading charge of C${AESO_TRADING_CHARGE}/MWh is applied automatically.
+                  </p>
+                </div>
+
+                <div className="space-y-3">
+                  <h4 className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Revenue basis</h4>
+                  <NumField label="Alberta pool price" value={i.poolPrice} onChange={v => set("poolPrice", v)}
+                    suffix="C$/MWh" hint="Province-wide uniform price. Alberta has no locational basis today." />
+                  <NumField label="Capture rate" value={+(i.captureRate * 100).toFixed(0)}
+                    onChange={v => set("captureRate", v / 100)} suffix="%"
+                    hint={`Technology-weighted vs pool. ${d.label} screening default ${(d.captureRate * 100).toFixed(0)}%.`} />
+                  <NumField label="Price escalation" value={i.priceEscalationPct}
+                    onChange={v => set("priceEscalationPct", v)} suffix="%/yr" step={0.5} />
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* ── Contract Terms (always visible) ── */}
+          <div className="border-t border-border pt-4 space-y-4">
+            <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Contract Terms</h3>
+
+            <div>
+              <div className="flex justify-between text-xs mb-1">
+                <span className="text-muted-foreground">Strike price</span>
+                <span className="font-semibold text-primary">C${i.ppaStrike}/MWh</span>
+              </div>
+              <Slider value={[i.ppaStrike]} min={15} max={100} step={0.5}
+                onValueChange={v => set("ppaStrike", v[0])} />
+              <div className="flex justify-between text-[10px] text-muted-foreground"><span>$15</span><span>$100</span></div>
+            </div>
+
+            <div>
+              <div className="flex justify-between text-xs mb-1">
+                <span className="text-muted-foreground">Contract term</span>
+                <span className="font-semibold text-primary">{i.ppaTermYears} years</span>
+              </div>
+              <Slider value={[i.ppaTermYears]} min={5} max={25} step={1}
+                onValueChange={v => set("ppaTermYears", v[0])} />
+              <div className="flex justify-between text-[10px] text-muted-foreground"><span>5 yr</span><span>25 yr</span></div>
+            </div>
+
+            <div>
+              <div className="flex justify-between text-xs mb-1">
+                <span className="text-muted-foreground">WACC</span>
+                <span className="font-semibold text-amber-500">{i.wacc}%</span>
+              </div>
+              <Slider value={[i.wacc]} min={4} max={15} step={0.5}
+                onValueChange={v => set("wacc", v[0])} />
+              <div className="flex justify-between text-[10px] text-muted-foreground"><span>4%</span><span>15%</span></div>
+            </div>
+
+            <div>
+              <div className="flex justify-between text-xs mb-1">
+                <span className="text-muted-foreground">Price escalation</span>
+                <span className="font-semibold text-purple-400">{i.ppaEscalationPct}%/yr</span>
+              </div>
+              <Slider value={[i.ppaEscalationPct]} min={0} max={5} step={0.25}
+                onValueChange={v => set("ppaEscalationPct", v[0])} />
+              <div className="flex justify-between text-[10px] text-muted-foreground"><span>0%</span><span>5%/yr</span></div>
+            </div>
+
+            <div>
+              <div className="flex justify-between text-xs mb-1">
+                <span className="text-muted-foreground">Contracted share</span>
+                <span className="font-semibold text-teal-400">{i.contractedPct}%</span>
+              </div>
+              <Slider value={[i.contractedPct]} min={0} max={100} step={5}
+                onValueChange={v => set("contractedPct", v[0])} />
+              <div className="flex justify-between text-[10px] text-muted-foreground">
+                <span>0% merchant</span><span>100% contracted</span>
+              </div>
+            </div>
+          </div>
+
+          <button onClick={() => setHasComputed(true)}
+            className="w-full py-2.5 rounded-lg font-semibold text-sm bg-primary text-primary-foreground hover:opacity-90 transition-opacity flex items-center justify-center gap-2">
+            <DollarSign className="h-4 w-4" /> Compute NPV
+          </button>
+        </div>
+
+        {/* ── Right panel — results ────────────────────────────────────── */}
+        <div className="lg:col-span-2 space-y-5">
+          {!hasComputed && (
+            <div className="flex flex-col items-center justify-center h-72 bg-muted/20 border border-border border-dashed rounded-xl text-muted-foreground">
+              <DollarSign className="h-10 w-10 mb-3 opacity-30" />
+              <p className="text-sm">Pick a project (or a generic technology) and compute</p>
+              <p className="text-xs mt-2 text-center max-w-xs leading-relaxed">
+                Measured capture rate and capacity factor auto-populate from real AESO metered
+                data when you select a project.<br />Drag any assumption to stress-test before computing.
+              </p>
+            </div>
+          )}
+
+          {hasComputed && (
+            <>
+              {/* ── Project header ── */}
+              <Card>
+                <CardContent className="pt-4 pb-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <div>
+                      <p className="text-sm font-semibold">{projectLabel}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {TECH_META[tech].emoji} {d.label} · {i.mw} MW{pickedAsset ? " · real AESO asset" : " · generic"}
+                      </p>
+                    </div>
+                    <span className={`text-[10px] font-semibold px-2 py-1 rounded border ${
+                      d.itcEligible ? "text-teal-400 bg-teal-900/30 border-teal-700" : "text-slate-400 bg-slate-800 border-slate-600"
+                    }`}>
+                      {d.itcEligible ? `${i.itcPct}% ITC eligible` : "Not ITC-eligible (gas)"}
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-3 md:grid-cols-6 gap-3">
+                    {[
+                      { label: "Gross Gen",     value: `${(volumeWaterfall.nameplateAdj / 1000).toFixed(0)} GWh/yr` },
+                      { label: "Delivered",     value: `${(volumeWaterfall.delivered / 1000).toFixed(0)} GWh/yr` },
+                      { label: "Strike",        value: `C$${i.ppaStrike}/MWh` },
+                      { label: "Blended price", value: `C$${priceWaterfall.blendedPrice.toFixed(2)}/MWh` },
+                      { label: "Breakeven",     value: `C$${res.breakeven.toFixed(1)}/MWh` },
+                      { label: "Term / WACC",   value: `${i.ppaTermYears} yr / ${i.wacc}%` },
+                    ].map(({ label, value }) => (
+                      <div key={label}>
+                        <p className="text-[10px] text-muted-foreground">{label}</p>
+                        <p className="text-xs font-medium">{value}</p>
+                      </div>
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
+
+              {/* ── Price waterfall + Volume waterfall ── */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <Card>
+                  <CardContent className="pt-4 pb-4">
+                    <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Revenue Build-Up ($/MWh, year 1)</h3>
+                    <WaterfallRow label="Alberta pool price" value={`C$${priceWaterfall.poolPrice.toFixed(2)}`} />
+                    <WaterfallRow label={`× Capture Rate (${(priceWaterfall.captureRate * 100).toFixed(0)}%)`}
+                      value={`C$${priceWaterfall.merchant.toFixed(2)}`} note="merchant price" indent />
+                    <WaterfallRow label={`Blend with Strike (${(priceWaterfall.contractedPct * 100).toFixed(0)}% contracted)`}
+                      value={`C$${priceWaterfall.blendedPrice.toFixed(2)}`} note="weighted avg" indent />
+                    <WaterfallRow label="vs Strike" value={`C$${i.ppaStrike.toFixed(2)}`} highlight />
+                    <WaterfallRow
+                      label="Net $/MWh"
+                      value={`${(priceWaterfall.blendedPrice - i.ppaStrike) >= 0 ? "+" : ""}C$${(priceWaterfall.blendedPrice - i.ppaStrike).toFixed(2)}`}
+                      highlight
+                    />
+                  </CardContent>
+                </Card>
+
+                <Card>
+                  <CardContent className="pt-4 pb-4">
+                    <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Volume Waterfall (GWh/yr, year 1)</h3>
+                    <WaterfallRow label="Expected generation (nameplate × CF)"
+                      value={`${(volumeWaterfall.nameplateAdj / 1000).toFixed(1)} GWh`} />
+                    <WaterfallRow label={`− Curtailment (${i.curtailmentPct.toFixed(1)}%)`}
+                      value={`−${(volumeWaterfall.curtailmentLoss / 1000).toFixed(1)} GWh`} indent />
+                    <WaterfallRow label="After curtailment"
+                      value={`${(volumeWaterfall.afterCurtailment / 1000).toFixed(1)} GWh`} indent />
+                    <WaterfallRow label={`× Availability (${i.availabilityPct.toFixed(1)}%)`}
+                      value={`−${(volumeWaterfall.availabilityLoss / 1000).toFixed(1)} GWh`} indent />
+                    <WaterfallRow label="Delivered volume"
+                      value={`${(volumeWaterfall.delivered / 1000).toFixed(1)} GWh`} highlight />
+                  </CardContent>
+                </Card>
+              </div>
+
+              {/* ── P10/P50/P90 scenario cards ── */}
+              <div className="grid grid-cols-3 gap-3">
+                <ScenarioCard label="Low pool price (−25%)" npv={bands.p10} k="p10" />
+                <ScenarioCard label="Base case" npv={bands.p50} k="p50" />
+                <ScenarioCard label="High pool price (+25%)" npv={bands.p90} k="p90" />
+              </div>
+
+              {/* ── KPI row ── */}
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                <Kpi label={mode === "project" ? "Project NPV" : "Settlement NPV"}
+                     value={money(res.npv)} tone={res.npv >= 0 ? "good" : "bad"}
+                     sub={`at ${i.wacc}% WACC, ${i.lifeYears}-yr life`} />
+                <Kpi label="Project IRR"
+                     value={res.projectIrr !== null ? `${(res.projectIrr * 100).toFixed(1)}%` : "n/a"}
+                     tone={res.projectIrr !== null && res.projectIrr * 100 >= i.wacc ? "good" : "bad"}
+                     sub={res.projectIrr === null ? "no sign change in cashflows" : `vs ${i.wacc}% hurdle`} />
+                <Kpi label="Gross CAPEX" value={money(res.grossCapex)}
+                     sub={`ITC ${money(res.itcValue)} → net ${money(res.netCapex)}`} />
+                <Kpi label="Payback"
+                     value={res.paybackYear ? `${res.paybackYear} yrs` : "beyond life"}
+                     sub="undiscounted, from COD" />
+              </div>
+
+              {/* ── Cashflow chart ── */}
+              <Card>
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-sm">Cashflow profile (C$M)</CardTitle>
+                </CardHeader>
+                <CardContent className="h-72">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={cashflowData}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+                      <XAxis dataKey="year" stroke="hsl(var(--muted-foreground))" fontSize={11} />
+                      <YAxis stroke="hsl(var(--muted-foreground))" fontSize={11}
+                             tickFormatter={(v) => `${v}M`} />
+                      <Tooltip
+                        contentStyle={{ backgroundColor: "hsl(var(--popover))", borderColor: "hsl(var(--border))" }}
+                        formatter={(v: number) => `C$${v}M`} />
+                      <Legend wrapperStyle={{ fontSize: 11 }} />
+                      <ReferenceLine y={0} stroke="hsl(var(--muted-foreground))" />
+                      <Line type="monotone" dataKey="ebitda" name="Annual EBITDA"
+                            stroke="hsl(var(--primary))" strokeWidth={2} dot={false} />
+                      <Line type="monotone" dataKey="cumulative" name="Cumulative"
+                            stroke="hsl(var(--chart-2, var(--muted-foreground)))" strokeWidth={2}
+                            strokeDasharray="4 3" dot={false} />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </CardContent>
+              </Card>
+
+              {/* ── AESO-specific extras (no ERCOT equivalent) ── */}
+              <div className="grid lg:grid-cols-2 gap-4">
+                <Card>
+                  <CardHeader className="pb-3"><CardTitle className="text-sm">Sensitivity (±20%)</CardTitle></CardHeader>
+                  <CardContent className="h-64">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={tornado} layout="vertical"
+                                margin={{ left: 10, right: 10, top: 5, bottom: 5 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" horizontal={false} />
+                        <XAxis type="number" stroke="hsl(var(--muted-foreground))" fontSize={10}
+                               tickFormatter={(v) => `${(v / 1e6).toFixed(0)}M`} />
+                        <YAxis type="category" dataKey="name" width={95}
+                               stroke="hsl(var(--muted-foreground))" fontSize={10} />
+                        <Tooltip
+                          contentStyle={{ backgroundColor: "hsl(var(--popover))", borderColor: "hsl(var(--border))" }}
+                          formatter={(v: number) => money(v)} />
+                        <ReferenceLine x={0} stroke="hsl(var(--muted-foreground))" />
+                        <Bar dataKey="low" fill="hsl(var(--destructive))" />
+                        <Bar dataKey="high" fill="hsl(var(--primary))" />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </CardContent>
+                </Card>
+
+                <Card>
+                  <CardHeader className="pb-3"><CardTitle className="text-sm">Risks not yet modelled</CardTitle></CardHeader>
+                  <CardContent className="space-y-2 text-xs">
+                    {[
+                      ["Locational basis (today)", "Zero — Alberta settles at a uniform province-wide pool price.", "none"],
+                      ["Locational basis (REM)", "Disabled until LMP scenarios exist. REM introduces nodal pricing ~2027.", "future"],
+                      ["Curtailment", "Manual input above. Uncalibrated — no project-level allocation model yet.", "manual"],
+                      ["Shape / capture risk", "Technology-weighted pool price. Refine with hourly generation once seeded.", "manual"],
+                    ].map(([k, v, tag]) => (
+                      <div key={k as string} className="flex gap-2">
+                        <span className={`shrink-0 mt-0.5 px-1.5 py-0.5 rounded text-[9px] font-medium ${
+                          tag === "future" ? "bg-muted text-muted-foreground"
+                          : tag === "none" ? "bg-emerald-500/15 text-emerald-600"
+                          : "bg-amber-500/15 text-amber-600"}`}>
+                          {tag === "future" ? "FUTURE" : tag === "none" ? "N/A" : "MANUAL"}
+                        </span>
+                        <div>
+                          <div className="font-medium">{k}</div>
+                          <div className="text-muted-foreground leading-tight">{v}</div>
+                        </div>
+                      </div>
+                    ))}
+                  </CardContent>
+                </Card>
+              </div>
+
+              <Card className="border-primary/30">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-sm">Price sensitivity — live scrubber</CardTitle>
+                  <p className="text-xs text-muted-foreground">
+                    Drag to move the Alberta pool price ±30% and watch NPV recompute in real time.
+                    No forward curve backs this — Alberta has no free public power or AB-NIT gas
+                    forward source comparable to ERCOT's Henry Hub strip, so this is a pure
+                    what-if against your entered pool price, not a probability-weighted forecast.
+                  </p>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div>
+                    <div className="flex items-baseline justify-between text-xs mb-1">
+                      <span className="text-muted-foreground">Pool price adjustment</span>
+                      <span className={`font-semibold ${priceSensPct > 0 ? "text-emerald-500" : priceSensPct < 0 ? "text-red-500" : ""}`}>
+                        {priceSensPct > 0 ? "+" : ""}{priceSensPct}%
+                      </span>
+                    </div>
+                    <Slider value={[priceSensPct]} min={-30} max={30} step={1}
+                            onValueChange={(v) => setPriceSensPct(v[0])} />
+                    <div className="flex justify-between text-[10px] text-muted-foreground mt-1">
+                      <span>−30%</span><span>base ${i.poolPrice}/MWh</span><span>+30%</span>
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg bg-muted/30 p-3 space-y-2">
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-muted-foreground">Scenario pool price</span>
+                      <span className="font-mono font-medium">
+                        C${(i.poolPrice * (1 + priceSensPct / 100)).toFixed(2)}/MWh
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-muted-foreground">Scenario NPV</span>
+                      <span className={`font-mono font-bold ${sensRes.npv >= 0 ? "text-emerald-500" : "text-red-500"}`}>
+                        {money(sensRes.npv)}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-muted-foreground">Δ vs base case</span>
+                      <span className={`font-mono ${sensDelta >= 0 ? "text-emerald-500" : "text-red-500"}`}>
+                        {sensDelta >= 0 ? "+" : ""}{money(sensDelta)}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-muted-foreground">Scenario IRR</span>
+                      <span className="font-mono">
+                        {sensRes.projectIrr !== null ? `${(sensRes.projectIrr * 100).toFixed(1)}%` : "n/a"}
+                      </span>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            </>
+          )}
         </div>
       </div>
-
-      {/* Cashflow */}
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="text-sm">Cashflow profile (C$M)</CardTitle>
-        </CardHeader>
-        <CardContent className="h-72">
-          <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={cashflowData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-              <XAxis dataKey="year" stroke="hsl(var(--muted-foreground))" fontSize={11} />
-              <YAxis stroke="hsl(var(--muted-foreground))" fontSize={11}
-                     tickFormatter={(v) => `${v}M`} />
-              <Tooltip
-                contentStyle={{ backgroundColor: "hsl(var(--popover))", borderColor: "hsl(var(--border))" }}
-                formatter={(v: number) => `C$${v}M`} />
-              <Legend wrapperStyle={{ fontSize: 11 }} />
-              <ReferenceLine y={0} stroke="hsl(var(--muted-foreground))" />
-              <Line type="monotone" dataKey="ebitda" name="Annual EBITDA"
-                    stroke="hsl(var(--primary))" strokeWidth={2} dot={false} />
-              <Line type="monotone" dataKey="cumulative" name="Cumulative"
-                    stroke="hsl(var(--chart-2, var(--muted-foreground)))" strokeWidth={2}
-                    strokeDasharray="4 3" dot={false} />
-            </LineChart>
-          </ResponsiveContainer>
-        </CardContent>
-      </Card>
 
       {/* ── Project Development Cost Reference ──────────────────────────────
           Mirrors the ERCOT platform's card grid (ppa-calculator.tsx
@@ -862,9 +1090,9 @@ export default function NpvCalculator() {
           {(Object.keys(TECH) as TechKey[]).map((k) => {
             const b = TECH[k];
             const meta = TECH_META[k];
-            const band = CAPEX_BANDS[k];
-            const totalLo = (band[0] * costRefMw * 1000 / 1_000_000).toFixed(0);
-            const totalHi = (band[2] * costRefMw * 1000 / 1_000_000).toFixed(0);
+            const bandK = CAPEX_BANDS[k];
+            const totalLo = (bandK[0] * costRefMw * 1000 / 1_000_000).toFixed(0);
+            const totalHi = (bandK[2] * costRefMw * 1000 / 1_000_000).toFixed(0);
             const omLo = (b.fixedOmPerKwYr * costRefMw * 1000 / 1_000_000).toFixed(1);
 
             return (
@@ -883,7 +1111,7 @@ export default function NpvCalculator() {
                   </p>
                   <p className="text-lg font-bold font-mono">${totalLo}M – ${totalHi}M</p>
                   <p className="text-[10px] text-muted-foreground">
-                    ${band[0].toLocaleString()}–${band[2].toLocaleString()}/kW · base ${band[1].toLocaleString()}/kW
+                    ${bandK[0].toLocaleString()}–${bandK[2].toLocaleString()}/kW · base ${bandK[1].toLocaleString()}/kW
                   </p>
                 </div>
 
