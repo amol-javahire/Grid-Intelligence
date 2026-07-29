@@ -41,38 +41,37 @@ const DIMENSIONS: Dim[] = [
     hint: "Connection Project List stage, AUC approval, LTA inclusion. Awaiting the Connection Project List ingestion." },
   { key: "maturity",  label: "Development maturity", weight: 6, status: "nodata",
     hint: "Time in queue and energization probability. Awaiting the Connection Project List ingestion." },
-  { key: "constraint",label: "Constraint exposure", weight: 10, status: "proxy",
-    hint: "UNCALIBRATED. MSA measured 561 GWh of constrained intermittent generation in Q1 2026 (up ~250% YoY), but there is no published project-level allocation. Applied as a technology-level proxy." },
-  { key: "rem",       label: "REM transition risk", weight: 5, status: "proxy",
-    hint: "FORWARD-LOOKING PROXY, not a measurement. Exposure to 2027 nodal repricing, inferred from region and technology. No LMP scenarios exist yet." },
+  { key: "constraint",label: "Constraint exposure", weight: 12, status: "proxy",
+    hint: "UNCALIBRATED. MSA measured 561 GWh of constrained intermittent generation in Q1 2026 (up ~250% YoY), but there is no published project-level allocation. Applied as a technology-level proxy — will become location-based once asset geolocation + AESO transmission data are ingested." },
 ];
+// REMOVED 2026-07: "REM transition risk" (was 5%). Under REM every unit is
+// exposed to nodal LMP, so a dimension that scores relative REM exposure does
+// not discriminate between assets — it was adding weight without adding signal.
+// Its 5% was reallocated: +2 to constraint (the real locational risk), +3 to
+// capture. The "REM readiness" objective preset was removed for the same reason.
 
 // Objective presets reweight the dimensions — same interaction model as ERCOT,
 // different dimension set.
 const OBJECTIVES: Record<string, { label: string; blurb: string; w: Record<string, number> }> = {
   balanced: {
     label: "Risk-adjusted value", blurb: "Balanced default",
-    w: { capture: 25, revenue: 15, carbon: 15, capacity: 12, queue: 12, maturity: 6, constraint: 10, rem: 5 },
+    w: { capture: 28, revenue: 15, carbon: 15, capacity: 12, queue: 12, maturity: 6, constraint: 12 },
   },
   merchant: {
     label: "Merchant upside", blurb: "Uncontracted / trading",
-    w: { capture: 35, revenue: 25, carbon: 8, capacity: 10, queue: 5, maturity: 2, constraint: 12, rem: 3 },
+    w: { capture: 38, revenue: 25, carbon: 8, capacity: 10, queue: 5, maturity: 2, constraint: 12 },
   },
   decarb: {
     label: "Decarbonisation", blurb: "Scope 2 / emissions target",
-    w: { capture: 15, revenue: 10, carbon: 35, capacity: 12, queue: 10, maturity: 5, constraint: 10, rem: 3 },
+    w: { capture: 18, revenue: 10, carbon: 35, capacity: 12, queue: 10, maturity: 5, constraint: 10 },
   },
   hedge: {
     label: "Corporate load hedge", blurb: "Matching a load shape",
-    w: { capture: 30, revenue: 12, carbon: 10, capacity: 15, queue: 10, maturity: 5, constraint: 15, rem: 3 },
+    w: { capture: 33, revenue: 12, carbon: 10, capacity: 15, queue: 10, maturity: 5, constraint: 15 },
   },
   buildout: {
     label: "Development pipeline", blurb: "Greenfield / queue focus",
-    w: { capture: 12, revenue: 8, carbon: 10, capacity: 12, queue: 30, maturity: 18, constraint: 7, rem: 3 },
-  },
-  remready: {
-    label: "REM readiness", blurb: "Positioning for 2027 nodal",
-    w: { capture: 20, revenue: 10, carbon: 12, capacity: 12, queue: 12, maturity: 6, constraint: 13, rem: 15 },
+    w: { capture: 15, revenue: 8, carbon: 10, capacity: 12, queue: 30, maturity: 18, constraint: 7 },
   },
 };
 
@@ -120,12 +119,6 @@ const CONSTRAINT_PROXY: Record<string, number> = {
   gas: 90, cogeneration: 92, coal: 88, dual_fuel: 88, other: 75,
 };
 
-// REM transition proxy — intermittent assets face the most nodal repricing risk.
-const REM_PROXY: Record<string, number> = {
-  wind: 40, solar: 45, storage: 75, hydro: 70,
-  gas: 65, cogeneration: 60, coal: 55, dual_fuel: 60, other: 60,
-};
-
 function scoreAsset(a: Asset, refPool: number | null) {
   const fk = fuelKey(a.fuel_type);
   const mw = a.max_capability_mw ?? 0;
@@ -144,13 +137,12 @@ function scoreAsset(a: Asset, refPool: number | null) {
   const carbon = CARBON_SCORE[fk] ?? 60;
   const capacity = mw > 0 ? Math.max(0, Math.min(100, (Math.log10(mw + 1) / 3) * 100)) : null;
   const constraint = CONSTRAINT_PROXY[fk] ?? 75;
-  const rem = REM_PROXY[fk] ?? 60;
 
   return {
     capture, revenue, carbon, capacity,
     queue: null as number | null,      // awaiting Connection Project List
     maturity: null as number | null,   // awaiting Connection Project List
-    constraint, rem, captureRate,
+    constraint, captureRate,
   };
 }
 
@@ -221,7 +213,7 @@ export default function AesoRankings() {
       <div>
         <h1 className="text-3xl font-bold tracking-tight">Asset Rankings</h1>
         <p className="text-muted-foreground text-sm mt-1">
-          Alberta generation assets scored on eight dimensions. Alberta settles at a single
+          Alberta generation assets scored on seven dimensions. Alberta settles at a single
           province-wide pool price — nodal basis and locational congestion do not exist here
           until REM go-live, so those ERCOT dimensions are deliberately absent.
         </p>
@@ -383,10 +375,21 @@ export default function AesoRankings() {
       <p className="text-[11px] text-muted-foreground leading-relaxed">
         <strong>Methodology.</strong> Capture rate is generation-weighted metered output against the
         Alberta pool price, divided by the system average over the same window — both from AESO API
-        data. Carbon exposure reflects TIER compliance cost by fuel. Constraint exposure and REM
-        transition risk are disclosed proxies applied at technology level, not per-asset
-        measurements. Queue and maturity dimensions await the AESO Connection Project List
-        ingestion. This is a screening tool for origination triage, not an investment recommendation.
+        data. Carbon exposure reflects TIER compliance cost by fuel. Constraint exposure is a
+        disclosed proxy applied at technology level, not a per-asset measurement — it becomes
+        location-based once asset geolocation and AESO transmission data are ingested. Queue and
+        maturity dimensions await the AESO Connection Project List ingestion.
+        <br /><br />
+        <strong>On the weights.</strong> These are our own judgment, not an AESO or industry
+        standard — there is no published Alberta weighting to defer to. The reasoning: capture rate
+        carries the most weight because in a single-price market it is the only per-asset economic
+        signal that varies; revenue scale and carbon are next because both are measured from real
+        data and both move a procurement decision; capacity is deliberately modest because Alberta
+        is energy-only, so MW earns no capacity payment; queue and maturity are held as placeholders
+        so their weight isn't silently redistributed once real Connection Project List data lands.
+        A dimension with no data is excluded from both numerator and denominator rather than scored
+        zero. Use the objective presets to reweight — the ranking is only as good as the weighting
+        you choose. This is a screening tool for origination triage, not an investment recommendation.
       </p>
     </div>
   );

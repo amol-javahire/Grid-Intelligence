@@ -4,6 +4,7 @@ import { useGetAesoSupplyDemand, useGetAesoSupplyDemandStats } from "@workspace/
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
+import { RefreshCw } from "lucide-react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 
 // ─── CSD types ────────────────────────────────────────────────────────────────
@@ -313,19 +314,37 @@ function HistoricalView() {
 export default function SupplyDemand() {
   const [tab, setTab] = useState<"csd" | "historical">("csd");
 
-  const { data: csdData, isLoading: isCsdLoading } = useQuery<CsdData>({
-    queryKey: ["aeso-csd"],
-    queryFn: () => fetch("/api/aeso/csd").then((r) => r.json()),
-    staleTime: 2 * 60 * 1000,
-    refetchInterval: 5 * 60 * 1000,
-    enabled: tab === "csd",
-  });
+  const { data: csdData, isLoading: isCsdLoading, isFetching: isCsdFetching, dataUpdatedAt, refetch: refetchCsd } =
+    useQuery<CsdData>({
+      queryKey: ["aeso-csd"],
+      queryFn: () => fetch("/api/aeso/csd").then((r) => r.json()),
+      staleTime: 2 * 60 * 1000,
+      refetchInterval: 5 * 60 * 1000,
+      enabled: tab === "csd",
+    });
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-3xl font-bold tracking-tight">Supply &amp; Demand</h1>
-        <p className="text-muted-foreground text-sm mt-1">Live CSD report and historical AIL/capacity data</p>
+      <div className="flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight">CSD — Current Supply &amp; Demand</h1>
+          <p className="text-muted-foreground text-sm mt-1">
+            Live AESO CSD report and historical AIL/capacity data
+          </p>
+        </div>
+        {tab === "csd" && (
+          <div className="flex items-center gap-3 shrink-0">
+            {dataUpdatedAt > 0 && (
+              <span className="text-xs text-muted-foreground">
+                Updated {new Date(dataUpdatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+              </span>
+            )}
+            <Button variant="outline" size="sm" onClick={() => void refetchCsd()} disabled={isCsdFetching}>
+              <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${isCsdFetching ? "animate-spin" : ""}`} />
+              {isCsdFetching ? "Refreshing…" : "Refresh"}
+            </Button>
+          </div>
+        )}
       </div>
 
       <div className="flex gap-2">

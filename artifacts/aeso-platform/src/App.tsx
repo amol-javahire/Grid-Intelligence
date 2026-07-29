@@ -35,6 +35,8 @@ function Router() {
         <Route path="/generation" component={Generation} />
         <Route path="/generation-stack" component={GenerationStack} />
         <Route path="/aeco-gas" component={AecoGas} />
+        <Route path="/csd" component={SupplyDemand} />
+        {/* Legacy path kept so old links/bookmarks don't 404 */}
         <Route path="/supply-demand" component={SupplyDemand} />
         <Route path="/outages" component={Outages} />
         <Route path="/7day-capacity" component={SevenDayCapacity} />

@@ -120,6 +120,78 @@ const TECH_META: Record<TechKey, { emoji: string; color: string }> = {
   scgt:  { emoji: "🔥", color: "border-red-500/40 bg-red-900/10" },
 };
 
+/* ── Alberta soft-cost benchmarks ─────────────────────────────────────────
+   These four line items were previously shown as "NOT SOURCED". They now
+   carry real Alberta figures. Provenance for each is explicit — some are
+   published, one is derived, one is structurally unavailable.
+
+   INTERCONNECTION — Alberta is structurally different from ERCOT and this
+   matters for valuation. There is no open-ended "network upgrade" bill: the
+   AESO ISO Tariff Generating Unit Owner's Contribution (GUOC) is a fixed
+   per-MW contribution set by planning region, ranging C$10,000-50,000/MW
+   (= C$10-50/kW) under section 29 of the Transmission Regulation. It is
+   ALSO refundable over nine years against performance criteria (5.6%/yr
+   years 1-4, 11.2% year 5, 16.6%/yr years 6-9 = 100% if the unit performs).
+   ERCOT interconnection ($20-140/kW, non-refundable) is not comparable.
+   A construction contribution under ISO Tariff s.8 can apply on top for
+   project-specific facilities — that IS site-specific and not benchmarkable.
+
+   PROPERTY TAX — derived, not published per-MW. BRC-Canada reports Alberta
+   municipalities collected C$70M in 2025 from 37 solar + 49 wind projects.
+   Dividing by the operating wind+solar fleet in our own CSD registry
+   (5,684 MW wind + 1,870 MW solar = 7,554 MW) gives ~C$9.3/kW-yr. Treat as
+   an order-of-magnitude planning figure: mill rates vary by county and the
+   BRC project count doesn't map exactly onto the CSD fleet.
+
+   DECOMMISSIONING — Alberta MANDATES reclamation security for wind/solar
+   (Conservation and Reclamation Regulation, effective 2025-01-01) but
+   publishes NO $/MW figure: the Code of Practice requires a qualified
+   third party to produce a project-specific estimate. So the schedule is
+   knowable and the amount is not. Post-2025 AUC approvals post 30% of the
+   estimate at registration and 60% at year 15 (pre-2025 projects: 15% /
+   60%). Landowner-negotiated security is an alternative to GoA-held
+   security, with AUC adequacy review for new projects.
+
+   INSURANCE — no Alberta-specific published benchmark found. Left explicitly
+   unsourced rather than importing a US figure and implying it's Alberta. */
+const SOFT_COSTS: Record<TechKey, {
+  landNote: string;
+  interconnNote: string;
+  propertyTaxNote: string;
+  decommNote: string;
+}> = {
+  wind: {
+    landNote: "C$600–1,200/acre-yr lease · turbines sited on working farmland (BRC-Canada 2025)",
+    interconnNote: "GUOC C$10–50/kW by planning region · refundable over 9 yrs on performance",
+    propertyTaxNote: "~C$9.3/kW-yr derived (BRC-Canada C$70M ÷ 7,554 MW AB wind+solar fleet)",
+    decommNote: "Third-party estimate required · 30% security at registration, 60% at yr 15",
+  },
+  solar: {
+    landNote: "C$600–1,200/acre-yr lease · ~5–8 acres/MW typical single-axis (BRC-Canada 2025)",
+    interconnNote: "GUOC C$10–50/kW by planning region · refundable over 9 yrs on performance",
+    propertyTaxNote: "~C$9.3/kW-yr derived (BRC-Canada C$70M ÷ 7,554 MW AB wind+solar fleet)",
+    decommNote: "Third-party estimate required · 30% security at registration, 60% at yr 15",
+  },
+  bess: {
+    landNote: "Small footprint (<1 acre/MW) — land is not a material cost driver",
+    interconnNote: "GUOC C$10–50/kW by planning region · refundable over 9 yrs on performance",
+    propertyTaxNote: "Not separately reported by BRC-Canada (wind/solar only)",
+    decommNote: "NOT in the wind/solar reclamation-security regime — no AB storage rule",
+  },
+  ccgt: {
+    landNote: "Owned freehold industrial site — not a lease-rate benchmark",
+    interconnNote: "GUOC C$10–50/kW by planning region · refundable over 9 yrs on performance",
+    propertyTaxNote: "Designated industrial property — provincially assessed, not in BRC data",
+    decommNote: "NOT in the wind/solar reclamation-security regime — different AB regime",
+  },
+  scgt: {
+    landNote: "Owned freehold industrial site — not a lease-rate benchmark",
+    interconnNote: "GUOC C$10–50/kW by planning region · refundable over 9 yrs on performance",
+    propertyTaxNote: "Designated industrial property — provincially assessed, not in BRC data",
+    decommNote: "NOT in the wind/solar reclamation-security regime — different AB regime",
+  },
+};
+
 // Maps a CSD fuel_type onto the nearest cost model. HYDRO, COGENERATION, GAS
 // FIRED STEAM and OTHER have no dedicated Alberta cost model yet — assets in
 // those fuels are excluded from the project picker rather than silently
@@ -546,9 +618,9 @@ export default function NpvCalculator() {
     <div className="space-y-6">
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">Project Economics &amp; NPV</h1>
+          <h1 className="text-3xl font-bold tracking-tight">DCF Valuation</h1>
           <p className="text-muted-foreground text-sm mt-1">
-            Alberta project investment analysis — pick a real project or model a generic technology.
+            Discounted cash flow over the asset life — pick a real Alberta project or model a generic technology.
           </p>
         </div>
         <div className="flex gap-1 bg-muted p-1 rounded-lg">
@@ -1135,14 +1207,27 @@ export default function NpvCalculator() {
                       {b.itcEligible ? `${b.defaultItcPct}% Clean Technology ITC through 2033` : "Not eligible (gas)"}
                     </span>
                   </div>
-                  {(["Land", "Interconnection", "Insurance", "Decommissioning"] as const).map((label) => (
+                  {([
+                    ["Land", SOFT_COSTS[k].landNote, "sourced"],
+                    ["Interconnect", SOFT_COSTS[k].interconnNote, "sourced"],
+                    ["Property tax", SOFT_COSTS[k].propertyTaxNote, k === "wind" || k === "solar" ? "derived" : "na"],
+                    ["Decommission", SOFT_COSTS[k].decommNote, k === "wind" || k === "solar" ? "schedule" : "na"],
+                    ["Insurance", "No Alberta-specific published benchmark found — not estimated from US figures", "unsourced"],
+                  ] as const).map(([label, note, tag]) => (
                     <div key={label} className="flex gap-2">
                       <span className="text-muted-foreground w-24 shrink-0 leading-snug">{label}</span>
-                      <span className="leading-snug flex items-center gap-1.5">
-                        <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-muted text-muted-foreground">
-                          NOT SOURCED
+                      <span className="leading-snug flex items-start gap-1.5 flex-wrap">
+                        <span className={`px-1.5 py-0.5 rounded text-[9px] font-semibold shrink-0 ${
+                          tag === "sourced"   ? "bg-teal-500/15 text-teal-400"
+                          : tag === "derived" ? "bg-sky-500/15 text-sky-400"
+                          : tag === "schedule"? "bg-amber-500/15 text-amber-500"
+                          : tag === "na"      ? "bg-muted text-muted-foreground"
+                          :                     "bg-muted text-muted-foreground"
+                        }`}>
+                          {tag === "sourced" ? "SOURCED" : tag === "derived" ? "DERIVED"
+                           : tag === "schedule" ? "RULE ONLY" : tag === "na" ? "N/A" : "UNSOURCED"}
                         </span>
-                        <span className="text-muted-foreground">Alberta-specific figure not yet available</span>
+                        <span className="text-muted-foreground">{note}</span>
                       </span>
                     </div>
                   ))}
@@ -1158,11 +1243,32 @@ export default function NpvCalculator() {
           })}
         </div>
 
-        <p className="mt-4 text-[10px] text-muted-foreground">
-          CAPEX bands are screening ranges, not EPC quotes. Land, interconnection, insurance and
-          decommissioning are deliberately left unfilled rather than estimated from non-Alberta
-          benchmarks — get in touch if you have sourced figures for these four line items.
-        </p>
+        <div className="mt-4 space-y-2 text-[10px] text-muted-foreground leading-relaxed">
+          <p>
+            <strong className="text-foreground">Interconnection is the big Alberta-vs-ERCOT difference.</strong>{" "}
+            Alberta does not bill open-ended network upgrades to the generator. The AESO ISO Tariff
+            Generating Unit Owner's Contribution is a fixed per-MW charge by planning region —
+            C$10,000–50,000/MW under s.29 of the Transmission Regulation — and it is{" "}
+            <em>refundable over nine years</em> against performance criteria (5.6%/yr yrs 1–4, 11.2%
+            yr 5, 16.6%/yr yrs 6–9). A separate construction contribution (ISO Tariff s.8) can apply
+            for project-specific facilities and is genuinely site-specific. ERCOT's
+            $20–140/kW non-refundable interconnection is not an apples-to-apples comparison.
+          </p>
+          <p>
+            <strong className="text-foreground">Decommissioning is a rule, not a number.</strong>{" "}
+            Alberta mandates reclamation security for wind and solar (Conservation and Reclamation
+            Regulation, in force 2025-01-01) but publishes no $/MW figure — the Code of Practice
+            requires a project-specific estimate from a qualified third party. The posting schedule
+            is knowable (30% at registration / 60% at year 15 for post-2025 AUC approvals; 15% / 60%
+            for existing projects); the amount is not. Battery storage and gas are not in this regime.
+          </p>
+          <p>
+            Sources: <a className="underline" href="https://businessrenewables.ca/news/mtr-2025" target="_blank" rel="noreferrer">BRC-Canada 2025 municipal tax revenue</a> ·{" "}
+            <a className="underline" href="https://www.aeso.ca/assets/documents/Section-10-Generating-Unit-Owners-Contribution.pdf" target="_blank" rel="noreferrer">AESO ISO Tariff GUOC</a> ·{" "}
+            <a className="underline" href="https://www.alberta.ca/system/files/eps-fact-sheet-reclamation-security-solar-and-wind-renewable-energy-operations.pdf" target="_blank" rel="noreferrer">GoA reclamation security fact sheet</a>.
+            CAPEX bands remain screening ranges, not EPC quotes.
+          </p>
+        </div>
       </div>
 
       <p className="text-[11px] text-muted-foreground leading-relaxed">
