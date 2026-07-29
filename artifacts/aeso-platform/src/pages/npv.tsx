@@ -7,8 +7,12 @@ import {
   ReferenceLine, LineChart, Line, Legend,
 } from "recharts";
 import {
-  ChevronDown, ChevronUp, Settings2, DollarSign, TrendingUp, TrendingDown, Minus,
+  ChevronDown, ChevronUp, Settings2, DollarSign, TrendingUp, TrendingDown, Minus, Zap,
 } from "lucide-react";
+import {
+  buildCurvePath, curveStripAverage, TC_FORWARD_SOURCE, TC_FORWARD_URL,
+  CURVE_LAST_YEAR, type CurveYear,
+} from "@/lib/alberta-forward-curve";
 
 /* ══════════════════════════════════════════════════════════════════════════
    Alberta project economics calculator.
@@ -260,12 +264,20 @@ interface Inputs {
   ppaEscalationPct: number;
   ppaTermYears: number;
   contractedPct: number;
+  // Forward-curve mode
+  useForwardCurve: boolean;
+  codYear: number;
+  postCurveEscalationPct: number;
 }
 
 interface YearRow {
   year: number;
+  calendarYear: number;
   mwh: number;
   price: number;
+  poolPrice: number;      // the pool price actually used this year
+  gasPerGj: number;       // the gas price actually used this year
+  curveObserved: boolean; // true = inside the published forward curve
   revenue: number;
   opex: number;
   ebitda: number;
@@ -282,10 +294,15 @@ function runModel(i: Inputs) {
   const itcValue = grossCapex * (i.itcPct / 100);
   const netCapex = grossCapex - itcValue;
 
-  // Gas fuel + carbon, per MWh
-  const fuelPerMwh = t.heatRateGjPerMwh ? t.heatRateGjPerMwh * i.gasPricePerGj : 0;
-  const carbonPerMwh = t.heatRateGjPerMwh
-    ? t.heatRateGjPerMwh * EMISSIONS_T_PER_GJ * i.carbonPricePerT : 0;
+  // ── Price path ─────────────────────────────────────────────────────────
+  // Forward-curve mode walks the TC Energy Alberta strip year by year (real
+  // power AND real AECO gas per year, so a gas plant's spark spread moves
+  // with the actual curve rather than two independently-typed constants).
+  // Flat mode keeps the original behaviour: one typed pool price escalated
+  // at a fixed %.
+  const curvePath: CurveYear[] | null = i.useForwardCurve
+    ? buildCurvePath(i.codYear, i.lifeYears, i.postCurveEscalationPct)
+    : null;
 
   const rows: YearRow[] = [];
   let cumulative = -netCapex;
@@ -297,9 +314,19 @@ function runModel(i: Inputs) {
     const loss = 1 - i.lossFactorPct / 100;
     const mwh = i.mw * 8760 * i.capacityFactor * degr * avail * curt * loss;
 
-    // Merchant price = pool × capture rate, escalated
-    const esc = Math.pow(1 + i.priceEscalationPct / 100, y - 1);
-    const merchant = i.poolPrice * i.captureRate * esc;
+    const cv = curvePath?.[y - 1];
+    const calendarYear = cv?.calendarYear ?? i.codYear + y - 1;
+
+    // Pool price for this year: curve value, or typed price escalated.
+    const poolThisYear = cv
+      ? cv.power
+      : i.poolPrice * Math.pow(1 + i.priceEscalationPct / 100, y - 1);
+
+    // Gas for this year: curve value, or the typed constant.
+    const gasThisYear = cv ? cv.gas : i.gasPricePerGj;
+
+    // Merchant capture = that year's pool × the asset's capture rate.
+    const merchant = poolThisYear * i.captureRate;
 
     // Contracted share settles at the escalated strike, within term
     const inTerm = y <= i.ppaTermYears;
@@ -309,15 +336,30 @@ function runModel(i: Inputs) {
 
     const revenue = mwh * price;
 
+    // Fuel and carbon recomputed per year off that year's gas price.
+    const fuelPerMwhY = t.heatRateGjPerMwh ? t.heatRateGjPerMwh * gasThisYear : 0;
+    const carbonPerMwhY = t.heatRateGjPerMwh
+      ? t.heatRateGjPerMwh * EMISSIONS_T_PER_GJ * i.carbonPricePerT : 0;
+
     const opexEsc = Math.pow(1 + i.opexEscalationPct / 100, y - 1);
     const fixedOm = kw * (i.fixedOmPerKwYr + i.otherOpexPerKwYr) * opexEsc;
-    const varOm = mwh * (i.variableOmPerMwh + fuelPerMwh + carbonPerMwh + AESO_TRADING_CHARGE) * opexEsc;
+    const varOm = mwh * (i.variableOmPerMwh + fuelPerMwhY + carbonPerMwhY + AESO_TRADING_CHARGE) * opexEsc;
     const opex = fixedOm + varOm;
 
     const ebitda = revenue - opex;
     cumulative += ebitda;
-    rows.push({ year: y, mwh, price, revenue, opex, ebitda, cashflow: ebitda, cumulative });
+    rows.push({
+      year: y, calendarYear, mwh, price,
+      poolPrice: poolThisYear, gasPerGj: gasThisYear,
+      curveObserved: cv?.observed ?? false,
+      revenue, opex, ebitda, cashflow: ebitda, cumulative,
+    });
   }
+
+  // Year-1 fuel/carbon, kept for the input-panel hints.
+  const fuelPerMwh = t.heatRateGjPerMwh ? t.heatRateGjPerMwh * (rows[0]?.gasPerGj ?? i.gasPricePerGj) : 0;
+  const carbonPerMwh = t.heatRateGjPerMwh
+    ? t.heatRateGjPerMwh * EMISSIONS_T_PER_GJ * i.carbonPricePerT : 0;
 
   // ── NPV / IRR ──────────────────────────────────────────────────────────
   const r = i.wacc / 100;
@@ -339,10 +381,14 @@ function runModel(i: Inputs) {
   const annualOpex = rows.length ? rows[0].opex : 0;
   const annualMwh = rows.length ? rows[0].mwh : 0;
 
+  // Share of project life actually covered by the published curve — the
+  // honest headline for "how much of this valuation is observed vs held flat".
+  const observedYears = rows.filter(r => r.curveObserved).length;
+
   return {
     grossCapex, itcValue, netCapex, npv, projectIrr, lcoe, breakeven,
     paybackYear, avgEbitda, annualOpex, annualMwh, rows,
-    fuelPerMwh, carbonPerMwh,
+    fuelPerMwh, carbonPerMwh, observedYears,
   };
 }
 
@@ -477,6 +523,7 @@ export default function NpvCalculator() {
     gasPricePerGj: 2.5, carbonPricePerT: 110,
     wacc: 8,
     ppaStrike: 55, ppaEscalationPct: 2, ppaTermYears: 15, contractedPct: 80,
+    useForwardCurve: true, codYear: 2027, postCurveEscalationPct: 0,
   }));
 
   const set = <K extends keyof Inputs>(k: K, v: Inputs[K]) => setI(p => ({ ...p, [k]: v }));
@@ -539,10 +586,19 @@ export default function NpvCalculator() {
 
   const res = useMemo(() => runModel(i), [i]);
 
+  // Shift the whole price path by a multiplier. In flat mode that's just the
+  // typed pool price; in curve mode we shift every curve year by the same
+  // factor (a parallel shift of the strip), which is the standard way to
+  // stress a forward curve without re-shaping it.
+  const shiftPrice = (base: Inputs, mult: number): Inputs =>
+    base.useForwardCurve
+      ? { ...base, captureRate: base.captureRate * mult }
+      : { ...base, poolPrice: base.poolPrice * mult };
+
   // P10 / P50 / P90 on pool price (±25% band, screening)
   const bands = useMemo(() => {
-    const lo = runModel({ ...i, poolPrice: i.poolPrice * 0.75 });
-    const hi = runModel({ ...i, poolPrice: i.poolPrice * 1.25 });
+    const lo = runModel(shiftPrice(i, 0.75));
+    const hi = runModel(shiftPrice(i, 1.25));
     return { p10: lo.npv, p50: res.npv, p90: hi.npv };
   }, [i, res.npv]);
 
@@ -550,7 +606,7 @@ export default function NpvCalculator() {
   const tornado = useMemo(() => {
     const drivers: { name: string; make: (s: number) => Inputs }[] = [
       { name: "CAPEX",          make: s => ({ ...i, grossCapexPerKw: i.grossCapexPerKw * s }) },
-      { name: "Pool price",     make: s => ({ ...i, poolPrice: i.poolPrice * s }) },
+      { name: "Pool price",     make: s => shiftPrice(i, s) },
       { name: "Capacity factor",make: s => ({ ...i, capacityFactor: i.capacityFactor * s }) },
       { name: "WACC",           make: s => ({ ...i, wacc: i.wacc * s }) },
       { name: "OPEX",           make: s => ({ ...i, fixedOmPerKwYr: i.fixedOmPerKwYr * s,
@@ -566,7 +622,7 @@ export default function NpvCalculator() {
 
   // Live scenario at the current slider position — recomputed on every drag.
   const sensRes = useMemo(
-    () => runModel({ ...i, poolPrice: i.poolPrice * (1 + priceSensPct / 100) }),
+    () => runModel(shiftPrice(i, 1 + priceSensPct / 100)),
     [i, priceSensPct]
   );
   const sensDelta = sensRes.npv - res.npv;
@@ -575,15 +631,16 @@ export default function NpvCalculator() {
   //    Revenue Build-Up / Volume Waterfall cards, decomposed from runModel. ──
   const priceWaterfall = useMemo(() => {
     const y1 = res.rows[0];
-    const merchant = i.poolPrice * i.captureRate;
+    const poolY1 = y1?.poolPrice ?? i.poolPrice;
     const contracted = i.ppaTermYears >= 1 ? i.contractedPct / 100 : 0;
     return {
-      poolPrice: i.poolPrice,
+      poolPrice: poolY1,
       captureRate: i.captureRate,
-      merchant,
+      merchant: poolY1 * i.captureRate,
       contractedPct: contracted,
       strike: i.ppaStrike,
       blendedPrice: y1?.price ?? 0,
+      curveObserved: y1?.curveObserved ?? false,
     };
   }, [i, res.rows]);
 
@@ -605,6 +662,14 @@ export default function NpvCalculator() {
   const cashflowData = res.rows.map(r => ({
     year: `Y${r.year}`, ebitda: Math.round(r.ebitda / 1e6 * 10) / 10,
     cumulative: Math.round(r.cumulative / 1e6 * 10) / 10,
+  }));
+
+  const pricePathData = res.rows.map(r => ({
+    year: `Y${r.year}`,
+    calendarYear: r.calendarYear,
+    "Pool price": +r.poolPrice.toFixed(2),
+    "Realised price": +r.price.toFixed(2),
+    observed: r.curveObserved,
   }));
 
   const isBess = tech === "bess";
@@ -633,6 +698,31 @@ export default function NpvCalculator() {
           ))}
         </div>
       </div>
+
+      {/* Forward curve banner — mirrors ERCOT's gas-strip banner */}
+      {i.useForwardCurve && (
+        <div className="flex items-start gap-3 rounded-lg border border-primary/40 bg-primary/5 px-4 py-3">
+          <Zap className="h-4 w-4 text-primary shrink-0 mt-0.5" />
+          <div className="flex-1 min-w-0 text-xs">
+            <span className="font-semibold text-primary">Alberta forward curve loaded</span>
+            {" — "}Cal-27 <span className="font-mono">C$46.61</span>,
+            {" "}Cal-28 <span className="font-mono">C$65.38</span>,
+            {" "}Cal-29 <span className="font-mono">C$80.88</span>/MWh
+            {" "}(strip avg <span className="font-mono">C${curveStripAverage().toFixed(2)}</span>).
+            {" "}<span className="text-muted-foreground">
+              {res.observedYears} of {i.lifeYears} project years sit inside the published curve;
+              the remaining {i.lifeYears - res.observedYears} are{" "}
+              {i.postCurveEscalationPct === 0
+                ? "held flat at the Cal-29 level"
+                : `escalated at ${i.postCurveEscalationPct}%/yr past Cal-${CURVE_LAST_YEAR}`}.
+            </span>
+          </div>
+          <a href={TC_FORWARD_URL} target="_blank" rel="noreferrer"
+             className="text-[10px] text-muted-foreground underline shrink-0 hidden sm:block">
+            source
+          </a>
+        </div>
+      )}
 
       {/* ITC double-count warning — the single most important note on this page */}
       <Card className="border-amber-500/40">
@@ -814,13 +904,43 @@ export default function NpvCalculator() {
 
                 <div className="space-y-3">
                   <h4 className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Revenue basis</h4>
-                  <NumField label="Alberta pool price" value={i.poolPrice} onChange={v => set("poolPrice", v)}
-                    suffix="C$/MWh" hint="Province-wide uniform price. Alberta has no locational basis today." />
+
+                  <label className="flex items-start gap-2 cursor-pointer rounded-md bg-muted/30 p-2.5">
+                    <input
+                      type="checkbox"
+                      checked={i.useForwardCurve}
+                      onChange={(e) => set("useForwardCurve", e.target.checked)}
+                      className="accent-primary h-3.5 w-3.5 mt-0.5 shrink-0"
+                    />
+                    <span className="text-xs">
+                      <span className="font-medium">Use Alberta forward curve</span>
+                      <span className="block text-[10px] text-muted-foreground mt-0.5 leading-snug">
+                        Walks the TC Energy strip year by year — real power <em>and</em> AECO gas per
+                        year. Uncheck to use a single flat pool price instead.
+                      </span>
+                    </span>
+                  </label>
+
+                  {i.useForwardCurve ? (
+                    <>
+                      <NumField label="COD year" value={i.codYear} onChange={v => set("codYear", v)}
+                        hint="Which calendar year year-1 of the project maps to on the curve." />
+                      <NumField label="Post-curve escalation" value={i.postCurveEscalationPct}
+                        onChange={v => set("postCurveEscalationPct", v)} suffix="%/yr" step={0.25}
+                        hint={`No published curve past Cal-${CURVE_LAST_YEAR}. 0% holds the last observed year flat — a stated assumption. Anything above 0 is your own extrapolation.`} />
+                    </>
+                  ) : (
+                    <>
+                      <NumField label="Alberta pool price" value={i.poolPrice} onChange={v => set("poolPrice", v)}
+                        suffix="C$/MWh" hint="Province-wide uniform price. Alberta has no locational basis today." />
+                      <NumField label="Price escalation" value={i.priceEscalationPct}
+                        onChange={v => set("priceEscalationPct", v)} suffix="%/yr" step={0.5} />
+                    </>
+                  )}
+
                   <NumField label="Capture rate" value={+(i.captureRate * 100).toFixed(0)}
                     onChange={v => set("captureRate", v / 100)} suffix="%"
                     hint={`Technology-weighted vs pool. ${d.label} screening default ${(d.captureRate * 100).toFixed(0)}%.`} />
-                  <NumField label="Price escalation" value={i.priceEscalationPct}
-                    onChange={v => set("priceEscalationPct", v)} suffix="%/yr" step={0.5} />
                 </div>
               </div>
             )}
@@ -943,7 +1063,13 @@ export default function NpvCalculator() {
                 <Card>
                   <CardContent className="pt-4 pb-4">
                     <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Revenue Build-Up ($/MWh, year 1)</h3>
-                    <WaterfallRow label="Alberta pool price" value={`C$${priceWaterfall.poolPrice.toFixed(2)}`} />
+                    <WaterfallRow
+                      label="Alberta pool price"
+                      value={`C$${priceWaterfall.poolPrice.toFixed(2)}`}
+                      note={i.useForwardCurve
+                        ? (priceWaterfall.curveObserved ? `fwd curve, Cal-${res.rows[0]?.calendarYear}` : "held flat past curve")
+                        : "flat input"}
+                    />
                     <WaterfallRow label={`× Capture Rate (${(priceWaterfall.captureRate * 100).toFixed(0)}%)`}
                       value={`C$${priceWaterfall.merchant.toFixed(2)}`} note="merchant price" indent />
                     <WaterfallRow label={`Blend with Strike (${(priceWaterfall.contractedPct * 100).toFixed(0)}% contracted)`}
@@ -996,6 +1122,47 @@ export default function NpvCalculator() {
                      value={res.paybackYear ? `${res.paybackYear} yrs` : "beyond life"}
                      sub="undiscounted, from COD" />
               </div>
+
+              {/* ── Price path ── */}
+              <Card>
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-sm">Price path (C$/MWh)</CardTitle>
+                  <p className="text-xs text-muted-foreground">
+                    {i.useForwardCurve
+                      ? `Pool price from the TC Energy Alberta strip. Solid through Cal-${CURVE_LAST_YEAR} (${res.observedYears} yrs observed); ${
+                          i.postCurveEscalationPct === 0 ? "held flat" : `escalated ${i.postCurveEscalationPct}%/yr`
+                        } after. Realised price blends the contracted strike against merchant capture.`
+                      : "Flat pool price escalated at a fixed rate — enable the forward curve in Assumptions for the real Alberta strip."}
+                  </p>
+                </CardHeader>
+                <CardContent className="h-64">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={pricePathData}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+                      <XAxis dataKey="year" stroke="hsl(var(--muted-foreground))" fontSize={11} />
+                      <YAxis stroke="hsl(var(--muted-foreground))" fontSize={11}
+                             tickFormatter={(v) => `$${v}`} />
+                      <Tooltip
+                        contentStyle={{ backgroundColor: "hsl(var(--popover))", borderColor: "hsl(var(--border))" }}
+                        formatter={(v: number) => `C$${v}/MWh`}
+                        labelFormatter={(l) => {
+                          const row = pricePathData.find(p => p.year === l);
+                          return `${l} · Cal-${row?.calendarYear}${row?.observed ? "" : " (held flat)"}`;
+                        }} />
+                      <Legend wrapperStyle={{ fontSize: 11 }} />
+                      {res.observedYears > 0 && res.observedYears < res.rows.length && (
+                        <ReferenceLine x={`Y${res.observedYears}`} stroke="hsl(var(--muted-foreground))"
+                          strokeDasharray="3 3"
+                          label={{ value: "end of published curve", fontSize: 9, fill: "hsl(var(--muted-foreground))", position: "insideTopRight" }} />
+                      )}
+                      <Line type="stepAfter" dataKey="Pool price" stroke="hsl(var(--primary))"
+                            strokeWidth={2} dot={false} />
+                      <Line type="stepAfter" dataKey="Realised price" stroke="#f59e0b"
+                            strokeWidth={2} strokeDasharray="4 3" dot={false} />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </CardContent>
+              </Card>
 
               {/* ── Cashflow chart ── */}
               <Card>
@@ -1095,15 +1262,23 @@ export default function NpvCalculator() {
                     <Slider value={[priceSensPct]} min={-30} max={30} step={1}
                             onValueChange={(v) => setPriceSensPct(v[0])} />
                     <div className="flex justify-between text-[10px] text-muted-foreground mt-1">
-                      <span>−30%</span><span>base ${i.poolPrice}/MWh</span><span>+30%</span>
+                      <span>−30%</span>
+                      <span>
+                        base {i.useForwardCurve
+                          ? `fwd curve (yr 1 C$${(res.rows[0]?.poolPrice ?? 0).toFixed(2)})`
+                          : `C$${i.poolPrice}/MWh`}
+                      </span>
+                      <span>+30%</span>
                     </div>
                   </div>
 
                   <div className="rounded-lg bg-muted/30 p-3 space-y-2">
                     <div className="flex items-center justify-between text-sm">
-                      <span className="text-muted-foreground">Scenario pool price</span>
+                      <span className="text-muted-foreground">
+                        {i.useForwardCurve ? "Scenario yr-1 pool price" : "Scenario pool price"}
+                      </span>
                       <span className="font-mono font-medium">
-                        C${(i.poolPrice * (1 + priceSensPct / 100)).toFixed(2)}/MWh
+                        C${((res.rows[0]?.poolPrice ?? i.poolPrice) * (1 + priceSensPct / 100)).toFixed(2)}/MWh
                       </span>
                     </div>
                     <div className="flex items-center justify-between text-sm">

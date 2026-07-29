@@ -35,32 +35,10 @@ import { AlertTriangle, ExternalLink } from "lucide-react";
    more honest than picking one and implying it's an exchange settlement.
    ══════════════════════════════════════════════════════════════════════════ */
 
-interface ForwardRow {
-  period: string;
-  flat: number;
-  onPeak: number;
-  offPeak: number;
-  gasGj: number;
-  heatRate: number;
-}
-
-// TC Energy Power Market Update — indicative as of July 14, 2026.
-const TC_FORWARD: ForwardRow[] = [
-  { period: "Balance of month", flat: 43.12, onPeak: 53.20, offPeak: 22.96, gasGj: 1.67, heatRate: 25.82 },
-  { period: "August 2026",      flat: 44.00, onPeak: 56.65, offPeak: 27.96, gasGj: 1.53, heatRate: 28.84 },
-  { period: "Balance of 2026",  flat: 42.75, onPeak: 52.65, offPeak: 30.33, gasGj: 1.94, heatRate: 22.00 },
-  { period: "Calendar 2027",    flat: 46.61, onPeak: 56.40, offPeak: 34.10, gasGj: 2.24, heatRate: 20.80 },
-  { period: "Calendar 2028",    flat: 65.38, onPeak: 83.60, offPeak: 42.27, gasGj: 2.44, heatRate: 26.82 },
-  { period: "Calendar 2029",    flat: 80.88, onPeak: 105.87,offPeak: 48.98, gasGj: 2.47, heatRate: 32.73 },
-];
-
-// MSA Wholesale Market Report Q1 2026 — quarter-end calendar strip, stated
-// as % change over the quarter (source's own framing, not derived here).
-const MSA_CAL_STRIP = [
-  { label: "Cal-27", price: 47.88, qoq: -18 },
-  { label: "Cal-28", price: 59.07, qoq: -20 },
-  { label: "Cal-29", price: 63.62, qoq: -18 },
-];
+// Curve data lives in @/lib/alberta-forward-curve so this tab and the DCF
+// Valuation tab cannot drift apart — the DCF discounts against exactly the
+// numbers displayed here.
+import { TC_FORWARD, MSA_CAL_STRIP } from "@/lib/alberta-forward-curve";
 
 const ICE_TARGET_STATE = [
   { symbol: "AB-NIT 2A",  name: "Same Day Index",              use: "Historical daily AECO cash/settled price (CAD/GJ) — the MSA's own reference series" },
