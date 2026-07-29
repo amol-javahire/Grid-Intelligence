@@ -18,9 +18,8 @@ import {
 const navItems = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
   { href: "/rankings", label: "Asset Rankings", icon: ListOrdered },
-  { href: "/pool-price", label: "Pool Price", icon: DollarSign },
-  { href: "/aeco-gas", label: "AECO Gas & Power Fwd", icon: Flame },
-  { href: "/generation", label: "Generation Mix", icon: Factory },
+  { href: "/historical-prices", label: "Historical Prices", icon: DollarSign },
+  { href: "/forward-prices", label: "Forward Prices", icon: Flame },
   { href: "/generation-stack", label: "Generation Stack", icon: BarChart3 },
   { href: "/csd", label: "CSD", icon: Scale },
   { href: "/outages", label: "Outages", icon: AlertTriangle },

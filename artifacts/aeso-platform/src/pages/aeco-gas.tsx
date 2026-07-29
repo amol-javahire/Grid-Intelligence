@@ -1,7 +1,7 @@
-import { useGetAesoPoolPrice } from "@workspace/api-client-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Skeleton } from "@/components/ui/skeleton";
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
+import {
+  ComposedChart, Line, Area, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
+} from "recharts";
 import { AlertTriangle, ExternalLink } from "lucide-react";
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -40,30 +40,30 @@ import { AlertTriangle, ExternalLink } from "lucide-react";
 // numbers displayed here.
 import { TC_FORWARD, MSA_CAL_STRIP } from "@/lib/alberta-forward-curve";
 
-const ICE_TARGET_STATE = [
-  { symbol: "AB-NIT 2A",  name: "Same Day Index",              use: "Historical daily AECO cash/settled price (CAD/GJ) — the MSA's own reference series" },
-  { symbol: "AB-NIT 5A",  name: "Day Ahead & Same Day",         use: "Alternative Alberta cash gas benchmarks" },
-  { symbol: "XW7",        name: "AB-NIT 5A Monthly Financial Fixed Price", use: "Forward gas curve, monthly contracts to 60 months — cash-settled vs AB-NIT 5A average" },
-  { symbol: "XW6",        name: "AB-NIT 7A Financial Fixed Price", use: "Alternative gas forward, month-ahead-index-settled, to 60 months" },
-  { symbol: "XCU",        name: "AESO Financial Flat Fixed Price", use: "Alberta 7×24 flat power forward, CAD/MWh, monthly to 96 months — settles against AESO hourly pool price" },
-];
-
 function money(n: number, d = 2) {
   return n.toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d });
 }
 
-export default function AecoGas() {
-  const { data: prices, isLoading } = useGetAesoPoolPrice({ limit: 720 });
-
-  const chartData = (prices ?? [])
-    .slice()
-    .reverse()
-    .map((p) => ({ date: p.date, "Pool price": p.poolPrice }));
+export default function ForwardPrices() {
+  // Forward curve as a combo series: flat power on the left axis, AECO gas on
+  // the right. Ordered as published (near-dated first) so the shape of the
+  // strip reads left-to-right.
+  const curveChart = TC_FORWARD.map((r) => ({
+    period: r.period
+      .replace("Balance of month", "BoM")
+      .replace("Balance of ", "Bal ")
+      .replace("Calendar ", "Cal-"),
+    "Flat power": r.flat,
+    "On-peak": r.onPeak,
+    "Off-peak": r.offPeak,
+    "Gas (C$/GJ)": r.gasGj,
+    heatRate: r.heatRate,
+  }));
 
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-3xl font-bold tracking-tight">AECO Gas &amp; Alberta Power Forward</h1>
+        <h1 className="text-3xl font-bold tracking-tight">Forward Prices</h1>
         <p className="text-muted-foreground text-sm mt-1">
           Alberta power settles at a single province-wide pool price, and roughly 60% of the
           fleet's maximum capability is gas-fired (cogeneration, combined cycle, simple cycle,
@@ -200,63 +200,46 @@ export default function AecoGas() {
         </Card>
       </div>
 
-      {/* ── Historical AESO pool price — real, already seeded ──────────────── */}
+      {/* ── Forward curve chart — power and gas together ───────────────────── */}
       <Card>
         <CardHeader className="pb-3">
-          <CardTitle className="text-sm font-medium">Historical AESO pool price — last 30 days</CardTitle>
+          <CardTitle className="text-sm font-medium">Forward curve — power and gas</CardTitle>
           <p className="text-xs text-muted-foreground">
-            Settlement-grade, from the platform's own AESO seeder — not indicative. This is the
-            price the forward curves above are ultimately trying to predict.
+            Flat 7×24 power and on/off-peak on the left axis (C$/MWh); AECO gas on the right
+            (C$/GJ). The widening gap from Cal-2028 is the curve pricing power scarcity, not fuel —
+            gas is nearly flat across the strip while power roughly doubles.
           </p>
         </CardHeader>
-        <CardContent className="h-72">
-          {isLoading ? (
-            <Skeleton className="w-full h-full" />
-          ) : chartData.length > 0 ? (
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={chartData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                <XAxis dataKey="date" stroke="hsl(var(--muted-foreground))" fontSize={11}
-                       tickFormatter={(v) => String(v).slice(0, 10)} />
-                <YAxis stroke="hsl(var(--muted-foreground))" fontSize={11}
-                       tickFormatter={(v) => `$${v}`} />
-                <Tooltip
-                  contentStyle={{ backgroundColor: "hsl(var(--popover))", borderColor: "hsl(var(--border))" }}
-                  itemStyle={{ color: "hsl(var(--foreground))" }}
-                  labelStyle={{ color: "hsl(var(--muted-foreground))" }}
-                  formatter={(v: number) => [`$${v.toFixed(2)}/MWh`, "Pool price"]}
-                />
-                <Line type="monotone" dataKey="Pool price" stroke="hsl(var(--primary))" dot={false} strokeWidth={2} />
-              </LineChart>
-            </ResponsiveContainer>
-          ) : (
-            <div className="flex h-full items-center justify-center text-muted-foreground">No data available</div>
-          )}
-        </CardContent>
-      </Card>
-
-      {/* ── Target-state ICE NGX reference ──────────────────────────────────── */}
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="text-sm font-medium">Target state — ICE NGX (not yet integrated)</CardTitle>
-          <p className="text-xs text-muted-foreground">
-            The real tradable curves, for reference. Requires WebICE/ICE Connect access
-            (US$675/user/month, per ICE's published data service pricing) and confirmed
-            redistribution rights before any of this can be displayed live.
-          </p>
-        </CardHeader>
-        <CardContent>
-          <div className="space-y-2">
-            {ICE_TARGET_STATE.map((row) => (
-              <div key={row.symbol} className="flex items-start gap-3 text-sm py-1.5 border-b border-border/40 last:border-0">
-                <span className="font-mono font-semibold w-20 shrink-0">{row.symbol}</span>
-                <div className="min-w-0">
-                  <span className="font-medium">{row.name}</span>
-                  <span className="text-muted-foreground"> — {row.use}</span>
-                </div>
-              </div>
-            ))}
-          </div>
+        <CardContent className="h-80">
+          <ResponsiveContainer width="100%" height="100%">
+            <ComposedChart data={curveChart} margin={{ top: 8, right: 12, left: 0, bottom: 4 }}>
+              <defs>
+                <linearGradient id="fwdGasFill" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="#f59e0b" stopOpacity={0.3} />
+                  <stop offset="95%" stopColor="#f59e0b" stopOpacity={0} />
+                </linearGradient>
+              </defs>
+              <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+              <XAxis dataKey="period" stroke="hsl(var(--muted-foreground))" fontSize={11} />
+              <YAxis yAxisId="power" stroke="hsl(var(--muted-foreground))" fontSize={11}
+                     tickFormatter={(v) => `$${v}`} width={54} />
+              <YAxis yAxisId="gas" orientation="right" stroke="#f59e0b" fontSize={11}
+                     tickFormatter={(v) => `$${v}`} width={48} domain={[0, "dataMax + 1"]} />
+              <Tooltip
+                contentStyle={{ backgroundColor: "hsl(var(--popover))", borderColor: "hsl(var(--border))", fontSize: 12 }}
+                formatter={(v: number, name: string) =>
+                  name === "Gas (C$/GJ)" ? [`C$${v.toFixed(2)}/GJ`, name] : [`C$${v.toFixed(2)}/MWh`, name]} />
+              <Legend iconSize={9} wrapperStyle={{ fontSize: 11 }} />
+              <Area yAxisId="gas" type="monotone" dataKey="Gas (C$/GJ)" stroke="#f59e0b"
+                    fill="url(#fwdGasFill)" strokeWidth={1.5} dot={{ r: 2 }} />
+              <Line yAxisId="power" type="monotone" dataKey="On-peak" stroke="#8b5cf6"
+                    strokeWidth={1.5} strokeDasharray="4 2" dot={{ r: 2 }} />
+              <Line yAxisId="power" type="monotone" dataKey="Flat power" stroke="hsl(var(--primary))"
+                    strokeWidth={2.5} dot={{ r: 3 }} />
+              <Line yAxisId="power" type="monotone" dataKey="Off-peak" stroke="#64748b"
+                    strokeWidth={1.5} strokeDasharray="4 2" dot={{ r: 2 }} />
+            </ComposedChart>
+          </ResponsiveContainer>
         </CardContent>
       </Card>
 
@@ -264,6 +247,7 @@ export default function AecoGas() {
         <strong>Also relevant:</strong> AESO's own public price forecast looks roughly two hours
         ahead — it is not a forward curve. The AESO Long-Term Outlook forecasts load and
         generation adequacy, not a tradable power price. Neither substitutes for the tables above.
+        For settled history rather than forwards, see the Historical Prices tab.
       </p>
     </div>
   );

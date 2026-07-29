@@ -5,8 +5,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 
 import { Layout } from "@/components/layout";
 import Dashboard from "@/pages/dashboard";
-import PoolPrice from "@/pages/pool-price";
-import Generation from "@/pages/generation";
+import HistoricalPrices from "@/pages/historical-prices";
 import SupplyDemand from "@/pages/supply-demand";
 import Outages from "@/pages/outages";
 import SevenDayCapacity from "@/pages/7day-capacity";
@@ -32,9 +31,11 @@ function Router() {
     <Layout>
       <Switch>
         <Route path="/" component={Dashboard} />
-        <Route path="/pool-price" component={PoolPrice} />
-        <Route path="/generation" component={Generation} />
+        <Route path="/historical-prices" component={HistoricalPrices} />
+        <Route path="/forward-prices" component={AecoGas} />
         <Route path="/generation-stack" component={GenerationStack} />
+        {/* Legacy paths kept so old links/bookmarks don't 404 */}
+        <Route path="/pool-price" component={HistoricalPrices} />
         <Route path="/aeco-gas" component={AecoGas} />
         <Route path="/csd" component={SupplyDemand} />
         {/* Legacy path kept so old links/bookmarks don't 404 */}
