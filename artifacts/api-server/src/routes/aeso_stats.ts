@@ -70,15 +70,51 @@ router.get("/aeso/dashboard", async (req, res) => {
     `);
     const queueRow = queueResult.rows[0];
 
-    const genResult = await db.execute<{ wind_pct: string | null; gas_pct: string | null }>(sql`
-      SELECT
-        (AVG(wind_mw) / NULLIF(AVG(total_mw), 0) * 100)::text AS wind_pct,
-        (AVG(gas_mw) / NULLIF(AVG(total_mw), 0) * 100)::text AS gas_pct
-      FROM aeso_generation_mix
-      WHERE date >= date_trunc('month', CURRENT_DATE - INTERVAL '1 month')
-        AND date < date_trunc('month', CURRENT_DATE)
+    // Generation mix by fuel — sourced from the METERED VOLUME fleet (14.9M
+    // real rows joined to the CSD asset registry), NOT aeso_generation_mix.
+    // That table was never seeded; querying it returned nulls and was the
+    // reason this whole dashboard rendered as "---". See the Generation Stack
+    // tab, which uses the same underlying data.
+    const genResult = await db.execute<{
+      fuel_type: string; mc_mw: string; gen_mwh: string;
+    }>(sql`
+      SELECT ar.fuel_type,
+             SUM(ar.max_capability_mw)::text AS mc_mw,
+             COALESCE(SUM(mv.gen), 0)::text  AS gen_mwh
+      FROM aeso_asset_registry ar
+      LEFT JOIN (
+        SELECT asset_id, SUM(GREATEST(metered_mw, 0)) AS gen
+        FROM aeso_metered_volume
+        WHERE date >= CURRENT_DATE - INTERVAL '30 days'
+        GROUP BY asset_id
+      ) mv ON mv.asset_id = ar.asset_id
+      WHERE COALESCE(ar.max_capability_mw, 0) > 0
+      GROUP BY ar.fuel_type
+      ORDER BY 2 DESC
     `);
-    const genRow = genResult.rows[0];
+
+    const fuelRows = genResult.rows.map(r => ({
+      fuelType: r.fuel_type,
+      mcMw: parseFloat(r.mc_mw) || 0,
+      genMwh: parseFloat(r.gen_mwh) || 0,
+    }));
+    const totalGen = fuelRows.reduce((a, f) => a + f.genMwh, 0);
+    const totalMc = fuelRows.reduce((a, f) => a + f.mcMw, 0);
+
+    const pctOf = (name: string) => {
+      if (totalGen <= 0) return null;
+      const f = fuelRows.find(x => (x.fuelType ?? "").toUpperCase() === name);
+      return f ? (f.genMwh / totalGen) * 100 : null;
+    };
+    // Gas-fired = every gas technology in the CSD taxonomy, not one column.
+    const gasPct = totalGen > 0
+      ? (fuelRows
+          .filter(f => ["COGENERATION", "COMBINED CYCLE", "SIMPLE CYCLE", "GAS FIRED STEAM"]
+            .includes((f.fuelType ?? "").toUpperCase()))
+          .reduce((a, f) => a + f.genMwh, 0) / totalGen) * 100
+      : null;
+
+    const queueCount = queueRow?.project_count ? parseInt(queueRow.project_count) : 0;
 
     res.json({
       latestPoolPrice: priceRow?.latest_pool_price ? parseFloat(priceRow.latest_pool_price) : null,
@@ -90,9 +126,23 @@ router.get("/aeso/dashboard", async (req, res) => {
       activeOutagesMw: outageRow?.active_mw ? parseFloat(outageRow.active_mw) : null,
       activeOutageCount: outageRow?.active_count ? parseInt(outageRow.active_count) : 0,
       queueTotalMw: queueRow?.total_mw ? parseFloat(queueRow.total_mw) : null,
-      queueProjectCount: queueRow?.project_count ? parseInt(queueRow.project_count) : 0,
-      windPctLastMonth: genRow?.wind_pct ? parseFloat(genRow.wind_pct) : null,
-      gasPctLastMonth: genRow?.gas_pct ? parseFloat(genRow.gas_pct) : null,
+      queueProjectCount: queueCount,
+      windPctLastMonth: pctOf("WIND"),
+      gasPctLastMonth: gasPct,
+      solarPctLastMonth: pctOf("SOLAR"),
+      fleetMcMw: totalMc,
+      fleetGenMwh30d: totalGen,
+      byFuel: fuelRows,
+      // Per-source availability so the UI can say "not seeded" instead of
+      // rendering a silent "---" that reads like a broken page.
+      sources: {
+        poolPrice:     { live: !!priceRow?.latest_pool_price, table: "aeso_pool_price" },
+        meteredVolume: { live: totalGen > 0,                  table: "aeso_metered_volume" },
+        assetRegistry: { live: totalMc > 0,                   table: "aeso_asset_registry" },
+        supplyDemand:  { live: !!reserveRow?.latest_reserve_margin_pct, table: "aeso_supply_demand" },
+        outages:       { live: (outageRow?.active_count ? parseInt(outageRow.active_count) : 0) > 0, table: "aeso_outages" },
+        queue:         { live: queueCount > 0,                table: "aeso_queue_projects" },
+      },
     });
   } catch (err) {
     req.log.error({ err }, "getAesoDashboard error");
