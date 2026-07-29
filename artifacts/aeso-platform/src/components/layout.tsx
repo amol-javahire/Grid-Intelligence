@@ -13,7 +13,7 @@ import {
   TrendingUp,
   Workflow,
   Eye,
-  BookOpen, Calculator, BarChart3, Flame } from "lucide-react";
+  BookOpen, Calculator, BarChart3, Flame, FileSignature } from "lucide-react";
 
 const navItems = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
@@ -28,6 +28,7 @@ const navItems = [
   { href: "/queue", label: "Queue", icon: ListOrdered },
   { href: "/congestion", label: "Congestion", icon: Route },
   { href: "/npv", label: "DCF Valuation", icon: Calculator },
+  { href: "/offtake", label: "Offtake (PPA / VPPA)", icon: FileSignature },
   { href: "/lta", label: "LTA Metrics", icon: TrendingUp },
   { href: "/rem", label: "REM", icon: Workflow },
   { href: "/auc", label: "AUC", icon: Scale },

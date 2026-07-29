@@ -27,9 +27,16 @@ import {
    live price scrubber, risks-not-modelled) are appended after the core
    results rather than dropped, since they don't exist on the ERCOT page.
 
-   Two modes:
-     · Project Investment NPV — full economics; CAPEX and OPEX drive the result
-     · PPA / VPPA Settlement  — contract settlement value only (ERCOT-style)
+   SCOPE — this tab values the ASSET, not the contract.
+     CAPEX, OPEX, ITC, production, WACC. Contract structure (physical PPA vs
+     VPPA, strike, term, curtailment allocation, settlement mechanics,
+     derivative accounting) lives on the Offtake tab, which discounts at the
+     BUYER's cost of capital rather than project WACC. The two are separate
+     valuations of different things and must not be added together.
+
+     The one contract-ish input retained here is "contracted share" — an
+     asset-level revenue-stability assumption (how much output is spoken for
+     at all), not a model of the contract itself.
 
    COST BASIS — read before changing these numbers
    ------------------------------------------------
@@ -476,7 +483,6 @@ const money = (n: number) =>
 /* ══════════════════════════════════════════════════════════════════════════ */
 
 export default function NpvCalculator() {
-  const [mode, setMode] = useState<"project" | "ppa">("project");
   const [tech, setTech] = useState<TechKey>("wind");
 
   // ── Step 1/2 — real-project wizard (mirrors ERCOT's ISO -> Tech -> Project) ──
@@ -688,15 +694,10 @@ export default function NpvCalculator() {
             Discounted cash flow over the asset life — pick a real Alberta project or model a generic technology.
           </p>
         </div>
-        <div className="flex gap-1 bg-muted p-1 rounded-lg">
-          {([["project", "Project Investment NPV"], ["ppa", "PPA / VPPA Settlement"]] as const).map(([k, label]) => (
-            <button key={k} onClick={() => { setMode(k); setHasComputed(false); }}
-              className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${
-                mode === k ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}>
-              {label}
-            </button>
-          ))}
-        </div>
+        <a href="offtake"
+           className="text-xs text-muted-foreground hover:text-foreground underline shrink-0 pt-2">
+          Modelling a contract instead? → Offtake (PPA / VPPA)
+        </a>
       </div>
 
       {/* Forward curve banner — mirrors ERCOT's gas-strip banner */}
@@ -946,48 +947,18 @@ export default function NpvCalculator() {
             )}
           </div>
 
-          {/* ── Contract Terms (always visible) ── */}
+          {/* ── Valuation terms ── */}
           <div className="border-t border-border pt-4 space-y-4">
-            <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Contract Terms</h3>
+            <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Valuation</h3>
 
             <div>
               <div className="flex justify-between text-xs mb-1">
-                <span className="text-muted-foreground">Strike price</span>
-                <span className="font-semibold text-primary">C${i.ppaStrike}/MWh</span>
-              </div>
-              <Slider value={[i.ppaStrike]} min={15} max={100} step={0.5}
-                onValueChange={v => set("ppaStrike", v[0])} />
-              <div className="flex justify-between text-[10px] text-muted-foreground"><span>$15</span><span>$100</span></div>
-            </div>
-
-            <div>
-              <div className="flex justify-between text-xs mb-1">
-                <span className="text-muted-foreground">Contract term</span>
-                <span className="font-semibold text-primary">{i.ppaTermYears} years</span>
-              </div>
-              <Slider value={[i.ppaTermYears]} min={5} max={25} step={1}
-                onValueChange={v => set("ppaTermYears", v[0])} />
-              <div className="flex justify-between text-[10px] text-muted-foreground"><span>5 yr</span><span>25 yr</span></div>
-            </div>
-
-            <div>
-              <div className="flex justify-between text-xs mb-1">
-                <span className="text-muted-foreground">WACC</span>
+                <span className="text-muted-foreground">WACC / discount rate</span>
                 <span className="font-semibold text-amber-500">{i.wacc}%</span>
               </div>
               <Slider value={[i.wacc]} min={4} max={15} step={0.5}
                 onValueChange={v => set("wacc", v[0])} />
               <div className="flex justify-between text-[10px] text-muted-foreground"><span>4%</span><span>15%</span></div>
-            </div>
-
-            <div>
-              <div className="flex justify-between text-xs mb-1">
-                <span className="text-muted-foreground">Price escalation</span>
-                <span className="font-semibold text-purple-400">{i.ppaEscalationPct}%/yr</span>
-              </div>
-              <Slider value={[i.ppaEscalationPct]} min={0} max={5} step={0.25}
-                onValueChange={v => set("ppaEscalationPct", v[0])} />
-              <div className="flex justify-between text-[10px] text-muted-foreground"><span>0%</span><span>5%/yr</span></div>
             </div>
 
             <div>
@@ -1000,7 +971,28 @@ export default function NpvCalculator() {
               <div className="flex justify-between text-[10px] text-muted-foreground">
                 <span>0% merchant</span><span>100% contracted</span>
               </div>
+              <p className="text-[10px] text-muted-foreground mt-1 leading-snug">
+                How much output is under contract at all — an asset-level revenue-stability
+                assumption. To model the <em>contract itself</em> (strike, term, curtailment
+                allocation, PPA vs VPPA structure), use the Offtake tab.
+              </p>
             </div>
+
+            {i.contractedPct > 0 && (
+              <>
+                <div>
+                  <div className="flex justify-between text-xs mb-1">
+                    <span className="text-muted-foreground">Assumed contract price</span>
+                    <span className="font-semibold text-primary">C${i.ppaStrike}/MWh</span>
+                  </div>
+                  <Slider value={[i.ppaStrike]} min={15} max={110} step={0.5}
+                    onValueChange={v => set("ppaStrike", v[0])} />
+                </div>
+                <NumField label="Contract term" value={i.ppaTermYears}
+                  onChange={v => set("ppaTermYears", v)} suffix="yrs"
+                  hint="After this, the contracted share reverts to merchant." />
+              </>
+            )}
           </div>
 
           <button onClick={() => setHasComputed(true)}
@@ -1109,7 +1101,7 @@ export default function NpvCalculator() {
 
               {/* ── KPI row ── */}
               <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-                <Kpi label={mode === "project" ? "Project NPV" : "Settlement NPV"}
+                <Kpi label="Project NPV"
                      value={money(res.npv)} tone={res.npv >= 0 ? "good" : "bad"}
                      sub={`at ${i.wacc}% WACC, ${i.lifeYears}-yr life`} />
                 <Kpi label="Project IRR"

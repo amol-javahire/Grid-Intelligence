@@ -21,6 +21,7 @@ import AesoRankings from "@/pages/rankings";
 import GenerationStack from "@/pages/generation-stack";
 import AecoGas from "@/pages/aeco-gas";
 import NpvCalculator from "@/pages/npv";
+import Offtake from "@/pages/offtake";
 import Guide from "@/pages/guide";
 import NotFound from "@/pages/not-found";
 
@@ -48,6 +49,7 @@ function Router() {
         <Route path="/msa" component={MSA} />
         <Route path="/rankings" component={AesoRankings} />
         <Route path="/npv" component={NpvCalculator} />
+        <Route path="/offtake" component={Offtake} />
         <Route path="/qa" component={AesoQACopilot} />
         <Route path="/guide" component={Guide} />
         <Route component={NotFound} />
