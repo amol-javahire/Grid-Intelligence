@@ -45,6 +45,42 @@ interface OPFResult {
   curtailment_pct: number;
 }
 
+interface RegionalLine {
+  name: string;
+  from_bus: string;
+  to_bus: string;
+  flow_mw: number;
+  limit_mw: number;
+  loading_pct: number;
+  binding?: boolean | null;
+  congested: boolean;
+  capacity_source: "sourced" | "estimated" | string;
+  capacity_note: string;
+}
+
+interface RegionalOPFResult {
+  model_label: string;
+  disclaimer: string;
+  status: string;
+  solver_status: string;
+  termination_condition: string;
+  model_status: string;
+  unserved_load_mw: number;
+  energy_balance_residual_mw: number;
+  avg_lmp_load_weighted: number;
+  avg_lmp_unweighted: number;
+  lmp_spread: number;
+  total_cost_cad_hr: number;
+  total_load_mw: number;
+  lmps: Record<string, number>;
+  bus_loads_mw: Record<string, number>;
+  congestion_active: boolean;
+  lines: RegionalLine[];
+  gen_by_carrier_mw: Record<string, number>;
+}
+
+const REGIONAL_BUS_ORDER = ["NORTHWEST", "NORTHEAST", "CENTRAL", "EDMONTON", "CALGARY", "SOUTH", "BC", "MT", "SK"];
+
 const fmt = (n: number | null | undefined, decimals = 1) =>
   n != null ? n.toFixed(decimals) : "—";
 
@@ -60,6 +96,11 @@ export default function Congestion() {
   const [loadMw, setLoadMw] = useState(10500);
   const [opfResult, setOpfResult] = useState<OPFResult | null>(null);
   const [opfLoading, setOpfLoading] = useState(true);
+
+  // Phase 2 — 9-bus regional model
+  const [loadScale, setLoadScale] = useState(1.0);
+  const [regionalResult, setRegionalResult] = useState<RegionalOPFResult | null>(null);
+  const [regionalLoading, setRegionalLoading] = useState(true);
 
   const { data: smpData, isLoading: smpLoading } = useGetAesoSmp();
   const { data: interchangeData, isLoading: interchangeLoading } = useGetAesoInterchange();
@@ -82,6 +123,24 @@ export default function Congestion() {
   }, []);
 
   useEffect(() => { void runOpf(windCf, loadMw); }, [windCf, loadMw, runOpf]);
+
+  const runRegionalOpf = useCallback(async (scale: number) => {
+    setRegionalLoading(true);
+    try {
+      const resp = await fetch("/pypsa/aeso/opf/regional", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ system_load_scale: scale }),
+      });
+      if (resp.ok) setRegionalResult(await resp.json() as RegionalOPFResult);
+    } catch {
+      // keep previous result
+    } finally {
+      setRegionalLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { void runRegionalOpf(loadScale); }, [loadScale, runRegionalOpf]);
 
   const smpChartData = (smpData ?? []).map(d => ({
     month: d.month?.slice(0, 7) ?? "",
@@ -533,6 +592,136 @@ export default function Congestion() {
           </CardContent>
         </Card>
       </div>
+
+      {/* ── Phase 2 — 9-Bus Regional Model ─────────────────────────────────── */}
+      <Card className="border-teal-500/30">
+        <CardHeader>
+          <div className="flex items-start justify-between flex-wrap gap-2">
+            <div>
+              <CardTitle className="text-base font-semibold">
+                {regionalResult?.model_label ?? "Alberta 9-Bus Regional (2025 LTP-derived)"}
+              </CardTitle>
+              <p className="text-xs text-muted-foreground mt-0.5 max-w-3xl">
+                6 real AESO 2025 Long-Term Transmission Plan planning regions + 3 real boundary
+                interties (BC/MT/SK). Two lines (Edmonton–Calgary via WATL, Edmonton–South via EATL)
+                use real published HVDC ratings. The other 5 internal AC lines are engineering-judgment
+                estimates — see the source badge on each row below.
+              </p>
+            </div>
+            {regionalResult && (
+              <Badge
+                variant={regionalResult.model_status !== "optimal" ? "destructive" : regionalResult.congestion_active ? "outline" : "secondary"}
+                className={`shrink-0 ${regionalResult.model_status === "optimal" && regionalResult.congestion_active ? "border-amber-500/50 text-amber-400" : ""}`}
+              >
+                {regionalResult.model_status !== "optimal" ? "LOAD SHED" : regionalResult.status.toUpperCase()}
+              </Badge>
+            )}
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="max-w-md">
+            <div className="flex justify-between text-xs mb-1">
+              <span className="text-muted-foreground">Provincial load scale</span>
+              <span className="font-mono text-teal-400">{(loadScale * 100).toFixed(0)}%</span>
+            </div>
+            <Slider min={0.7} max={1.4} step={0.05} value={[loadScale]}
+              onValueChange={([v]) => setLoadScale(v)} className="w-full" />
+            <p className="text-xs text-muted-foreground mt-1">
+              Scales every region's AESO-published existing load uniformly · total load{" "}
+              {regionalResult ? `${fmt(regionalResult.total_load_mw, 0)} MW` : "—"}
+            </p>
+          </div>
+
+          {regionalResult && (regionalResult.model_status !== "optimal" || regionalResult.unserved_load_mw > 1) && (
+            <div className="rounded-lg bg-red-500/10 border border-red-500/30 p-3">
+              <p className="text-sm font-medium text-red-400">Model could not fully serve load from the modeled fleet</p>
+              <p className="text-xs text-muted-foreground mt-1">
+                {fmt(regionalResult.unserved_load_mw, 0)} MW served by the balancing generator at EDMONTON
+                (not real Alberta supply) — solver: {regionalResult.solver_status} / {regionalResult.termination_condition}.
+              </p>
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            {/* Bus table */}
+            <div className="rounded-lg border border-border overflow-hidden">
+              <table className="w-full text-xs">
+                <thead className="bg-muted/40">
+                  <tr>
+                    <th className="text-left px-3 py-2 font-medium text-muted-foreground">Bus</th>
+                    <th className="text-right px-3 py-2 font-medium text-muted-foreground">LMP $/MWh</th>
+                    <th className="text-right px-3 py-2 font-medium text-muted-foreground">Load MW</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {REGIONAL_BUS_ORDER.map(bus => {
+                    const lmp = regionalResult?.lmps?.[bus];
+                    const load = regionalResult?.bus_loads_mw?.[bus];
+                    const isBoundary = bus === "BC" || bus === "MT" || bus === "SK";
+                    return (
+                      <tr key={bus} className="border-t border-border/50">
+                        <td className="px-3 py-1.5 font-medium">
+                          {bus}{isBoundary && <span className="text-muted-foreground font-normal"> · boundary</span>}
+                        </td>
+                        <td className="text-right px-3 py-1.5 font-mono" style={{ color: lmp != null ? lmpColor(lmp) : undefined }}>
+                          {regionalLoading ? "…" : lmp != null ? `$${fmt(lmp)}` : "—"}
+                        </td>
+                        <td className="text-right px-3 py-1.5 font-mono text-muted-foreground">
+                          {load != null ? fmt(load, 0) : "—"}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Line table */}
+            <div className="rounded-lg border border-border overflow-hidden">
+              <table className="w-full text-xs">
+                <thead className="bg-muted/40">
+                  <tr>
+                    <th className="text-left px-3 py-2 font-medium text-muted-foreground">Line</th>
+                    <th className="text-right px-3 py-2 font-medium text-muted-foreground">Loading</th>
+                    <th className="text-center px-3 py-2 font-medium text-muted-foreground">Source</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(regionalResult?.lines ?? []).map(line => (
+                    <tr key={line.name} className="border-t border-border/50">
+                      <td className={`px-3 py-1.5 font-medium ${line.congested ? "text-red-400" : ""}`}>
+                        {line.from_bus}–{line.to_bus}{line.congested ? " ⚡" : ""}
+                      </td>
+                      <td className="text-right px-3 py-1.5 font-mono text-muted-foreground">
+                        {fmt(Math.abs(line.flow_mw), 0)}/{fmt(line.limit_mw, 0)} · {fmt(line.loading_pct)}%
+                      </td>
+                      <td className="text-center px-3 py-1.5">
+                        <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded ${
+                          line.capacity_source === "sourced"
+                            ? "bg-teal-500/15 text-teal-400"
+                            : "bg-amber-500/15 text-amber-500"
+                        }`} title={line.capacity_note}>
+                          {line.capacity_source === "sourced" ? "SOURCED" : "ESTIMATED"}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                  {!regionalResult && (
+                    <tr><td colSpan={3} className="px-3 py-4 text-center text-muted-foreground">Loading…</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <p className="text-[10px] text-muted-foreground leading-relaxed">
+            Sources: AESO 2025 Long-Term Transmission Plan (planning-region load/generation-by-fuel figures) ·
+            AESO Information Document 2011-001R (BC/MT/SK boundary intertie transfer capability, system-normal) ·
+            publicly documented WATL/EATL 500kV HVDC ratings (1,000 MW each). South is AESO's combined
+            region — not split into Southeast/Southwest, since the LTP doesn't publish that split separately.
+          </p>
+        </CardContent>
+      </Card>
 
       {/* Model methodology note */}
       <Card className="border-amber-500/20 bg-amber-500/5">

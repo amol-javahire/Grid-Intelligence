@@ -20,6 +20,10 @@ Endpoints (Alberta / AESO):
   POST /pypsa/aeso/opf           — run Alberta DC OPF with scenario params
   GET  /pypsa/aeso/opf/default   — cached default high-wind scenario result
   POST /pypsa/aeso/sensitivity   — sweep a single parameter (wind_cf, load, etc.)
+
+Endpoints (Alberta / AESO — 9-bus regional, Phase 2):
+  GET  /pypsa/aeso/topology/regional — 9-bus network built from AESO's 2025 LTP
+  POST /pypsa/aeso/opf/regional      — run DC OPF on the 9-bus regional network
 """
 
 import os
@@ -584,6 +588,47 @@ def aeso_sensitivity(req: AesoSensitivityRequest):
         return result
     except Exception as e:
         logger.error("AESO sensitivity failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ---------------------------------------------------------------------------
+# Alberta / AESO — 9-bus regional OPF (Phase 2, built from AESO's 2025 LTP)
+# ---------------------------------------------------------------------------
+
+class AesoRegionalOPFRequest(BaseModel):
+    system_load_scale: float = 1.0   # multiplies every region's Existing (MW) load
+    wind_cf: float = 0.35
+    solar_cf: float = 0.22
+    gas_price_mmbtu: float = 4.50
+    line_overrides: dict[str, float] | None = None  # e.g. {"CALGARY-SOUTH": 2000.0}
+
+
+@app.get("/aeso/topology/regional")
+def aeso_topology_regional():
+    """9-bus Alberta network topology (AESO 2025 LTP planning regions + BC/MT/SK)."""
+    from aeso_network_regional import get_topology_regional
+    return get_topology_regional()
+
+
+@app.post("/aeso/opf/regional")
+def aeso_opf_regional(req: AesoRegionalOPFRequest):
+    """Run DC OPF on the 9-bus AESO-2025-LTP-derived regional network."""
+    from aeso_network_regional import run_opf as _run_regional_opf
+    try:
+        result = _run_regional_opf(
+            system_load_scale=req.system_load_scale,
+            wind_cf=req.wind_cf,
+            solar_cf=req.solar_cf,
+            gas_price_mmbtu=req.gas_price_mmbtu,
+            line_overrides=req.line_overrides,
+        )
+        if "error" in result:
+            raise HTTPException(status_code=422, detail=result["error"])
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("AESO regional OPF failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
