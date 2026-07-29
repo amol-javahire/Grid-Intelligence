@@ -221,6 +221,27 @@ def build_network(
     return net
 
 
+MODEL_LABEL = "Alberta 3-Bus Illustrative"
+MODEL_DISCLAIMER = (
+    "Illustrative planning construct, not a validated or historical AESO result. "
+    "Alberta operates a single province-wide pool price today — this model does not "
+    "reproduce, forecast, or back-test against any real AESO nodal price, congestion "
+    "event, or REM outcome. Node boundaries are academic aggregations of AESO's actual "
+    "zones, not official AESO designations."
+)
+
+
+def _dependency_versions() -> dict:
+    versions = {"pypsa": getattr(pypsa, "__version__", "unknown"),
+                "numpy": np.__version__, "pandas": pd.__version__}
+    try:
+        import highspy
+        versions["highspy"] = getattr(highspy, "__version__", "unknown")
+    except Exception:
+        versions["highspy"] = "not importable"
+    return versions
+
+
 def run_opf(
     system_load_mw: float = 10500.0,
     wind_cf: float = 0.35,
@@ -233,6 +254,9 @@ def run_opf(
 ) -> dict:
     """
     Run DC OPF and return LMPs, flows, dispatch, and congestion analytics.
+
+    This is a 3-bus illustrative model (see MODEL_LABEL / MODEL_DISCLAIMER) — it is
+    NOT a validated reconstruction of real AESO nodal prices or congestion events.
     """
     net = build_network(
         system_load_mw=system_load_mw,
@@ -246,13 +270,30 @@ def run_opf(
     )
 
     try:
-        net.optimize(solver_name="highs")
+        opt_result = net.optimize(solver_name="highs")
     except Exception as e:
-        return {"error": f"OPF solver failed: {e}"}
+        return {"error": f"OPF solver failed: {e}", "model_label": MODEL_LABEL}
 
-    # Verify solution is available by checking bus marginal prices exist
-    if net.buses_t.marginal_price.empty:
-        return {"error": "OPF did not produce marginal prices — network may be infeasible"}
+    # net.optimize() returns (status, termination_condition) in modern PyPSA —
+    # don't just assume success; a prior version of this endpoint hardcoded
+    # "status": "optimal" regardless of what the solver actually reported.
+    if isinstance(opt_result, tuple) and len(opt_result) == 2:
+        solver_status, termination_condition = opt_result
+    else:
+        solver_status, termination_condition = ("unknown", "unknown")
+
+    solved_ok = (solver_status == "ok") and (termination_condition in ("optimal", "optimal_inaccurate"))
+
+    if not solved_ok or net.buses_t.marginal_price.empty:
+        return {
+            "error": (
+                f"OPF did not reach an optimal solution "
+                f"(solver_status={solver_status!r}, termination_condition={termination_condition!r})"
+            ),
+            "solver_status": solver_status,
+            "termination_condition": termination_condition,
+            "model_label": MODEL_LABEL,
+        }
 
     # ── LMPs (shadow price on nodal balance) ──────────────────────────────────
     lmps: dict[str, float] = {}
@@ -263,10 +304,24 @@ def run_opf(
         except Exception:
             lmps[bus] = 0.0
 
-    avg_lmp = round(np.mean(list(lmps.values())), 4)
+    # Bus loads for this scenario (needed for load-weighted average price and
+    # for the energy-balance residual check below).
+    scale = system_load_mw / TOTAL_BASE
+    bus_loads = {bus: BASE_LOAD[bus] * scale for bus in BUSES}
+    total_load_input = sum(bus_loads.values())
+
+    avg_lmp_unweighted = round(float(np.mean(list(lmps.values()))), 4)
+    avg_lmp_load_weighted = round(
+        sum(lmps[b] * bus_loads[b] for b in BUSES) / max(total_load_input, 1e-6), 4
+    )
     lmp_spread = round(max(lmps.values()) - min(lmps.values()), 4)
 
     # ── Line flows and congestion ─────────────────────────────────────────────
+    # "congested" is reported two ways: loading_pct >= 98% (a proximity heuristic)
+    # and, where the solver exposes it, whether the line's shadow price (dual) is
+    # actually non-zero — the latter is the real test of a binding constraint.
+    # A line can be heavily loaded without binding, or the loading heuristic can
+    # mislabel a state that isn't actually shadow-priced.
     line_results = []
     congested_lines = []
     for line_name in net.lines.index:
@@ -274,12 +329,29 @@ def run_opf(
             flow = float(net.lines_t.p0[line_name][0])
             limit = float(net.lines.loc[line_name, "s_nom"])
             loading_pct = abs(flow) / limit * 100.0 if limit > 0 else 0.0
-            is_congested = loading_pct >= 98.0
+            near_limit = loading_pct >= 98.0
+
+            binding = None
+            congestion_basis = "loading_threshold_98pct"
+            try:
+                mu_upper = float(net.lines_t.mu_upper[line_name].iloc[0]) if "mu_upper" in dir(net.lines_t) and line_name in getattr(net.lines_t, "mu_upper", pd.DataFrame()).columns else None
+                mu_lower = float(net.lines_t.mu_lower[line_name].iloc[0]) if "mu_lower" in dir(net.lines_t) and line_name in getattr(net.lines_t, "mu_lower", pd.DataFrame()).columns else None
+                if mu_upper is not None or mu_lower is not None:
+                    binding = abs(mu_upper or 0.0) > 1e-4 or abs(mu_lower or 0.0) > 1e-4
+                    congestion_basis = "shadow_price_dual"
+            except Exception:
+                binding = None
+
+            is_congested = binding if binding is not None else near_limit
+
             line_results.append({
                 "name": line_name,
                 "flow_mw": round(flow, 2),
                 "limit_mw": round(limit, 2),
                 "loading_pct": round(loading_pct, 2),
+                "near_limit": near_limit,
+                "binding": binding,
+                "congestion_basis": congestion_basis,
                 "congested": is_congested,
             })
             if is_congested:
@@ -287,14 +359,20 @@ def run_opf(
         except Exception:
             pass
 
-    # ── Generator dispatch ────────────────────────────────────────────────────
+    # ── Generator dispatch (slack excluded from the carrier rollup — reported
+    #    separately below as an explicit unserved-load signal, not silently) ──
     dispatch = {}
     total_gen_by_carrier: dict[str, float] = {}
+    slack_p = 0.0
     for gen_name in net.generators.index:
-        if gen_name.startswith("_slack"):
-            continue
         try:
             p = float(net.generators_t.p[gen_name][0])
+        except Exception:
+            continue
+        if gen_name.startswith("_slack"):
+            slack_p += p
+            continue
+        try:
             carrier = net.generators.loc[gen_name, "carrier"]
             bus = net.generators.loc[gen_name, "bus"]
             dispatch[gen_name] = {
@@ -309,6 +387,10 @@ def run_opf(
         except Exception:
             pass
 
+    unserved_load_mw = round(slack_p, 2)
+    # Threshold >1 MW to avoid flagging solver noise as "load shed"
+    model_status = "load_shed" if unserved_load_mw > 1.0 else "optimal"
+
     # ── Curtailment analysis ──────────────────────────────────────────────────
     wind_potential = 6200.0 * (1.0 + south_wind_bonus_pct / 100.0) * wind_cf
     solar_potential = 900.0 * solar_cf
@@ -320,22 +402,47 @@ def run_opf(
         (wind_curtailed + solar_curtailed) / max(wind_potential + solar_potential, 1.0) * 100
     )
 
-    # ── Total cost ────────────────────────────────────────────────────────────
+    # ── Total cost — now INCLUDES slack dispatch, so a run that quietly leans on
+    #    the slack generator to serve load doesn't understate system cost. ──────
     total_cost = sum(
         dispatch[g]["p_mw"] * float(net.generators.loc[g, "marginal_cost"])
         for g in dispatch
     )
+    slack_cost = slack_p * float(net.generators.loc["_slack_CENTRAL", "marginal_cost"]) if slack_p else 0.0
+    total_cost += slack_cost
+
+    # ── Energy balance residual — sanity check that dispatch (incl. slack) matches
+    #    the load actually set on the network for this scenario. Should be ~0 for
+    #    a lossless DC OPF; a non-trivial residual indicates a modeling bug. ──────
+    total_dispatch_incl_slack = sum(float(net.generators_t.p[g][0]) for g in net.generators.index)
+    energy_balance_residual_mw = round(total_dispatch_incl_slack - total_load_input, 4)
 
     # ── Southern Alberta LMP spread (key metric) ──────────────────────────────
     south_central_spread = lmps.get("CENTRAL", 0.0) - lmps.get("SOUTH", 0.0)
     congestion_active = any(r["congested"] for r in line_results)
 
     return {
+        # Model identity / honesty gate — always echoed so no consumer can
+        # accidentally present this as real AESO nodal data.
+        "model_label": MODEL_LABEL,
+        "disclaimer": MODEL_DISCLAIMER,
+
+        # Solver diagnostics — real values from this run, not hardcoded.
+        "status": "optimal" if model_status == "optimal" else model_status,
+        "solver_status": solver_status,
+        "termination_condition": termination_condition,
+        "model_status": model_status,
+        "unserved_load_mw": unserved_load_mw,
+        "energy_balance_residual_mw": energy_balance_residual_mw,
+        "dependency_versions": _dependency_versions(),
+
         # Core results
-        "status": "optimal",
-        "avg_lmp": avg_lmp,
+        "avg_lmp": avg_lmp_load_weighted,
+        "avg_lmp_load_weighted": avg_lmp_load_weighted,
+        "avg_lmp_unweighted": avg_lmp_unweighted,
         "lmp_spread": lmp_spread,
         "total_cost_cad_hr": round(total_cost, 2),
+        "slack_cost_cad_hr": round(slack_cost, 2),
         "system_load_mw": system_load_mw,
 
         # Node LMPs
@@ -374,13 +481,8 @@ def run_opf(
 def get_topology() -> dict:
     """Return static topology for map rendering."""
     return {
-        "model": "Alberta 3-Node (Academic Aggregation)",
-        "disclaimer": (
-            "Alberta operates a single pool price today. This 3-node model is a "
-            "planning/research tool illustrating spatial price formation analogous to "
-            "AESO's planned Restructured Energy Market (REM, targeted mid-2027). "
-            "Node boundaries are academic aggregations, not official AESO designations."
-        ),
+        "model": MODEL_LABEL,
+        "disclaimer": MODEL_DISCLAIMER,
         "buses": [
             {
                 "name": name,

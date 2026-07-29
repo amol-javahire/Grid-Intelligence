@@ -14,14 +14,27 @@ interface OPFLine {
   flow_mw: number;
   limit_mw: number;
   loading_pct: number;
+  near_limit?: boolean;
+  binding?: boolean | null;
+  congestion_basis?: string;
   congested: boolean;
 }
 
 interface OPFResult {
   status: string;
+  model_label?: string;
+  disclaimer?: string;
+  solver_status?: string;
+  termination_condition?: string;
+  model_status?: string;
+  unserved_load_mw?: number;
+  energy_balance_residual_mw?: number;
   avg_lmp: number;
+  avg_lmp_load_weighted?: number;
+  avg_lmp_unweighted?: number;
   lmp_spread: number;
   total_cost_cad_hr: number;
+  slack_cost_cad_hr?: number;
   system_load_mw: number;
   lmps: { SOUTH: number; CENTRAL: number; NORTH: number };
   congestion_active: boolean;
@@ -98,22 +111,56 @@ export default function Congestion() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-3xl font-bold tracking-tight">Congestion & Nodal Analysis</h1>
+        <div className="flex items-center gap-2 flex-wrap">
+          <h1 className="text-3xl font-bold tracking-tight">Congestion & Nodal Analysis</h1>
+          <Badge variant="outline" className="border-amber-500/50 text-amber-400 shrink-0">
+            Illustrative model — not AESO data
+          </Badge>
+        </div>
         <p className="text-muted-foreground text-sm mt-1">
-          3-zone PyPSA OPF · system marginal price · BC/SK intertie · transmission corridors
+          {opfResult?.disclaimer ??
+            "3-bus illustrative planning construct · not a validated or historical AESO result · BC/SK intertie · transmission corridors"}
         </p>
       </div>
+
+      {/* Solver / model-health warning — only shown when the run actually leaned on
+          the slack generator or the solver didn't cleanly report "optimal". This
+          surfaces load-shedding instead of letting it silently balance the system. */}
+      {opfResult && (opfResult.model_status !== "optimal" || (opfResult.unserved_load_mw ?? 0) > 1) && (
+        <div className="rounded-lg bg-red-500/10 border border-red-500/30 p-3">
+          <p className="text-sm font-medium text-red-400">
+            Model could not fully serve load from the modeled fleet
+          </p>
+          <p className="text-xs text-muted-foreground mt-1">
+            {fmt(opfResult.unserved_load_mw, 0)} MW served by the balancing generator (not real Alberta
+            supply) — solver status: {opfResult.solver_status ?? "unknown"} / {opfResult.termination_condition ?? "unknown"}.
+            Treat this scenario's LMPs as unreliable.
+          </p>
+        </div>
+      )}
 
       {/* KPI Row */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <Card>
           <CardContent className="pt-4 pb-4">
             <p className="text-xs text-muted-foreground uppercase tracking-wide">OPF Status</p>
-            <p className={`text-xl font-bold mt-1 ${opfResult?.congestion_active ? "text-red-400" : "text-green-400"}`}>
-              {opfLoading ? "—" : opfResult?.congestion_active ? "Congested" : "Uncongested"}
+            <p className={`text-xl font-bold mt-1 ${
+              opfLoading || !opfResult
+                ? ""
+                : opfResult.model_status !== "optimal"
+                  ? "text-red-400"
+                  : opfResult.congestion_active ? "text-amber-400" : "text-green-400"
+            }`}>
+              {opfLoading || !opfResult
+                ? "—"
+                : opfResult.model_status !== "optimal"
+                  ? "Load shed"
+                  : opfResult.congestion_active ? "Congested" : "Uncongested"}
             </p>
             <p className="text-xs text-muted-foreground mt-1 truncate">
-              {opfResult?.congested_lines?.join(", ") || "No binding constraints"}
+              {opfResult
+                ? `solver: ${opfResult.solver_status ?? "?"} / ${opfResult.termination_condition ?? "?"}`
+                : "No binding constraints"}
             </p>
           </CardContent>
         </Card>
@@ -157,14 +204,20 @@ export default function Congestion() {
         <CardHeader>
           <div className="flex items-start justify-between">
             <div>
-              <CardTitle className="text-base font-semibold">3-Zone Alberta OPF Model</CardTitle>
+              <CardTitle className="text-base font-semibold">
+                {opfResult?.model_label ?? "Alberta 3-Bus Illustrative"} OPF
+              </CardTitle>
               <p className="text-xs text-muted-foreground mt-0.5">
-                PyPSA optimal power flow · SOUTH / CENTRAL / NORTH · adjust inputs to recompute nodal LMPs
+                PyPSA DC-OPF (HiGHS) · SOUTH / CENTRAL / NORTH academic aggregation · adjust inputs to recompute —
+                not AESO-published nodal prices
               </p>
             </div>
             {opfResult && (
-              <Badge variant={opfResult.congestion_active ? "destructive" : "secondary"} className="shrink-0 ml-4">
-                {opfResult.status.toUpperCase()}
+              <Badge
+                variant={opfResult.model_status !== "optimal" ? "destructive" : opfResult.congestion_active ? "outline" : "secondary"}
+                className={`shrink-0 ml-4 ${opfResult.model_status !== "optimal" ? "" : opfResult.congestion_active ? "border-amber-500/50 text-amber-400" : ""}`}
+              >
+                {opfResult.model_status !== "optimal" ? "LOAD SHED" : opfResult.status.toUpperCase()}
               </Badge>
             )}
           </div>
@@ -297,7 +350,12 @@ export default function Congestion() {
                           style={{ width: `${Math.min(line.loading_pct, 100)}%` }}
                         />
                       </div>
-                      <p className="text-xs text-muted-foreground">{fmt(line.loading_pct)}% loaded</p>
+                      <p className="text-xs text-muted-foreground">
+                        {fmt(line.loading_pct)}% loaded
+                        {line.congestion_basis === "shadow_price_dual"
+                          ? line.binding ? " · binding (shadow price > 0)" : " · near limit but not binding"
+                          : " · loading-threshold heuristic (dual unavailable)"}
+                      </p>
                     </div>
                   ))}
                 </div>
@@ -318,9 +376,12 @@ export default function Congestion() {
               <div className="rounded-lg bg-muted/30 p-3 divide-y divide-border text-xs">
                 {[
                   ["System load", `${loadMw.toLocaleString()} MW`],
-                  ["Avg LMP", `$${fmt(opfResult?.avg_lmp)}/MWh`],
+                  ["Avg LMP (load-weighted)", `$${fmt(opfResult?.avg_lmp_load_weighted ?? opfResult?.avg_lmp)}/MWh`],
+                  ["Avg LMP (simple mean)", `$${fmt(opfResult?.avg_lmp_unweighted)}/MWh`],
                   ["SOUTH–NORTH spread", `$${fmt(opfResult?.lmp_spread)}/MWh`],
-                  ["System cost", `$${fmt(opfResult?.total_cost_cad_hr, 0)}/hr`],
+                  ["System cost (incl. any load shed)", `$${fmt(opfResult?.total_cost_cad_hr, 0)}/hr`],
+                  ["Unserved load", `${fmt(opfResult?.unserved_load_mw, 0)} MW`],
+                  ["Energy balance residual", `${fmt(opfResult?.energy_balance_residual_mw, 2)} MW`],
                   ["Curtailment", `${fmt(opfResult?.curtailment_pct)}% (${fmt(opfResult?.south_wind_curtailed_mw, 0)} MW)`],
                 ].map(([label, value]) => (
                   <div key={label} className="flex justify-between py-1.5">
@@ -474,32 +535,34 @@ export default function Congestion() {
       </div>
 
       {/* Model methodology note */}
-      <Card className="border-teal-500/20 bg-teal-500/5">
+      <Card className="border-amber-500/20 bg-amber-500/5">
         <CardContent className="pt-4 pb-4">
-          <p className="text-sm font-semibold text-teal-400 mb-2">Model Methodology</p>
+          <p className="text-sm font-semibold text-amber-400 mb-2">Model Methodology — Illustrative, Not Validated</p>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs text-muted-foreground">
             <div>
               <p className="font-medium text-foreground mb-1">PyPSA OPF Engine</p>
               <p>
-                Three-node DC linear OPF solved via HiGHS LP solver. SOUTH zone: 6,200 MW wind (Pincher Creek / Lethbridge)
-                + 900 MW solar + 3,100 MW gas peakers. CENTRAL: 4,800 MW gas + load centre.
-                NORTH: 1,200 MW gas + hydro run-of-river.
+                3-bus DC linear OPF solved via HiGHS. SOUTH: 6,200 MW wind (Pincher Creek / Lethbridge area) + 900 MW
+                solar + gas peakers. CENTRAL: ~9,000 MW gas + hydro + BC/SK interties + load centre.
+                NORTH: oil-sands cogen + biomass. Bus boundaries are an academic aggregation of AESO's
+                actual planning areas, not an official AESO zone definition.
               </p>
             </div>
             <div>
-              <p className="font-medium text-foreground mb-1">Congestion Mechanism</p>
+              <p className="font-medium text-foreground mb-1">What this is not</p>
               <p>
-                At wind CF ≥ 55%, southward generation exceeds the SOUTH→CENTRAL corridor limit (2,800 MW).
-                The binding constraint induces nodal LMP divergence — SOUTH LMP collapses toward zero,
-                NORTH LMP rises to reflect scarcity. This mirrors Alberta's real-world Lethbridge-area congestion.
+                This is not a reconstruction of any real AESO nodal price, and it has not been back-tested against
+                historical congestion events. Alberta operates a single province-wide pool price today — nodal
+                pricing only exists in AESO's planned Restructured Energy Market (targeted mid-2027). Treat spreads
+                and curtailment shown here as directional, scenario-based outputs, not forecasts.
               </p>
             </div>
             <div>
-              <p className="font-medium text-foreground mb-1">SMP Congestion Rent</p>
+              <p className="font-medium text-foreground mb-1">SMP Congestion Rent (real data)</p>
               <p>
-                AESO publishes both constrained pool price and unconstrained SMP. The spread is the
-                province-wide congestion rent — money transferred from load to generators that "benefit"
-                from constraint. Positive spread periods align with high wind + high load hours.
+                Unlike the 3-bus OPF above, this chart uses AESO's actually-published constrained pool price and
+                unconstrained SMP. The spread is real, historical congestion rent — money transferred from load to
+                generators that "benefit" from a binding constraint.
               </p>
             </div>
           </div>
