@@ -154,6 +154,9 @@ async function seedPoolPrice() {
   console.log("\nPool price, generation mix, supply/demand, actual/forecast seeded.");
 }
 
+// DEPRECATED 2026-07 — synthetic (Math.random) data only, not called from
+// main() anymore. Kept for reference. Use seed-aeso-queue-real.ts instead,
+// which pulls the real monthly AESO Connection Project List.
 async function seedQueue() {
   console.log("Seeding AESO interconnection queue...");
   const regions = ["Southern AB", "Central AB", "Northern AB", "Eastern AB"];
@@ -399,7 +402,12 @@ async function seedTransmissionCorridors() {
 async function main() {
   console.log("Starting AESO seed...");
   await seedPoolPrice();
-  await seedQueue();
+  // seedQueue() REMOVED 2026-07: it was 100% synthetic (Math.random project
+  // names, fake substations, fake dates) — never real AESO data. Real queue
+  // data now comes from `pnpm seed-aeso-queue-real`, sourced from AESO's
+  // published Connection Project List. Do not re-add a call to seedQueue()
+  // here — it would silently overwrite real data with fake data on the next
+  // full reseed. The function is left below, unused, for reference only.
   await seedOutages();
   await seedCapability7Day();
   await seedConstraintEvents();
