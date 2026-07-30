@@ -385,36 +385,36 @@ export default function Queue() {
               <table className="w-full text-sm">
                 <thead className="sticky top-0 bg-card z-10">
                   <tr className="border-b border-border text-left">
-                    <th className="pb-2 font-medium text-muted-foreground">Project</th>
-                    <th className="pb-2 font-medium text-muted-foreground">MW Type</th>
-                    <th className="pb-2 font-medium text-muted-foreground text-right">Capacity</th>
-                    <th className="pb-2 font-medium text-muted-foreground">Planning Area</th>
-                    <th className="pb-2 font-medium text-muted-foreground">Status</th>
-                    <th className="pb-2 font-medium text-muted-foreground">Applied</th>
-                    <th className="pb-2 font-medium text-muted-foreground">ISD</th>
+                    <th className="pb-2 pr-6 font-medium text-muted-foreground">Project</th>
+                    <th className="pb-2 pr-6 font-medium text-muted-foreground whitespace-nowrap">MW Type</th>
+                    <th className="pb-2 pr-6 font-medium text-muted-foreground text-right whitespace-nowrap">Capacity</th>
+                    <th className="pb-2 pr-6 font-medium text-muted-foreground whitespace-nowrap">Planning Area</th>
+                    <th className="pb-2 pr-6 font-medium text-muted-foreground">Status</th>
+                    <th className="pb-2 pr-6 font-medium text-muted-foreground whitespace-nowrap">Applied</th>
+                    <th className="pb-2 font-medium text-muted-foreground whitespace-nowrap">ISD</th>
                   </tr>
                 </thead>
                 <tbody>
                   {sortedTable.map((p) => (
                     <tr key={p.id} className="border-b border-border/50">
-                      <td className="py-3 font-medium">{p.projectName ?? "—"}</td>
-                      <td className="py-3 text-muted-foreground">
+                      <td className="py-3 pr-6 font-medium">{p.projectName ?? "—"}</td>
+                      <td className="py-3 pr-6 text-muted-foreground whitespace-nowrap">
                         <span className="inline-block w-2 h-2 rounded-full mr-2"
                               style={{ background: colourOf(p.fuelType?.trim() || "Unspecified") }} />
                         {p.fuelType ?? "—"}
                       </td>
-                      <td className="py-3 font-mono text-right">
+                      <td className="py-3 pr-6 font-mono text-right whitespace-nowrap">
                         {p.capacityMw != null ? `${fmtMw(p.capacityMw)} MW` : "—"}
                       </td>
-                      <td className="py-3">{p.region ?? "—"}</td>
-                      <td className="py-3">
+                      <td className="py-3 pr-6 whitespace-nowrap">{p.region ?? "—"}</td>
+                      <td className="py-3 pr-6 whitespace-nowrap">
                         <Badge variant="outline"
                                className={isCancelled(p.status) ? "border-red-500/50 text-red-600" : ""}>
                           {p.status ?? "—"}
                         </Badge>
                       </td>
-                      <td className="py-3 text-muted-foreground">{p.queueDate ?? "—"}</td>
-                      <td className="py-3 text-muted-foreground">{p.expectedOnline ?? "TBD"}</td>
+                      <td className="py-3 pr-6 text-muted-foreground whitespace-nowrap">{p.queueDate ?? "—"}</td>
+                      <td className="py-3 text-muted-foreground whitespace-nowrap">{p.expectedOnline ?? "TBD"}</td>
                     </tr>
                   ))}
                 </tbody>

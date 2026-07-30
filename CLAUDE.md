@@ -148,6 +148,47 @@ tail -f /tmp/sced-gap.log
 
 ---
 
+## Frontend Build & Deploy — READ BEFORE BUILDING
+
+**Only one nginx vhost is installed:** `/etc/nginx/sites-enabled/grid-intelligence`
+(from `infra/nginx-grid.conf`). Single server on port 80, path-based:
+`/aeso/*` → `/var/www/aeso-platform`, `/*` → `/var/www/grid-platform`.
+
+`infra/nginx-aeso.conf` (port 8081, `BASE_PATH=/`) is an **unused alternative**.
+Do not take build settings from it — it is not installed. Verify with
+`ls -l /etc/nginx/sites-enabled/` before trusting any config file in `infra/`.
+
+`vite.config.ts` **throws** unless both `PORT` and `BASE_PATH` are set, even for
+a build (`PORT` is only used by the dev server, but the check runs regardless).
+
+**BASE_PATH must match the serving path or the app loads blank** — vite bakes
+asset URLs at build time, so a `BASE_PATH=/` bundle served under `/aeso/`
+requests `/assets/…` and 404s. This has been broken this way once already.
+
+### AESO platform (`/aeso/`)
+```bash
+cd ~/grid-intelligence
+PORT=5173 BASE_PATH=/aeso/ pnpm --filter @workspace/aeso-platform build
+
+# Verify BEFORE copying — must print /aeso/assets/..., not /assets/...
+grep -o 'src="[^"]*"' artifacts/aeso-platform/dist/public/index.html
+
+sudo rm -rf /var/www/aeso-platform/assets   # drop orphaned hashed bundles
+sudo cp -r artifacts/aeso-platform/dist/public/* /var/www/aeso-platform/
+```
+
+### Grid platform (`/`)
+```bash
+PORT=5173 BASE_PATH=/ pnpm --filter @workspace/grid-platform build
+sudo cp -r artifacts/grid-platform/dist/public/* /var/www/grid-platform/
+```
+
+No `pm2 restart` is needed for frontend-only changes — nginx serves the static
+build directly. Restart `api-server` only when `artifacts/api-server/` changed.
+Hard-refresh (Ctrl+Shift+R) after deploying; the old bundle is cached.
+
+---
+
 ## Key Files
 
 | File | Purpose |
