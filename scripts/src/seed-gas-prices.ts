@@ -216,6 +216,56 @@ async function upsertWahaRows(
   return total;
 }
 
+// ── California Citygate ──────────────────────────────────────────────────
+//
+// EIA series NG.N3050CA3.M — "Natural Gas Citygate Price in California",
+// monthly, STATE-LEVEL AVERAGE. This is the CAISO gas price gap-fill agreed
+// this session: confirmed via scripts/src/discover-eia-series.ts that EIA's
+// duoarea facet list has exactly one California entry ("SCA — CALIFORNIA"),
+// so there is no free SoCal-vs-PG&E Citygate split available — the
+// "CALSCG"/"CALPGCG" codes found via web search belong to Natural Gas
+// Intelligence's paid index product, not EIA, and are not reachable through
+// the oilpriceapi.com connector already used for Waha in this file either
+// (checked live — its catalog has no regional US gas basis hubs at all).
+//
+// Stored under hub='ca_citygate' in the existing generic gas_prices table —
+// no schema change needed, same table Henry Hub and Waha already use.
+async function seedCaCitygate(): Promise<number> {
+  const apiKey = process.env.EIA_API_KEY;
+  if (!apiKey) throw new Error("EIA_API_KEY not set");
+
+  console.log("Fetching California Citygate monthly from EIA API v2 (NG.N3050CA3.M)…");
+  const url =
+    `https://api.eia.gov/v2/seriesid/NG.N3050CA3.M` +
+    `?api_key=${apiKey}` +
+    `&start=2024-01` +
+    `&length=5000` +
+    `&sort[0][column]=period&sort[0][direction]=asc`;
+
+  const body = curlGet(url, 60);
+  if (!body.trim()) throw new Error("EIA API returned empty response for N3050CA3");
+
+  const parsed = JSON.parse(body) as {
+    response?: { data?: Array<{ period: string; value: number | null }> };
+  };
+  const data = parsed?.response?.data ?? [];
+  if (!data.length) throw new Error("EIA API returned 0 rows for N3050CA3");
+
+  // Monthly series — period is "YYYY-MM", store as the 1st of that month so
+  // it fits the existing date-keyed gas_prices table without a schema change.
+  const rows = data
+    .filter(r => r.value != null && !isNaN(Number(r.value)))
+    .map(r => ({
+      hub:    "ca_citygate",
+      date:   `${r.period}-01`,
+      price:  Number(r.value),
+      source: "eia",
+    }));
+
+  console.log(`  EIA returned ${rows.length} California Citygate rows`);
+  return upsertRows(rows);
+}
+
 async function seedWaha() {
   let totalUpserted = 0;
 
@@ -320,7 +370,8 @@ async function main() {
   console.log("Sources:");
   console.log("  Henry Hub: EIA API v2 (NG.RNGWHHD.D) primary, FRED DHHNGSP fallback");
   console.log("  Waha Hub:  oilpriceapi.com (real NGI data) if OIL_PRICE_API_KEY set,");
-  console.log("             otherwise calibrated model (Henry Hub + seasonal Waha−HH basis)\n");
+  console.log("             otherwise calibrated model (Henry Hub + seasonal Waha−HH basis)");
+  console.log("  CA Citygate: EIA API v2 (NG.N3050CA3.M) — state-level average, monthly\n");
 
   let hhRows = 0;
   try {
@@ -342,6 +393,16 @@ async function main() {
 
   const wahaRows = await seedWaha();
   console.log(`Waha: ${wahaRows} rows upserted\n`);
+
+  try {
+    const caRows = await seedCaCitygate();
+    console.log(`CA Citygate: ${caRows} rows upserted\n`);
+  } catch (e) {
+    // Non-fatal — Henry Hub and Waha (ERCOT) are the priority; CA Citygate
+    // is an addition, not something anything else in the platform depends
+    // on yet. Log and move on rather than aborting the whole run.
+    console.warn("CA Citygate fetch failed:", (e as Error).message.slice(0, 120));
+  }
 
   const counts = await db.execute<{ hub: string; cnt: string; min_date: string; max_date: string; sources: string }>(
     sql`SELECT hub,

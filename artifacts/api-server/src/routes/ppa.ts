@@ -99,11 +99,43 @@ function npv(cashflows: number[], wacc: number): number {
 }
 
 /**
- * Fetch the average synthetic power price from the gas forward strip.
- * Returns null if no strip data is available.
+ * Real forward reference: EIA STEO wholesale power price forecast, per market.
+ * Not a tradeable settlement — see lib/db/src/schema/power_forwards.ts for why
+ * (regional power hub futures aren't published free anywhere; this is the
+ * best available free alternative, a government forecaster's monthly
+ * outlook). Averages the most recent forecast vintage across its full
+ * published curve. Returns null if the table hasn't been seeded for that
+ * market — callers must fall back, not treat null as zero.
+ */
+async function computeEiaForwardAvg(market: string): Promise<number | null> {
+  try {
+    const rows = await db.execute<{ price_mwh: string }>(sql`
+      SELECT price_mwh::float8
+      FROM power_forwards
+      WHERE market = ${market}
+        AND as_of_date = (SELECT MAX(as_of_date) FROM power_forwards WHERE market = ${market})
+        AND price_mwh IS NOT NULL
+    `);
+    if (!rows.rows.length) return null;
+    const avg = rows.rows.reduce((s, r) => s + Number(r.price_mwh), 0) / rows.rows.length;
+    return Math.round(avg * 100) / 100;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Fetch the average synthetic power price from the NATIONAL Henry Hub gas
+ * forward strip. Returns null if no strip data is available.
  *
  * Synthetic price = gasForward × heatRate × seasonalMultiplier
  * Default heat rate 8.5 MMBtu/MWh (representative ERCOT marginal unit)
+ *
+ * FALLBACK ONLY as of 2026-07 — computeEiaForwardAvg (real EIA STEO
+ * per-market forecast) is preferred when available. This synthetic path
+ * uses a national gas price with no regional basis adjustment, so it is a
+ * cruder proxy than the real forecast; kept only for when power_forwards
+ * hasn't been seeded yet, or as a sanity cross-check.
  */
 async function computeForwardPowerAvg(heatRate: number = 8.5): Promise<number | null> {
   try {
@@ -130,8 +162,11 @@ async function computeForwardPowerAvg(heatRate: number = 8.5): Promise<number | 
  * Optional params:
  *   forwardPowerPriceMwh  — override market reference DA price with synthetic power forward avg
  *                           (computed by ercot-gas Forward Curve tab: gasStrip × heatRate)
- *                           When provided, marketRefSource = 'forward_curve'
- *                           When absent, tries gas_forwards table; falls back to historical avg
+ *                           When provided, marketRefSource = 'caller_override'
+ *                           When absent, priority is:
+ *                             1. power_forwards (real EIA STEO forecast, per market) → 'eia_forecast'
+ *                             2. gas_forwards × heat rate (ERCOT only, national gas, no basis) → 'forward_curve'
+ *                             3. flat historical average → 'historical_avg'
  */
 router.get("/ppa-npv", async (req, res) => {
   try {
@@ -186,23 +221,31 @@ router.get("/ppa-npv", async (req, res) => {
     const p90Multiplier = defaults.p90Multiplier;
 
     // ── Market reference price resolution ─────────────────────────────────
-    // Priority: (1) caller-provided forwardPowerPriceMwh, (2) gas_forwards strip, (3) historical avg
+    // Priority: (1) caller override, (2) real EIA STEO forecast (power_forwards),
+    // (3) synthetic gas×heat-rate strip (ERCOT only, national gas), (4) historical avg.
     let marketRefDA: number;
-    let marketRefSource: "caller_override" | "forward_curve" | "historical_avg";
+    let marketRefSource: "caller_override" | "eia_forecast" | "forward_curve" | "historical_avg";
 
     if (req.query.forwardPowerPriceMwh !== undefined) {
       const v = Number(req.query.forwardPowerPriceMwh);
       marketRefDA = !isNaN(v) && v > 0 ? v : (MARKET_REF_DA[market] ?? 31.42);
       marketRefSource = "caller_override";
     } else {
-      // Try to derive from gas forward strip (ERCOT markets only for now)
-      const fwdAvg = market === "ERCOT" ? await computeForwardPowerAvg(8.5) : null;
-      if (fwdAvg != null && fwdAvg > 0) {
-        marketRefDA = fwdAvg;
-        marketRefSource = "forward_curve";
+      const eiaAvg = (market === "ERCOT" || market === "CAISO") ? await computeEiaForwardAvg(market) : null;
+      if (eiaAvg != null && eiaAvg > 0) {
+        marketRefDA = eiaAvg;
+        marketRefSource = "eia_forecast";
       } else {
-        marketRefDA = MARKET_REF_DA[market] ?? 31.42;
-        marketRefSource = "historical_avg";
+        // Fall back to the national-gas synthetic (ERCOT only — CAISO has no
+        // gas×heat-rate proxy wired up, so it drops straight to historical).
+        const fwdAvg = market === "ERCOT" ? await computeForwardPowerAvg(8.5) : null;
+        if (fwdAvg != null && fwdAvg > 0) {
+          marketRefDA = fwdAvg;
+          marketRefSource = "forward_curve";
+        } else {
+          marketRefDA = MARKET_REF_DA[market] ?? 31.42;
+          marketRefSource = "historical_avg";
+        }
       }
     }
 

@@ -138,7 +138,7 @@ const CAPEX_BENCHMARKS: CapexBenchmark[] = [
 
 interface PriceWaterfall {
   marketRefDa:       number;
-  marketRefSource:   "caller_override" | "forward_curve" | "historical_avg";
+  marketRefSource:   "caller_override" | "eia_forecast" | "forward_curve" | "historical_avg";
   captureRatio:      number;
   rawCapturePrice:   number;
   shapeDiscount:     number;
@@ -770,7 +770,9 @@ export default function PpaCalculator() {
                     label="Market DA Reference"
                     value={`$${result.priceWaterfall.marketRefDa}`}
                     note={
-                      result.priceWaterfall.marketRefSource === "forward_curve"
+                      result.priceWaterfall.marketRefSource === "eia_forecast"
+                        ? "EIA STEO forecast"
+                        : result.priceWaterfall.marketRefSource === "forward_curve"
                         ? "gas strip × HR"
                         : result.priceWaterfall.marketRefSource === "caller_override"
                         ? "user override"

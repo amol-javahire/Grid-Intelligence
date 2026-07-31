@@ -748,9 +748,11 @@ function MajorAlbertaProjects() {
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-sm font-medium">Cumulative capital value by construction start</CardTitle>
+          <CardTitle className="text-sm font-medium">Cumulative capital value by approximate schedule year</CardTitle>
           <p className="text-xs text-muted-foreground mt-1">
-            Running total of published project cost, one line per sector.
+            Running total of published project cost, one line per sector. The source has no
+            structured start date — years are extracted from its free-text "Schedule" field
+            (e.g. "2024–2026"), so treat the x-axis as approximate, not a committed date.
           </p>
         </CardHeader>
         <CardContent className="h-96">
@@ -782,7 +784,7 @@ function MajorAlbertaProjects() {
           <CardContent className="pt-0">
             <p className="text-xs text-muted-foreground">
               {plotted} project{plotted === 1 ? "" : "s"} plotted.
-              {skipped > 0 && ` ${skipped} omitted for missing a start date or cost — the province withholds cost for some projects, so these totals are a floor, not a true total.`}
+              {skipped > 0 && ` ${skipped} omitted for missing a parseable schedule year or a published cost — the province withholds cost for some projects and "Schedule" isn't always a clean year, so these totals are a floor, not a true total.`}
             </p>
           </CardContent>
         )}

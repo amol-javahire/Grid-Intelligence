@@ -83,18 +83,22 @@ function findCol(headers: string[], ...keywords: string[]): number {
 }
 
 // ── Cost parsing ─────────────────────────────────────────────────────────────
-// Published as a $-millions figure, but formatting varies ("1,200", "$1.2B",
-// "1200.00"). Anything that doesn't parse cleanly becomes null rather than a
-// guess — a wrong capital cost is worse than a missing one.
+// Confirmed via --inspect against known real costs (Shepard Energy Centre
+// $1.4B, North West Redwater Phase 1 ~$8.5B): the "cost" column holds RAW
+// DOLLARS ("1400000000"), not millions. costMillions is divided by 1e6 here
+// so the stored unit matches its name. A trailing B/M suffix, if the source
+// ever adds one, is interpreted as dollars too before the same /1e6 applies.
 function parseCost(raw: unknown): number | null {
   if (raw === null || raw === undefined) return null;
   const s = String(raw).trim();
   if (!s || /^(n\/?a|tbd|unknown|-)$/i.test(s)) return null;
-  const isBillions = /b(illion)?\s*$/i.test(s);
+  const isBillionSuffix = /b(illion)?\s*$/i.test(s);
+  const isMillionSuffix = /m(illion)?\s*$/i.test(s);
   const cleaned = s.replace(/[$,\s]/g, "").replace(/[bm](illion)?$/i, "");
   const n = parseFloat(cleaned);
   if (isNaN(n) || n < 0) return null;
-  return isBillions ? n * 1000 : n;
+  const dollars = isBillionSuffix ? n * 1_000_000_000 : isMillionSuffix ? n * 1_000_000 : n;
+  return dollars / 1_000_000;
 }
 
 function parseDate(raw: unknown): string | null {
@@ -103,6 +107,22 @@ function parseDate(raw: unknown): string | null {
   if (!s) return null;
   const d = new Date(s);
   return isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
+}
+
+// ── Schedule → approximate year ──────────────────────────────────────────────
+// The source has no structured start/completion date — only a free-text
+// "schedule" column. Extracts the FIRST 4-digit year in a sane range and uses
+// Jan 1 of that year as an approximate date, purely so the cumulative chart
+// has an x-axis to bucket on. The UI must label this as approximate, sourced
+// from free text, not a real project milestone — do not present it as exact.
+function parseScheduleYear(raw: unknown): string | null {
+  if (!raw) return null;
+  const s = String(raw).trim();
+  const m = s.match(/\b(19|20)\d{2}\b/);
+  if (!m) return null;
+  const year = parseInt(m[0]);
+  if (year < 1990 || year > 2035) return null;
+  return `${year}-01-01`;
 }
 
 function parseNum(raw: unknown): string | null {
@@ -159,7 +179,12 @@ async function seed() {
 
   const cols = {
     name: findCol(headers, "project name", "name"),
-    municipality: findCol(headers, "municipality", "location", "city"),
+    // "from municipality" / "to municipality" — this dataset includes linear
+    // projects (transmission lines), so there can be two distinct endpoints.
+    // Checked BEFORE the bare "municipality" fallback, which would otherwise
+    // match "from municipality" first anyway (fine) but never surface "to".
+    municipalityFrom: findCol(headers, "from municipality", "municipality", "location", "city"),
+    municipalityTo: findCol(headers, "to municipality"),
     region: findCol(headers, "region"),
     sector: findCol(headers, "sector"),
     type: findCol(headers, "type", "category", "sub-sector", "subsector"),
@@ -167,10 +192,16 @@ async function seed() {
     status: findCol(headers, "status"),
     cost: findCol(headers, "cost", "value", "estimated cost", "budget"),
     developer: findCol(headers, "developer", "company", "owner", "proponent"),
-    start: findCol(headers, "start", "construction start"),
-    completion: findCol(headers, "completion", "finish", "end date"),
-    lat: findCol(headers, "latitude", "lat"),
-    lng: findCol(headers, "longitude", "long", "lng"),
+    start: findCol(headers, "start date", "construction start"),
+    completion: findCol(headers, "completion date", "finish date", "end date"),
+    // Free-text fallback for the date the source actually publishes.
+    schedule: findCol(headers, "schedule"),
+    // Full words only — a bare "lat"/"lng" substring-matches "related links"
+    // and "long..." headers unrelated to coordinates. Confirmed via --inspect
+    // that this dataset has no dedicated lat/lng columns at all (coordinates
+    // live in a "geometry" field this script does not parse).
+    lat: findCol(headers, "latitude"),
+    lng: findCol(headers, "longitude"),
   };
 
   if (cols.name < 0) {
@@ -184,11 +215,19 @@ async function seed() {
   const rows = [];
   const seen = new Set<string>();
   let powerCount = 0;
+  let scheduleYearCount = 0;
+  const scheduleSamples: string[] = [];
 
   for (const row of records.slice(hdrIdx + 1)) {
     const projectName = at(row, cols.name);
     if (!projectName) continue;
-    const dedupeKey = `${projectName}|${at(row, cols.municipality) ?? ""}`;
+
+    const muniFrom = at(row, cols.municipalityFrom);
+    const muniTo = cols.municipalityTo >= 0 ? at(row, cols.municipalityTo) : null;
+    const municipality =
+      muniTo && muniTo !== muniFrom ? `${muniFrom ?? "?"} → ${muniTo}` : muniFrom;
+
+    const dedupeKey = `${projectName}|${muniFrom ?? ""}`;
     if (seen.has(dedupeKey)) continue;
     seen.add(dedupeKey);
 
@@ -199,9 +238,15 @@ async function seed() {
 
     const cost = parseCost(cols.cost >= 0 ? row[cols.cost] : null);
 
+    const scheduleRaw = cols.schedule >= 0 ? row[cols.schedule] : null;
+    if (scheduleRaw && scheduleSamples.length < 20) scheduleSamples.push(String(scheduleRaw));
+    const explicitStart = parseDate(cols.start >= 0 ? row[cols.start] : null);
+    const startDate = explicitStart ?? parseScheduleYear(scheduleRaw);
+    if (!explicitStart && startDate) scheduleYearCount++;
+
     rows.push({
       projectName,
-      municipality: at(row, cols.municipality),
+      municipality,
       region: at(row, cols.region),
       sector,
       projectType,
@@ -209,7 +254,7 @@ async function seed() {
       status: at(row, cols.status),
       costMillions: cost !== null ? String(cost.toFixed(2)) : null,
       developer: at(row, cols.developer),
-      startDate: parseDate(cols.start >= 0 ? row[cols.start] : null),
+      startDate,
       completionDate: parseDate(cols.completion >= 0 ? row[cols.completion] : null),
       lat: parseNum(cols.lat >= 0 ? row[cols.lat] : null),
       lng: parseNum(cols.lng >= 0 ? row[cols.lng] : null),
@@ -219,12 +264,15 @@ async function seed() {
   }
 
   console.log(`\nParsed ${rows.length} projects (${powerCount} flagged power-related)`);
+  console.log(`${scheduleYearCount} rows got an approximate startDate extracted from free-text "schedule"`);
 
   if (INSPECT) {
     console.log("\n--- INSPECT: detected headers ---");
     console.log(JSON.stringify(headers, null, 2));
     console.log("\n--- INSPECT: column map (-1 = not found) ---");
     console.log(JSON.stringify(cols, null, 2));
+    console.log("\n--- INSPECT: raw \"schedule\" column samples (up to 20) ---");
+    console.log(JSON.stringify(scheduleSamples, null, 2));
     console.log("\n--- INSPECT: first 5 rows ---");
     console.log(JSON.stringify(rows.slice(0, 5), null, 2));
     console.log("\n--- INSPECT: first 5 power-related rows ---");
