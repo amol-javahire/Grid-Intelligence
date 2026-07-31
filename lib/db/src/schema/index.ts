@@ -16,6 +16,7 @@ export * from "./aeso_generation_mix";
 export * from "./aeso_supply_demand";
 export * from "./aeso_constraint_events";
 export * from "./aeso_queue_projects";
+export * from "./alberta_major_projects";
 export * from "./aeso_outages";
 export * from "./aeso_7day_capability";
 export * from "./aeso_actual_forecast";

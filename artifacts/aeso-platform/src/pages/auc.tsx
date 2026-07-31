@@ -5,6 +5,7 @@ import {
   ChevronRight, DollarSign, Zap, Building2, Shield,
   Sun, BookOpen, Gavel, Phone, Search,
 } from "lucide-react";
+import { ScrapeRefreshButton } from "@/components/scrape-refresh-button";
 
 // ── Types ────────────────────────────────────────────────────────
 interface AucFeedItem {
@@ -198,6 +199,7 @@ export default function AUC() {
              className="flex items-center gap-1.5 px-3 py-2 bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg text-sm text-white/70 transition-colors">
             <ExternalLink size={13} /> auc.ab.ca
           </a>
+          <ScrapeRefreshButton queryKeys={["auc-feed"]} />
         </div>
       </div>
 

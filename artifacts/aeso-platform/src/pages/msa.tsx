@@ -5,6 +5,7 @@ import {
   Download, BarChart3, Bell, Shield, ShoppingCart, Database,
   Filter, Calendar,
 } from "lucide-react";
+import { ScrapeRefreshButton } from "@/components/scrape-refresh-button";
 
 // ── Types ────────────────────────────────────────────────────────
 interface MsaDoc {
@@ -166,6 +167,7 @@ export default function MSA() {
              className="flex items-center gap-1.5 px-3 py-2 bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg text-sm text-white/70 transition-colors">
             <ExternalLink size={13} /> albertamsa.ca
           </a>
+          <ScrapeRefreshButton queryKeys={["msa-docs", "msa-recent"]} />
         </div>
       </div>
 

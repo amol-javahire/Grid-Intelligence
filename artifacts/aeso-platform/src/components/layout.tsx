@@ -24,7 +24,7 @@ const navItems = [
   { href: "/csd", label: "CSD", icon: Scale },
   { href: "/outages", label: "Outages", icon: AlertTriangle },
   { href: "/7day-capacity", label: "7-Day Capacity", icon: CalendarDays },
-  { href: "/queue", label: "Queue", icon: ListOrdered },
+  { href: "/queue", label: "Project Pipeline", icon: ListOrdered },
   { href: "/congestion", label: "Congestion", icon: Route },
   { href: "/npv", label: "DCF Valuation", icon: Calculator },
   { href: "/offtake", label: "Offtake (PPA / VPPA)", icon: FileSignature },

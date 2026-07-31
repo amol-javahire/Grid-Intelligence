@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
-import { execSync } from "child_process";
+import { execSync, spawn } from "child_process";
 import { writeFileSync, existsSync } from "fs";
 import { join, resolve } from "path";
 import { tmpdir } from "os";
@@ -1172,6 +1172,164 @@ router.get("/aeso/csd", async (req, res) => {
     req.log.error({ err }, "getAesoCsd error");
     res.status(500).json({ error: "internal_error" });
   }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Inventory of Major Alberta Projects (Government of Alberta open data)
+// ═══════════════════════════════════════════════════════════════════════════
+
+// GET /api/aeso/major-projects?powerOnly=true
+router.get("/aeso/major-projects", async (req, res) => {
+  try {
+    const powerOnly = String(req.query.powerOnly ?? "") === "true";
+    const rows = await db.execute<{
+      id: number; project_name: string; municipality: string | null; region: string | null;
+      sector: string | null; project_type: string | null; stage: string | null;
+      status: string | null; cost_millions: string | null; developer: string | null;
+      start_date: string | null; completion_date: string | null;
+      lat: string | null; lng: string | null; is_power_related: string | null;
+    }>(sql`
+      SELECT id, project_name, municipality, region, sector, project_type, stage,
+             status, cost_millions::text, developer,
+             start_date::text, completion_date::text,
+             lat::text, lng::text, is_power_related
+      FROM alberta_major_projects
+      WHERE (${powerOnly}::boolean IS NOT TRUE OR is_power_related = 'true')
+      ORDER BY cost_millions DESC NULLS LAST
+    `);
+    res.json(rows.rows.map(r => ({
+      id: r.id,
+      projectName: r.project_name,
+      municipality: r.municipality,
+      region: r.region,
+      sector: r.sector,
+      projectType: r.project_type,
+      stage: r.stage,
+      status: r.status,
+      costMillions: r.cost_millions ? parseFloat(r.cost_millions) : null,
+      developer: r.developer,
+      startDate: r.start_date,
+      completionDate: r.completion_date,
+      lat: r.lat ? parseFloat(r.lat) : null,
+      lng: r.lng ? parseFloat(r.lng) : null,
+      isPowerRelated: r.is_power_related === "true",
+    })));
+  } catch (err) {
+    req.log.error({ err }, "getAlbertaMajorProjects error");
+    res.status(500).json({ error: "internal_error" });
+  }
+});
+
+// GET /api/aeso/major-projects/stats
+router.get("/aeso/major-projects/stats", async (_req, res) => {
+  try {
+    const [bySector, byStage, totals] = await Promise.all([
+      db.execute<{ sector: string; count: string; total_cost: string }>(sql`
+        SELECT COALESCE(sector, 'Unspecified') AS sector,
+               COUNT(*)::text AS count,
+               COALESCE(SUM(cost_millions), 0)::text AS total_cost
+        FROM alberta_major_projects GROUP BY 1 ORDER BY 3::numeric DESC
+      `),
+      db.execute<{ stage: string; count: string; total_cost: string }>(sql`
+        SELECT COALESCE(stage, 'Unspecified') AS stage,
+               COUNT(*)::text AS count,
+               COALESCE(SUM(cost_millions), 0)::text AS total_cost
+        FROM alberta_major_projects GROUP BY 1 ORDER BY 3::numeric DESC
+      `),
+      db.execute<{ total: string; power: string; total_cost: string; power_cost: string; costed: string }>(sql`
+        SELECT COUNT(*)::text AS total,
+               COUNT(*) FILTER (WHERE is_power_related = 'true')::text AS power,
+               COALESCE(SUM(cost_millions), 0)::text AS total_cost,
+               COALESCE(SUM(cost_millions) FILTER (WHERE is_power_related = 'true'), 0)::text AS power_cost,
+               COUNT(*) FILTER (WHERE cost_millions IS NOT NULL)::text AS costed
+        FROM alberta_major_projects
+      `),
+    ]);
+    const t = totals.rows[0];
+    res.json({
+      bySector: bySector.rows.map(r => ({ sector: r.sector, count: parseInt(r.count), totalCostMillions: parseFloat(r.total_cost) })),
+      byStage:  byStage.rows.map(r => ({ stage: r.stage, count: parseInt(r.count), totalCostMillions: parseFloat(r.total_cost) })),
+      totalProjects: parseInt(t?.total ?? "0"),
+      powerProjects: parseInt(t?.power ?? "0"),
+      totalCostMillions: parseFloat(t?.total_cost ?? "0"),
+      powerCostMillions: parseFloat(t?.power_cost ?? "0"),
+      // How many rows actually carry a cost figure — the source omits cost for
+      // some projects, so totals are a floor, not a true total.
+      costedProjects: parseInt(t?.costed ?? "0"),
+    });
+  } catch (err) {
+    req.log.error({ err }, "getAlbertaMajorProjectsStats error");
+    res.status(500).json({ error: "internal_error" });
+  }
+});
+
+// ── On-demand reseed ────────────────────────────────────────────────────────
+// Both underlying sources publish monthly, so a short cooldown is plenty and
+// stops a button-mash from spawning concurrent seeders that would each try to
+// TRUNCATE-and-reinsert the same table.
+const RESEED_COOLDOWN_MS = 10 * 60 * 1000;
+const lastReseed = new Map<string, number>();
+const reseedRunning = new Set<string>();
+
+function triggerReseed(scriptName: string, res: import("express").Response, logger?: any) {
+  const now = Date.now();
+  if (reseedRunning.has(scriptName)) {
+    res.status(409).json({ status: "running", message: "A refresh is already in progress." });
+    return;
+  }
+  const last = lastReseed.get(scriptName) ?? 0;
+  const waitMs = RESEED_COOLDOWN_MS - (now - last);
+  if (waitMs > 0) {
+    res.status(429).json({
+      status: "cooldown",
+      message: `Refreshed recently. Try again in ${Math.ceil(waitMs / 60000)} min.`,
+      retryAfterSeconds: Math.ceil(waitMs / 1000),
+    });
+    return;
+  }
+
+  lastReseed.set(scriptName, now);
+  reseedRunning.add(scriptName);
+
+  const proc = spawn("pnpm", ["--filter", "@workspace/scripts", "run", scriptName], {
+    cwd: WORKSPACE_ROOT,
+    env: { ...process.env },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const tail: string[] = [];
+  const capture = (d: Buffer) => {
+    tail.push(...d.toString().split("\n").filter((l) => l.trim()));
+    if (tail.length > 100) tail.splice(0, tail.length - 100);
+  };
+  proc.stdout?.on("data", capture);
+  proc.stderr?.on("data", capture);
+  proc.on("close", (code) => {
+    reseedRunning.delete(scriptName);
+    // Failed run shouldn't hold the cooldown — let the user retry immediately.
+    if (code !== 0) lastReseed.set(scriptName, 0);
+    logger?.info({ scriptName, code, tail: tail.slice(-20) }, "reseed finished");
+  });
+  proc.on("error", (err) => {
+    reseedRunning.delete(scriptName);
+    lastReseed.set(scriptName, 0);
+    logger?.error({ err, scriptName }, "reseed spawn failed");
+  });
+
+  res.status(202).json({
+    status: "started",
+    message: "Refresh started. Re-downloading from the source — this takes ~10–30s.",
+    script: scriptName,
+  });
+}
+
+// POST /api/aeso/queue/refresh — re-download AESO's monthly Connection Project List
+router.post("/aeso/queue/refresh", (req, res) => {
+  triggerReseed("seed-aeso-queue-real", res, req.log);
+});
+
+// POST /api/aeso/major-projects/refresh — re-download the GoA Major Projects CSV
+router.post("/aeso/major-projects/refresh", (req, res) => {
+  triggerReseed("seed-alberta-major-projects", res, req.log);
 });
 
 export default router;

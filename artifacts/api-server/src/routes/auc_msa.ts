@@ -260,13 +260,25 @@ router.get("/aeso/scrape/cache-status", (_req, res) => {
 router.post("/aeso/scrape/refresh", async (_req, res) => {
   try {
     ensureCacheDir();
-    // Clear disk caches to force re-fetch on next request
-    for (const key of ["auc_feed", "msa_docs_all", "msa_recent"]) {
-      const file = path.join(CACHE_DIR, key + ".json");
-      if (fs.existsSync(file)) fs.unlinkSync(file);
-      memCache.delete(key);
+    // Clear every cached entry, not just the "all" MSA category. MSA caches
+    // per category (msa_docs_notices, msa_docs_guidelines, ...), so the old
+    // fixed list left whichever category the user was actually viewing stale
+    // and made Refresh look broken.
+    let cleared = 0;
+    for (const file of fs.readdirSync(CACHE_DIR)) {
+      if (!file.endsWith(".json")) continue;
+      const key = file.replace(/\.json$/, "");
+      if (key === "auc_feed" || key === "msa_recent" || key.startsWith("msa_docs_")) {
+        fs.unlinkSync(path.join(CACHE_DIR, file));
+        memCache.delete(key);
+        cleared++;
+      }
     }
-    res.json({ message: "Cache cleared — next page load will re-fetch from live sources" });
+    // Drop any in-memory entries with no disk counterpart too.
+    for (const key of [...memCache.keys()]) {
+      if (key === "auc_feed" || key === "msa_recent" || key.startsWith("msa_docs_")) memCache.delete(key);
+    }
+    res.json({ message: "Cache cleared — next page load will re-fetch from live sources", cleared });
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }
