@@ -63,15 +63,20 @@ function section(title: string) {
 // wholesale electricity price.
 async function discoverSteoPowerSeries() {
   section("1. EIA STEO — candidate wholesale electricity price series");
-  const url = `https://api.eia.gov/v2/steo/data/facet/seriesId?api_key=${apiKey}`;
+  // NOTE: facet metadata is a SIBLING of /data, not nested under it. The
+  // first version of this script queried /steo/data/facet/seriesId (wrong —
+  // that path falls through to a raw, unfiltered data dump). Correct shape:
+  const url = `https://api.eia.gov/v2/steo/facet/seriesId?api_key=${apiKey}`;
   const { status, body } = curlGet(url);
-  console.log(`GET /v2/steo/data/facet/seriesId → HTTP ${status}, ${body.length} bytes`);
+  console.log(`GET /v2/steo/facet/seriesId → HTTP ${status}, ${body.length} bytes`);
 
   const parsed = tryJson(body) as { response?: { facets?: Array<{ id: string; name: string }> } } | null;
   const facets = parsed?.response?.facets ?? [];
   if (!facets.length) {
-    console.log("No facets returned. Raw body (first 500 chars):");
-    console.log(body.slice(0, 500));
+    console.log("No facets returned. Raw body (first 800 chars):");
+    console.log(body.slice(0, 800));
+    console.log("\nFalling back to filtering the raw data dump instead...");
+    await steoDataDumpFallback();
     return;
   }
   console.log(`Total STEO series available: ${facets.length}`);
@@ -91,6 +96,31 @@ async function discoverSteoPowerSeries() {
   }
 }
 
+// Fallback if the facet-metadata route ever misbehaves again: pull the raw
+// data endpoint (which DOES work, confirmed this run) and dedupe seriesId +
+// seriesDescription pairs client-side, filtering for electricity keywords.
+async function steoDataDumpFallback() {
+  const url =
+    `https://api.eia.gov/v2/steo/data/?api_key=${apiKey}` +
+    `&frequency=monthly&data[0]=value&length=5000&sort[0][column]=period&sort[0][direction]=desc`;
+  const { status, body } = curlGet(url);
+  console.log(`  fallback GET /v2/steo/data → HTTP ${status}, ${body.length} bytes`);
+  const parsed = tryJson(body) as {
+    response?: { data?: Array<{ seriesId: string; seriesDescription: string; unit?: string }> };
+  } | null;
+  const rows = parsed?.response?.data ?? [];
+  const seen = new Map<string, string>();
+  for (const r of rows) if (r.seriesId && !seen.has(r.seriesId)) seen.set(r.seriesId, r.seriesDescription ?? "");
+  console.log(`  ${seen.size} unique series in this page (of ${rows.length} rows, most recent period first)`);
+
+  const keywords = ["wholesale", "electricity price", "ercot", "caiso", "california", "power price"];
+  const matches = [...seen.entries()].filter(([id, desc]) =>
+    keywords.some((kw) => desc.toLowerCase().includes(kw) || id.toLowerCase().includes(kw)),
+  );
+  console.log(`  Matches: ${matches.length}`);
+  for (const [id, desc] of matches) console.log(`    ${id}  —  ${desc}`);
+}
+
 // ── 2. Natural gas price — California citygate ──────────────────────────────
 // Tries the plausible v2 route for state-level summary prices, and separately
 // checks whether EIA has utility-level (SoCal / PG&E) series rather than one
@@ -100,8 +130,8 @@ async function discoverGasCitygateSeries() {
   section("2. EIA Natural Gas — California citygate price series");
 
   const routes = [
-    "natural-gas/pri/sum/data/facet/series",
-    "natural-gas/pri/sum/data/facet/duoarea",
+    "natural-gas/pri/sum/facet/series",
+    "natural-gas/pri/sum/facet/duoarea",
   ];
   for (const route of routes) {
     const url = `https://api.eia.gov/v2/${route}?api_key=${apiKey}`;
