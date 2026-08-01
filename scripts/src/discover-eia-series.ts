@@ -39,7 +39,8 @@ function curlGet(url: string, timeoutSec = 30): { status: number; body: string }
   // -w appends "\n<http_code>" so we can separate status from body without
   // curl's -o juggling; -s keeps progress output out of the body.
   const raw = execSync(
-    `curl -s -w "\\n__HTTP_STATUS__%{http_code}" --connect-timeout 10 --max-time ${timeoutSec} --compressed -L "${url}"`,
+    // -g / --globoff — defensive; facet URLs have no [] today but data URLs do.
+    `curl -sg -w "\\n__HTTP_STATUS__%{http_code}" --connect-timeout 10 --max-time ${timeoutSec} --compressed -L "${url}"`,
     { maxBuffer: 20 * 1024 * 1024, timeout: (timeoutSec + 10) * 1000 },
   ).toString("utf8");
   const marker = "__HTTP_STATUS__";

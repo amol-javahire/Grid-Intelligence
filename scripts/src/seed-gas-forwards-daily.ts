@@ -64,6 +64,18 @@ async function buildShapeFactors(): Promise<Map<number, Map<number, number>>> {
   return shapeFactor;
 }
 
+/**
+ * Gas settles on business days only — Henry Hub has ~261 prices in 2025, not
+ * 365. Weekend and holiday delivery days therefore have no factor of their
+ * own and walk BACKWARD to the most recent prior trading day in the same
+ * month, i.e. Sat/Sun both take Friday's factor. Confirmed with the user
+ * 2026-07-31 as the intended treatment — it matches physical gas, where
+ * weekend flow prices off the Friday settle.
+ *
+ * Consequence: the mean factor across all calendar days of a month will not
+ * be exactly 1.000 (Friday's value is counted three times). Expect ~0.99–1.01
+ * drift. That is correct, not a bug — do not "fix" it by renormalising.
+ */
 function factorFor(shapeFactor: Map<number, Map<number, number>>, month: number, day: number): number {
   const dayMap = shapeFactor.get(month);
   if (!dayMap) return 1.0;

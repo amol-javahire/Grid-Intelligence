@@ -34,7 +34,9 @@ import { parse } from "csv-parse/sync";
 
 function curlGet(url: string, timeoutSec = 45): string {
   return execSync(
-    `curl -s --connect-timeout 15 --max-time ${timeoutSec} --compressed -L "${url}"`,
+    // -g / --globoff REQUIRED — EIA v2 URLs contain sort[0][column] etc.
+    // See seed-power-forwards.ts for the full note.
+    `curl -sg --connect-timeout 15 --max-time ${timeoutSec} --compressed -L "${url}"`,
     { maxBuffer: 50 * 1024 * 1024, timeout: (timeoutSec + 15) * 1000 }
   ).toString("utf8");
 }

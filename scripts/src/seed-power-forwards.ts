@@ -29,9 +29,13 @@ const SERIES: Record<string, string> = {
   CAISO: "ELWHU_CA",
 };
 
+// -g / --globoff is REQUIRED: EIA v2 URLs contain [] (data[0], facets[x][],
+// sort[0][column]) and curl otherwise parses those as range-glob syntax and
+// exits 3 ("bad range specification") without ever making the request.
+// This silently broke every EIA fetch in this repo until 2026-07-31.
 function curlGet(url: string, timeoutSec = 30): string {
   return execSync(
-    `curl -s --connect-timeout 10 --max-time ${timeoutSec} --compressed -L "${url}"`,
+    `curl -sg --connect-timeout 10 --max-time ${timeoutSec} --compressed -L "${url}"`,
     { maxBuffer: 20 * 1024 * 1024, timeout: (timeoutSec + 10) * 1000 },
   ).toString("utf8");
 }

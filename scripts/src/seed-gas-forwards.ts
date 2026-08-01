@@ -41,9 +41,11 @@ const LONG_RUN_PRICE  = 3.50;
 const MEAN_REVERSION  = 0.08;   // 8% of gap per month
 const CONTANGO_TAPER  = 0.005;  // slight contango in first 12 months
 
+// -g / --globoff is REQUIRED — see seed-power-forwards.ts for the full note.
+// EIA v2 URLs contain [] which curl parses as range globs without it.
 function curlGet(url: string, timeoutSec = 30): string {
   return execSync(
-    `curl -s --connect-timeout 10 --max-time ${timeoutSec} --compressed -L "${url}"`,
+    `curl -sg --connect-timeout 10 --max-time ${timeoutSec} --compressed -L "${url}"`,
     { maxBuffer: 20 * 1024 * 1024, timeout: (timeoutSec + 10) * 1000 }
   ).toString("utf8");
 }
