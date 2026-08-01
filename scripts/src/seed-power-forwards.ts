@@ -44,9 +44,18 @@ async function fetchSteoSeries(seriesId: string): Promise<Map<string, number>> {
   const apiKey = process.env.EIA_API_KEY;
   if (!apiKey) throw new Error("EIA_API_KEY not set");
 
+  // STEO series carry HISTORY (back to ~2010) as well as forecast. Without an
+  // explicit start, "sort asc + length N" returns the OLDEST N months and
+  // never reaches the forward period — this silently seeded 2010–2015 prices
+  // as if they were forwards (caught 2026-07-31). Always pin start to the
+  // current month.
+  const now = new Date();
+  const startMonth = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
+
   const url =
     `https://api.eia.gov/v2/steo/data/?api_key=${apiKey}` +
     `&frequency=monthly&data[0]=value&facets[seriesId][]=${seriesId}` +
+    `&start=${startMonth}` +
     `&sort[0][column]=period&sort[0][direction]=asc&length=60`;
 
   const body = curlGet(url, 30);

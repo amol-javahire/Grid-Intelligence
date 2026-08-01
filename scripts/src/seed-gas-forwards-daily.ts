@@ -72,9 +72,13 @@ async function buildShapeFactors(): Promise<Map<number, Map<number, number>>> {
  * 2026-07-31 as the intended treatment — it matches physical gas, where
  * weekend flow prices off the Friday settle.
  *
- * Consequence: the mean factor across all calendar days of a month will not
- * be exactly 1.000 (Friday's value is counted three times). Expect ~0.99–1.01
- * drift. That is correct, not a bug — do not "fix" it by renormalising.
+ * NOTE: this backfill alone is NOT value-neutral — triple-counting Fridays
+ * pushed observed monthly means as far as 1.106 / 0.955 in the first run.
+ * A monthly forward IS the average price for that month, so the shaped daily
+ * series must average back to it or the contract's value silently changes.
+ * normalise() below rescales each month's factors to a calendar-day mean of
+ * exactly 1.0 AFTER the weekend fill, preserving the relative shape and the
+ * Friday-for-weekend rule while restoring value neutrality.
  */
 function factorFor(shapeFactor: Map<number, Map<number, number>>, month: number, day: number): number {
   const dayMap = shapeFactor.get(month);
@@ -112,8 +116,16 @@ async function main() {
     const [y, m] = row.delivery_month.split("-").map(Number);
     const monthlyPrice = Number(row.settle_price);
     const nDays = daysInMonth(y, m);
+
+    // Raw factors (with weekend/holiday backfill), then rescale so the
+    // calendar-day mean is exactly 1.0 for THIS delivery month.
+    const raw: number[] = [];
+    for (let d = 1; d <= nDays; d++) raw.push(factorFor(shapeFactor, m, d));
+    const mean = raw.reduce((s, f) => s + f, 0) / raw.length;
+    const norm = mean > 0 ? raw.map((f) => f / mean) : raw.map(() => 1);
+
     for (let d = 1; d <= nDays; d++) {
-      const factor = factorFor(shapeFactor, m, d);
+      const factor = norm[d - 1];
       dailyOut.push({
         deliveryDate: `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`,
         priceMmbtu: Math.round(monthlyPrice * factor * 10000) / 10000,

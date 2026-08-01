@@ -14,7 +14,8 @@ This file is read automatically at the start of every session. It is the primary
 
 **Stack:**
 - Frontend: React 19 / Vite / Tailwind CSS v4 / shadcn/ui / Recharts / Leaflet
-- API: Express 5 (Node, PM2, port 3001)
+- API: Express 5 (Node, PM2, **port 8080** — set in `infra/ecosystem.config.js`;
+  routes mount under `/api`, so e.g. `http://localhost:8080/api/ppa-npv`)
 - PyPSA engine: FastAPI / Uvicorn (Python 3.13, port 8083)
 - DB: PostgreSQL + TimescaleDB via Drizzle ORM (schema in `lib/db/`)
 - Auth: Clerk (Google OAuth)
@@ -116,6 +117,16 @@ GitHub: https://github.com/JuliusBrussee/caveman-code
 6. **PM2 process manager** — api-server wraps env loading via `infra/start-api.sh`. `set -a; source .env; set +a` is required before running any pnpm commands that need DATABASE_URL.
 
 7. **Data vintages:** Always use 2025/2026 EIA, NREL ATB, ERCOT LTSA, CBRE reports. 2024 versions are stale.
+
+7a. **EIA API v2 — two traps, both cost a full debug cycle (2026-07-31):**
+   - **`curl` needs `-g`/`--globoff`.** EIA URLs contain `data[0]`, `facets[x][]`,
+     `sort[0][column]`. Without `-g`, curl reads `[` as range-glob syntax and
+     exits 3 *before sending anything*. Every EIA seeder in this repo was
+     silently failing this way and falling back to model data.
+   - **Always pin `&start=YYYY-MM`.** STEO series carry history back to ~2010
+     alongside the forecast. `sort=asc&length=N` returns the OLDEST N months,
+     not the forward ones — this seeded 2010–2015 prices as "forwards".
+   Verify any EIA seeder by checking the delivery-month range is in the FUTURE.
 
 8. **Verify every seeder immediately** after it completes — spot-check row counts and known reference values against source. See TECHNICAL_NOTES.md §10 for verification queries.
 

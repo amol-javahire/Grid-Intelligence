@@ -56,9 +56,17 @@ function curlGet(url: string, timeoutSec = 30): string {
 
 async function fetchEiaSteo(apiKey: string): Promise<Map<string, number>> {
   console.log("Trying EIA STEO for Henry Hub gas price outlook (NGWHHD)…");
+  // Pin start to the current month — STEO carries history back to ~2010, and
+  // without this "sort asc + length N" returns the OLDEST N months, which are
+  // then all discarded by the `dm > asOfDateStr` filter below, silently
+  // forcing the model fallback. See seed-power-forwards.ts for the full note.
+  const now = new Date();
+  const startMonth = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
+
   const url =
     `https://api.eia.gov/v2/steo/data/?api_key=${apiKey}` +
     `&frequency=monthly&data[0]=value&facets[seriesId][]=NGWHHD` +
+    `&start=${startMonth}` +
     `&sort[0][column]=period&sort[0][direction]=asc&length=36`;
 
   const body = curlGet(url, 30);

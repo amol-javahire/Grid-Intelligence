@@ -118,8 +118,19 @@ async function main() {
       const [y, m] = row.delivery_month.split("-").map(Number);
       const monthlyPrice = Number(row.price_mwh);
       const nDays = daysInMonth(y, m);
+
+      // Rescale each month's factors to a calendar-day mean of exactly 1.0 so
+      // the shaped daily series averages back to the monthly forward. Power
+      // has complete 8,759-row years so drift is tiny, but months whose day
+      // count differs from 2025's (Feb in a leap year) would otherwise skew.
+      // Same treatment as seed-gas-forwards-daily.ts — keep the two in step.
+      const raw: number[] = [];
+      for (let d = 1; d <= nDays; d++) raw.push(factorFor(shapeFactor, m, d));
+      const mean = raw.reduce((s, f) => s + f, 0) / raw.length;
+      const norm = mean > 0 ? raw.map((f) => f / mean) : raw.map(() => 1);
+
       for (let d = 1; d <= nDays; d++) {
-        const factor = factorFor(shapeFactor, m, d);
+        const factor = norm[d - 1];
         dailyOut.push({
           deliveryDate: `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`,
           priceMwh: Math.round(monthlyPrice * factor * 10000) / 10000,
