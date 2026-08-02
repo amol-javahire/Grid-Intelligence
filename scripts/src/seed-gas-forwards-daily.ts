@@ -1,19 +1,28 @@
 /**
  * Shape the monthly Henry Hub gas forward strip (gas_forwards) into daily prices.
  *
- * Same methodology as seed-power-forwards-daily.ts, applied to the single
- * national gas_forwards curve using gas_prices (hub='henry_hub') as the
- * real 2025 daily reference:
+ * Methodology — MONTH × WEEKDAY, matching seed-power-forwards-daily.ts:
+ *   shape_factor(month, weekday) = avg 2025 Henry Hub price for that weekday in
+ *                                   that month / that month's overall daily avg
+ *   daily_forward_price(future month, day) =
+ *       monthly_forward_price × shape_factor(month, that day's actual weekday)
+ *   then renormalised so each delivery month's calendar-day mean factor is 1.0.
  *
- *   shape_factor(month, day) = 2025 real daily Henry Hub price / 2025 real
- *                               monthly avg Henry Hub price
- *   daily_forward_price(future month, day N) =
- *       monthly_forward_price(future month) × shape_factor(calendar month,
- *       day N), matched by calendar day-of-month POSITION, not weekday.
+ * Gas settles on business days only — Henry Hub has ~261 prices in 2025, so the
+ * Saturday and Sunday buckets are EMPTY. Both fall back to Friday's factor,
+ * confirmed with the user as the intended treatment: it matches physical gas,
+ * where weekend flow prices off the Friday settle.
  *
- * Henry-Hub-only scope — gas_forwards has no per-market split (Waha/CA
- * citygate don't have forward strips yet), so this shapes the one curve
- * that exists rather than fabricating market-specific ones.
+ * The renormalisation step matters here specifically. Friday's factor being
+ * counted three times is not value-neutral on its own — the first run drifted
+ * as far as 1.106 / 0.955 against the monthly forward. A monthly forward IS the
+ * average price for that month, so the shaped series must average back to it.
+ * Renormalising preserves the Friday-for-weekend rule and the relative shape
+ * while restoring exact value neutrality.
+ *
+ * Henry-Hub-only scope — gas_forwards has no per-market split (Waha and CA
+ * citygate have no forward strips), so this shapes the one curve that exists
+ * rather than fabricating market-specific ones.
  *
  * Run: pnpm --filter @workspace/scripts seed-gas-forwards-daily
  * (run seed-gas-forwards first — this reads its output)
@@ -23,78 +32,99 @@ import { sql } from "drizzle-orm";
 
 const SHAPE_YEAR = 2025;
 const HUB = "henry_hub";
+const FRIDAY = 5;
+const DOW_NAME = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+/** month (1-12) → weekday (0=Sun..6=Sat) → factor */
+type ShapeMap = Map<number, Map<number, number>>;
 
 function daysInMonth(year: number, month: number): number {
-  return new Date(year, month, 0).getDate();
+  return new Date(Date.UTC(year, month, 0)).getUTCDate();
 }
 
-async function buildShapeFactors(): Promise<Map<number, Map<number, number>>> {
-  const dailyRows = await db.execute<{ month: number; day: number; price: string }>(sql`
-    SELECT EXTRACT(MONTH FROM date)::int AS month, EXTRACT(DAY FROM date)::int AS day, price::float8 AS price
+function mean(xs: number[]): number {
+  return xs.reduce((s, x) => s + x, 0) / xs.length;
+}
+
+async function buildShapeFactors(): Promise<ShapeMap> {
+  const rows = await db.execute<{ d: string; price: string }>(sql`
+    SELECT date::text AS d, price::float8 AS price
     FROM gas_prices
     WHERE hub = ${HUB} AND EXTRACT(YEAR FROM date) = ${SHAPE_YEAR} AND price IS NOT NULL
     ORDER BY date
   `);
 
-  if (!dailyRows.rows.length) {
-    throw new Error(`No ${SHAPE_YEAR} daily prices found for hub ${HUB} — seed real gas prices first`);
+  if (!rows.rows.length) {
+    throw new Error(`No ${SHAPE_YEAR} daily prices for hub ${HUB} — seed real gas prices first`);
   }
 
-  const monthlyDaily = new Map<number, number[]>();
-  for (const r of dailyRows.rows) {
-    const arr = monthlyDaily.get(r.month) ?? [];
-    arr.push(Number(r.price));
-    monthlyDaily.set(r.month, arr);
-  }
-  const monthlyAvg = new Map<number, number>();
-  for (const [month, prices] of monthlyDaily) {
-    monthlyAvg.set(month, prices.reduce((s, p) => s + p, 0) / prices.length);
+  const byMonth = new Map<number, number[]>();
+  const byMonthDow = new Map<number, Map<number, number[]>>();
+
+  for (const r of rows.rows) {
+    const dt = new Date(`${r.d}T00:00:00Z`);
+    const month = dt.getUTCMonth() + 1;
+    const dow = dt.getUTCDay();
+    const price = Number(r.price);
+
+    if (!byMonth.has(month)) byMonth.set(month, []);
+    byMonth.get(month)!.push(price);
+
+    if (!byMonthDow.has(month)) byMonthDow.set(month, new Map());
+    const dowMap = byMonthDow.get(month)!;
+    if (!dowMap.has(dow)) dowMap.set(dow, []);
+    dowMap.get(dow)!.push(price);
   }
 
-  const shapeFactor = new Map<number, Map<number, number>>();
-  for (const r of dailyRows.rows) {
-    const mAvg = monthlyAvg.get(r.month)!;
-    if (!mAvg) continue;
-    const dayMap = shapeFactor.get(r.month) ?? new Map<number, number>();
-    dayMap.set(r.day, Number(r.price) / mAvg);
-    shapeFactor.set(r.month, dayMap);
+  const shape: ShapeMap = new Map();
+  for (const [month, dowMap] of byMonthDow) {
+    const monthAvg = mean(byMonth.get(month)!);
+    if (!monthAvg) continue;
+    const out = new Map<number, number>();
+    for (const [dow, prices] of dowMap) out.set(dow, mean(prices) / monthAvg);
+    shape.set(month, out);
   }
 
-  console.log(`  shape built from ${dailyRows.rows.length} real 2025 daily prices (hub ${HUB}), ${shapeFactor.size} months covered`);
-  return shapeFactor;
+  console.log(
+    `  shape from ${rows.rows.length} real ${SHAPE_YEAR} daily prices (hub ${HUB}), ` +
+      `${shape.size} months × weekday buckets`,
+  );
+  return shape;
 }
 
 /**
- * Gas settles on business days only — Henry Hub has ~261 prices in 2025, not
- * 365. Weekend and holiday delivery days therefore have no factor of their
- * own and walk BACKWARD to the most recent prior trading day in the same
- * month, i.e. Sat/Sun both take Friday's factor. Confirmed with the user
- * 2026-07-31 as the intended treatment — it matches physical gas, where
- * weekend flow prices off the Friday settle.
- *
- * NOTE: this backfill alone is NOT value-neutral — triple-counting Fridays
- * pushed observed monthly means as far as 1.106 / 0.955 in the first run.
- * A monthly forward IS the average price for that month, so the shaped daily
- * series must average back to it or the contract's value silently changes.
- * normalise() below rescales each month's factors to a calendar-day mean of
- * exactly 1.0 AFTER the weekend fill, preserving the relative shape and the
- * Friday-for-weekend rule while restoring value neutrality.
+ * Weekend/holiday lookup: gas has no Sat/Sun settlement, so those buckets are
+ * empty and resolve to Friday. If Friday is also missing (a month where the
+ * source has gaps), walk backward through the week, then forward.
  */
-function factorFor(shapeFactor: Map<number, Map<number, number>>, month: number, day: number): number {
-  const dayMap = shapeFactor.get(month);
-  if (!dayMap) return 1.0;
-  for (let d = day; d >= 1; d--) {
-    const f = dayMap.get(d);
-    if (f !== undefined) return f;
+function factorFor(shape: ShapeMap, month: number, dow: number): number {
+  const dowMap = shape.get(month);
+  if (!dowMap || dowMap.size === 0) return 1.0;
+  const exact = dowMap.get(dow);
+  if (exact !== undefined) return exact;
+  const friday = dowMap.get(FRIDAY);
+  if (friday !== undefined) return friday;
+  for (let offset = 1; offset <= 6; offset++) {
+    const back = dowMap.get((dow - offset + 7) % 7);
+    if (back !== undefined) return back;
+    const fwd = dowMap.get((dow + offset) % 7);
+    if (fwd !== undefined) return fwd;
   }
-  const anyFactor = [...dayMap.values()][0];
-  return anyFactor ?? 1.0;
+  return 1.0;
 }
 
 async function main() {
-  console.log("=== Gas Forwards Daily Shaping (Henry Hub) ===\n");
+  console.log("=== Gas Forwards Daily Shaping (Henry Hub, month × weekday) ===\n");
 
-  const shapeFactor = await buildShapeFactors();
+  const shape = await buildShapeFactors();
+
+  const sample = shape.get(1);
+  if (sample) {
+    const parts = [...sample.entries()]
+      .sort((a, b) => a[0] - b[0])
+      .map(([dow, f]) => `${DOW_NAME[dow]} ${f.toFixed(3)}`);
+    console.log(`  Jan ${SHAPE_YEAR} weekday profile: ${parts.join("  ")}  (Sat/Sun absent → Friday)`);
+  }
 
   const fwdRows = await db.execute<{ as_of_date: string; delivery_month: string; settle_price: string }>(sql`
     SELECT as_of_date::text, delivery_month::text, settle_price::float8 AS settle_price
@@ -105,7 +135,7 @@ async function main() {
   `);
 
   if (!fwdRows.rows.length) {
-    console.error("  ✗ no gas_forwards rows found — run seed-gas-forwards first");
+    console.error("  ✗ no gas_forwards rows — run seed-gas-forwards first");
     process.exit(1);
   }
 
@@ -117,12 +147,13 @@ async function main() {
     const monthlyPrice = Number(row.settle_price);
     const nDays = daysInMonth(y, m);
 
-    // Raw factors (with weekend/holiday backfill), then rescale so the
-    // calendar-day mean is exactly 1.0 for THIS delivery month.
     const raw: number[] = [];
-    for (let d = 1; d <= nDays; d++) raw.push(factorFor(shapeFactor, m, d));
-    const mean = raw.reduce((s, f) => s + f, 0) / raw.length;
-    const norm = mean > 0 ? raw.map((f) => f / mean) : raw.map(() => 1);
+    for (let d = 1; d <= nDays; d++) {
+      const dow = new Date(Date.UTC(y, m - 1, d)).getUTCDay();
+      raw.push(factorFor(shape, m, dow));
+    }
+    const mu = mean(raw);
+    const norm = mu > 0 ? raw.map((f) => f / mu) : raw.map(() => 1);
 
     for (let d = 1; d <= nDays; d++) {
       const factor = norm[d - 1];

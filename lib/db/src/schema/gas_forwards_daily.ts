@@ -8,13 +8,15 @@ import { pgTable, serial, text, numeric, integer, date, timestamp, index, unique
  * a real 2025 daily settlement shape, same methodology as
  * power_forwards_daily.ts:
  *
- *   shape_factor(month, day) = 2025 real daily Henry Hub price / 2025 real
- *                               monthly avg Henry Hub price (gas_prices,
- *                               hub='henry_hub')
+ *   shape_factor(month, weekday) = avg 2025 Henry Hub price for that weekday in
+ *                                   that month / that month's overall daily avg
  *
- *   daily_forward_price(future month, day N) =
- *       monthly_forward_price(future month) × shape_factor(calendar month,
- *       day N of 2025's same calendar month)
+ *   daily_forward_price(future month, day) =
+ *       monthly_forward_price × shape_factor(month, that day's actual weekday)
+ *
+ * Gas has no Sat/Sun settlement, so those buckets are empty and resolve to
+ * Friday's factor. Each delivery month is then renormalised to a calendar-day
+ * mean factor of exactly 1.0, so triple-counting Friday stays value-neutral.
  *
  * Henry-Hub-only scope (not split by ERCOT/CAISO basis hub) — confirmed with
  * the user as the recommended default since gas_forwards itself is a single

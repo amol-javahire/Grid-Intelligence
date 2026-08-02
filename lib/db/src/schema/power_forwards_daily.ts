@@ -17,11 +17,15 @@ import { pgTable, serial, text, numeric, integer, date, timestamp, index, unique
  *       monthly_forward_price(future month) × shape_factor(calendar month of
  *       future month, day N of 2025's same calendar month)
  *
- * Mapping is by calendar day-of-month position (day 15 of any future
- * September uses the factor from day 15 of Sep 2025), not by weekday — this
- * was an explicit choice confirmed with the user over the weekday-average
- * alternative. Days that don't exist in the 2025 source month (e.g. Feb 29
- * in a leap-year target) fall back to the nearest earlier day's factor.
+ * Mapping is MONTH × WEEKDAY: a Saturday in Sep 2026 takes the average of all
+ * Saturdays in Sep 2025. Revised 2026-08-02 from an earlier day-of-month
+ * mapping, which was value-correct but misaligned the weekly cycle (2025 and
+ * 2026 put weekends on different dates), producing Sundays priced above the
+ * following Monday.
+ *
+ * Each delivery month is renormalised so its calendar-day mean factor is
+ * exactly 1.0 — the daily series must average back to the monthly forward or
+ * the contract's value silently changes.
  *
  * Built by scripts/src/seed-power-forwards-daily.ts.
  */

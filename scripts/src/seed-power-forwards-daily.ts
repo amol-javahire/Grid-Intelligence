@@ -1,21 +1,25 @@
 /**
  * Shape monthly power forwards (power_forwards) into daily prices.
  *
- * Methodology (confirmed with user 2026-07-31):
- *   1. Pull real 2025 hourly DA settlement prices at the same hub the
- *      monthly forward represents (HB_NORTH for ERCOT, SP15 for CAISO —
- *      see power_forwards.ts).
- *   2. Collapse to a daily average price per (month, day) in 2025.
- *   3. Compute each 2025 month's average of its own daily averages.
- *   4. shape_factor(month, day) = 2025 daily avg / 2025 monthly avg.
- *   5. For every future delivery month in power_forwards, and every day in
- *      that month, daily_price = monthly_forward_price × shape_factor,
- *      matched by calendar day-of-month POSITION (day 15 of any future
- *      September uses the factor from day 15 of Sep 2025) — not by weekday.
- *      This exact mapping (calendar position, not weekday-average) was
- *      explicitly requested over the alternative that was offered.
- *   6. Days that don't exist in the 2025 source month (Feb 29 in a leap-year
- *      target) fall back to the nearest earlier day's factor in that month.
+ * Methodology — MONTH × WEEKDAY (revised 2026-08-02):
+ *   1. Pull real 2025 hourly DA settlement prices at the same hub the monthly
+ *      forward represents (HB_NORTH for ERCOT, SP15 for CAISO).
+ *   2. Collapse to one average price per calendar day of 2025.
+ *   3. For each (calendar month, weekday) pair, average those daily prices —
+ *      e.g. "all Mondays in January 2025". 12 × 7 = up to 84 buckets.
+ *   4. shape_factor(month, weekday) = bucket avg / that month's overall daily avg.
+ *   5. For every future delivery month in power_forwards, each day looks up the
+ *      factor for its OWN weekday in that calendar month, so a Saturday in
+ *      Sep 2026 gets Sep 2025's Saturday behaviour.
+ *   6. Renormalise each delivery month so the calendar-day mean factor is
+ *      exactly 1.0 — the shaped daily series must average back to the monthly
+ *      forward or the contract's value changes.
+ *
+ * Why weekday and not day-of-month position: the first version mapped day N of
+ * a future month to day N of the 2025 month. That is value-correct but
+ * misaligns the weekly cycle, because 2025's calendar puts weekends on
+ * different dates than 2026's — it produced Sundays priced above the following
+ * Monday. Weekday matching is what actually drives the daily power shape.
  *
  * Run: pnpm --filter @workspace/scripts seed-power-forwards-daily
  * (run seed-power-forwards first — this reads its output)
@@ -25,77 +29,112 @@ import { sql } from "drizzle-orm";
 
 const REFERENCE: Record<string, { node: string; table: "ercot_hub_hourly" | "caiso_hub_hourly" }> = {
   ERCOT: { node: "HB_NORTH", table: "ercot_hub_hourly" },
-  // Node names below are the values as STORED in the hourly tables, which are
-  // NOT the same as the source API's identifiers (CAISO OASIS calls this
-  // TH_SP15_GEN-APND; seed-caiso-hourly stores it as plain "SP15"). Verified
-  // against the live tables 2026-07-31 — check before changing.
+  // Node names are the values as STORED in the hourly tables, which are NOT the
+  // source API's identifiers (CAISO OASIS calls this TH_SP15_GEN-APND;
+  // seed-caiso-hourly stores plain "SP15"). Verified against the live tables.
   CAISO: { node: "SP15", table: "caiso_hub_hourly" },
 };
 
 const SHAPE_YEAR = 2025;
+const DOW_NAME = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+/** month (1-12) → weekday (0=Sun..6=Sat) → factor */
+type ShapeMap = Map<number, Map<number, number>>;
 
 function daysInMonth(year: number, month: number): number {
-  return new Date(year, month, 0).getDate();
+  return new Date(Date.UTC(year, month, 0)).getUTCDate();
 }
 
-async function buildShapeFactors(market: string): Promise<Map<number, Map<number, number>>> {
+function mean(xs: number[]): number {
+  return xs.reduce((s, x) => s + x, 0) / xs.length;
+}
+
+async function buildShapeFactors(market: string): Promise<ShapeMap> {
   const { node, table } = REFERENCE[market];
 
-  const dailyRows = await db.execute<{ month: number; day: number; avg_price: string }>(sql`
-    SELECT month, day, AVG(da_price)::float8 AS avg_price
+  const rows = await db.execute<{ d: string; avg_price: string }>(sql`
+    SELECT make_date(year, month, day)::text AS d, AVG(da_price)::float8 AS avg_price
     FROM ${sql.raw(table)}
     WHERE node = ${node} AND year = ${SHAPE_YEAR} AND da_price IS NOT NULL
-    GROUP BY month, day
-    ORDER BY month, day
+    GROUP BY year, month, day
+    ORDER BY 1
   `);
 
-  if (!dailyRows.rows.length) {
-    throw new Error(`No ${SHAPE_YEAR} hourly DA data found for ${market} node ${node} in ${table} — seed real hourly data first`);
+  if (!rows.rows.length) {
+    throw new Error(
+      `No ${SHAPE_YEAR} hourly DA data for ${market} node ${node} in ${table} — seed real hourly data first`,
+    );
   }
 
-  // Monthly avg = average of that month's own daily averages
-  const monthlyDaily = new Map<number, number[]>();
-  for (const r of dailyRows.rows) {
-    const arr = monthlyDaily.get(r.month) ?? [];
-    arr.push(Number(r.avg_price));
-    monthlyDaily.set(r.month, arr);
-  }
-  const monthlyAvg = new Map<number, number>();
-  for (const [month, prices] of monthlyDaily) {
-    monthlyAvg.set(month, prices.reduce((s, p) => s + p, 0) / prices.length);
+  const byMonth = new Map<number, number[]>();
+  const byMonthDow = new Map<number, Map<number, number[]>>();
+
+  for (const r of rows.rows) {
+    const dt = new Date(`${r.d}T00:00:00Z`);
+    const month = dt.getUTCMonth() + 1;
+    const dow = dt.getUTCDay();
+    const price = Number(r.avg_price);
+
+    if (!byMonth.has(month)) byMonth.set(month, []);
+    byMonth.get(month)!.push(price);
+
+    if (!byMonthDow.has(month)) byMonthDow.set(month, new Map());
+    const dowMap = byMonthDow.get(month)!;
+    if (!dowMap.has(dow)) dowMap.set(dow, []);
+    dowMap.get(dow)!.push(price);
   }
 
-  const shapeFactor = new Map<number, Map<number, number>>();
-  for (const r of dailyRows.rows) {
-    const mAvg = monthlyAvg.get(r.month)!;
-    if (!mAvg) continue;
-    const dayMap = shapeFactor.get(r.month) ?? new Map<number, number>();
-    dayMap.set(r.day, Number(r.avg_price) / mAvg);
-    shapeFactor.set(r.month, dayMap);
+  const shape: ShapeMap = new Map();
+  for (const [month, dowMap] of byMonthDow) {
+    const monthAvg = mean(byMonth.get(month)!);
+    if (!monthAvg) continue;
+    const out = new Map<number, number>();
+    for (const [dow, prices] of dowMap) out.set(dow, mean(prices) / monthAvg);
+    shape.set(month, out);
   }
 
-  console.log(`  [${market}] shape built from ${dailyRows.rows.length} real 2025 daily prices (node ${node}), ${shapeFactor.size} months covered`);
-  return shapeFactor;
+  console.log(
+    `  [${market}] shape from ${rows.rows.length} real ${SHAPE_YEAR} daily prices (node ${node}), ` +
+      `${shape.size} months × weekday buckets`,
+  );
+  return shape;
 }
 
-function factorFor(shapeFactor: Map<number, Map<number, number>>, month: number, day: number): number {
-  const dayMap = shapeFactor.get(month);
-  if (!dayMap) return 1.0;
-  for (let d = day; d >= 1; d--) {
-    const f = dayMap.get(d);
-    if (f !== undefined) return f;
+/**
+ * Look up the factor for a weekday, falling back to the nearest weekday that
+ * has data (power hubs settle every day so this should never fire, but a gap
+ * in the source year must not silently become a zero price).
+ */
+function factorFor(shape: ShapeMap, month: number, dow: number): number {
+  const dowMap = shape.get(month);
+  if (!dowMap || dowMap.size === 0) return 1.0;
+  const exact = dowMap.get(dow);
+  if (exact !== undefined) return exact;
+  for (let offset = 1; offset <= 6; offset++) {
+    const back = dowMap.get((dow - offset + 7) % 7);
+    if (back !== undefined) return back;
+    const fwd = dowMap.get((dow + offset) % 7);
+    if (fwd !== undefined) return fwd;
   }
-  // fall forward if nothing at/below (shouldn't normally happen)
-  const anyFactor = [...dayMap.values()][0];
-  return anyFactor ?? 1.0;
+  return 1.0;
 }
 
 async function main() {
-  console.log("=== Power Forwards Daily Shaping ===\n");
+  console.log("=== Power Forwards Daily Shaping (month × weekday) ===\n");
 
   for (const market of Object.keys(REFERENCE)) {
     console.log(`[${market}]`);
-    const shapeFactor = await buildShapeFactors(market);
+    const shape = await buildShapeFactors(market);
+
+    // Show the weekday profile so the shape is inspectable, not a black box.
+    const sample = shape.get(9) ?? shape.get(1);
+    if (sample) {
+      const label = shape.has(9) ? "Sep" : "Jan";
+      const parts = [...sample.entries()]
+        .sort((a, b) => a[0] - b[0])
+        .map(([dow, f]) => `${DOW_NAME[dow]} ${f.toFixed(3)}`);
+      console.log(`  ${label} ${SHAPE_YEAR} weekday profile: ${parts.join("  ")}`);
+    }
 
     const fwdRows = await db.execute<{ as_of_date: string; delivery_month: string; price_mwh: string }>(sql`
       SELECT as_of_date::text, delivery_month::text, price_mwh::float8 AS price_mwh
@@ -119,15 +158,15 @@ async function main() {
       const monthlyPrice = Number(row.price_mwh);
       const nDays = daysInMonth(y, m);
 
-      // Rescale each month's factors to a calendar-day mean of exactly 1.0 so
-      // the shaped daily series averages back to the monthly forward. Power
-      // has complete 8,759-row years so drift is tiny, but months whose day
-      // count differs from 2025's (Feb in a leap year) would otherwise skew.
-      // Same treatment as seed-gas-forwards-daily.ts — keep the two in step.
+      // Factor per day using that day's ACTUAL weekday in the delivery year,
+      // then rescale so the calendar-day mean is exactly 1.0 for this month.
       const raw: number[] = [];
-      for (let d = 1; d <= nDays; d++) raw.push(factorFor(shapeFactor, m, d));
-      const mean = raw.reduce((s, f) => s + f, 0) / raw.length;
-      const norm = mean > 0 ? raw.map((f) => f / mean) : raw.map(() => 1);
+      for (let d = 1; d <= nDays; d++) {
+        const dow = new Date(Date.UTC(y, m - 1, d)).getUTCDay();
+        raw.push(factorFor(shape, m, dow));
+      }
+      const mu = mean(raw);
+      const norm = mu > 0 ? raw.map((f) => f / mu) : raw.map(() => 1);
 
       for (let d = 1; d <= nDays; d++) {
         const factor = norm[d - 1];
