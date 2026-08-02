@@ -128,6 +128,22 @@ GitHub: https://github.com/JuliusBrussee/caveman-code
      not the forward ones — this seeded 2010–2015 prices as "forwards".
    Verify any EIA seeder by checking the delivery-month range is in the FUTURE.
 
+7b. **ERCOT `resource_type` uses CODES, not words (2026-08-02).** ERCOT emits
+   `PVGR`, `PWRSTR`, `CCGT90`, `CCLE90`, `SCGT90`, `SCLE90`, `GSREH`, `GSNONR`,
+   `GSSUP`, `CLLIG`, `NUC`, `HYDRO`, `WIND`, `DSL`, `RENEW` — never "SOLAR",
+   "GAS", "COAL", "NUCLEAR" or "STORAGE". `seed-sced-gap.py` shipped with a map
+   keyed on those non-existent words, so everything except WIND/HYDRO silently
+   became `other`: all of 2026 collapsed to 3 fuel types (122,069 GWh in one
+   bucket) while 2024–2025 stayed correct at 8.
+   - `RESOURCE_TYPE_MAP` must stay IDENTICAL in `infra/seed-sced-gap.py` and
+     `scripts/src/seed-ercot-dispatch.py` — same table, one vocabulary,
+     including the `natural_gas` spelling (not `gas`).
+   - Unmapped codes are now counted and dumped as warnings at end of run.
+     Never let an unknown code silently fall into `other`.
+   - Repair for already-stored rows: `infra/backfill-ercot-2026-resource-types.sql`
+     (relearns type by `resource_name` from the known-good 2024–2025 period;
+     the raw ERCOT code is not retained in the table so it can't be re-derived).
+
 8. **Verify every seeder immediately** after it completes — spot-check row counts and known reference values against source. See TECHNICAL_NOTES.md §10 for verification queries.
 
 ---

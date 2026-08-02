@@ -32,11 +32,48 @@ DEFAULT_END   = datetime.date.today() - datetime.timedelta(days=60)  # SCED 60-d
 START = datetime.date.fromisoformat(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_START
 END   = datetime.date.fromisoformat(sys.argv[2]) if len(sys.argv) > 2 else DEFAULT_END
 
+# ERCOT resource-type CODES → readable category.
+#
+# These are ERCOT's actual codes from 60d_SCED_Gen_Resource_Data, NOT generic
+# words. An earlier version of this map used {"SOLAR","GAS","COAL","NUCLEAR",
+# "STORAGE"} — none of which ERCOT ever emits — so every resource except WIND
+# and HYDRO silently fell through to "other". That collapsed all 2026 data into
+# 3 fuel types (896 resources / 122,069 GWh dumped in "other") while 2024–2025,
+# seeded by scripts/src/seed-ercot-dispatch.py, stayed correct at 8 types.
+#
+# Kept deliberately IDENTICAL to seed-ercot-dispatch.py's map, including the
+# "natural_gas" spelling (not "gas") — the two seeders write to the same table
+# and must share one vocabulary. Change both together or not at all.
 RESOURCE_TYPE_MAP = {
-    "WIND": "wind", "SOLAR": "solar", "GAS": "gas",
-    "COAL": "coal", "NUCLEAR": "nuclear", "HYDRO": "hydro",
-    "STORAGE": "storage", "OTHER": "other",
+    "WIND":   "wind",
+    "PVGR":   "solar",
+    "PWRSTR": "storage",
+    "CCGT90": "natural_gas",
+    "CCLE90": "natural_gas",
+    "SCGT90": "natural_gas",
+    "SCLE90": "natural_gas",
+    "GSREH":  "natural_gas",
+    "GSNONR": "natural_gas",
+    "GSSUP":  "natural_gas",
+    "CLLIG":  "coal",
+    "NUC":    "nuclear",
+    "HYDRO":  "hydro",
+    "DSL":    "other",
+    "RENEW":  "other",
 }
+
+# Codes seen in the data but absent from the map above. Tracked so an ERCOT
+# vocabulary change fails LOUDLY next time instead of quietly inflating "other".
+_unmapped_types: dict[str, int] = {}
+
+
+def map_resource_type(raw) -> str:
+    code = str(raw).strip().upper()
+    mapped = RESOURCE_TYPE_MAP.get(code)
+    if mapped is None:
+        _unmapped_types[code] = _unmapped_types.get(code, 0) + 1
+        return "other"
+    return mapped
 
 # ── ERCOT Auth ────────────────────────────────────────────────────────────────
 _token_cache = {"token": None, "expires": 0}
@@ -221,7 +258,7 @@ def seed_day(conn, data_date: datetime.date) -> int:
                         (
                             row["resource_name"],
                             row["hour"],
-                            RESOURCE_TYPE_MAP.get(str(row["resource_type"]).upper(), "other"),
+                            map_resource_type(row["resource_type"]),
                             row["avg_mw"],
                             row["max_mw"],
                             row["hsl"],
@@ -292,6 +329,19 @@ def main():
 
     conn.close()
     log.info(f"\n=== DONE === {total:,} rows inserted | {errors} errors")
+
+    # Fail loudly on unrecognised resource-type codes. Silently bucketing these
+    # into "other" is exactly what corrupted the 2026 gen stack.
+    if _unmapped_types:
+        log.warning("=" * 62)
+        log.warning("UNMAPPED resource_type codes — these all became 'other':")
+        for code, n in sorted(_unmapped_types.items(), key=lambda kv: -kv[1]):
+            log.warning(f"    {code:<12} {n:>10,} rows")
+        log.warning("Add them to RESOURCE_TYPE_MAP (and keep it in sync with")
+        log.warning("scripts/src/seed-ercot-dispatch.py), then re-seed those dates.")
+        log.warning("=" * 62)
+    else:
+        log.info("All resource_type codes mapped cleanly.")
 
 
 if __name__ == "__main__":
