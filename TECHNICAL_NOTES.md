@@ -183,7 +183,7 @@ A sim that still calls `_build_tier1()` is fine; the bug only appears when a Tie
 
 **Battery Revenue — real prices, not modelled (changed 2026-07-26).**
 Phase 1 used to run **24 single-snapshot Tier-1 OPFs** to model an hourly zone LMP. Two problems: (a) Tier-2 would be 24 × ~10s ≈ **4 min**, past the API proxy timeout; (b) more fundamentally, Battery Revenue is a **historical backtest**, and per §5a historical questions must use actual settled prices. It now reads:
-- **zone price** ← `ercot_node_prices` RT at the storage zone's load zone(s). RT embeds the real congestion/curtailment signal the model only approximated — negative RT hours *are* curtailment events.
+- **zone price** ← `ercot_nodal_da_rt_hourly` RT at the storage zone's load zone(s). RT embeds the real congestion/curtailment signal the model only approximated — negative RT hours *are* curtailment events.
 - **curtailment MW** ← `ercot_hourly_dispatch` `SUM(GREATEST(hsl − avg_mw, 0))` over wind/solar in that zone (real SCED 60-day disclosure), joined via `ercot_node_locations.load_zone`.
 
 Two indexed queries replace 24 LP solves (~100× faster) and the numbers are actuals. Revenue is still settled at the real DA hub price so $/day stays comparable to merchant proformas. Hub→load-zone map: HOUSTON→LZ_HOUSTON, NORTH→LZ_NORTH, WEST/PAN→LZ_WEST, SOUTH→LZ_SOUTH+AEN+CPS+LCRA.

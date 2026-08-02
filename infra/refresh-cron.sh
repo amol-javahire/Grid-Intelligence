@@ -78,7 +78,7 @@ job_sced() {
 job_derive() {
   cd "$APP_DIR" || return 1
   run_step "regen ercot_node_stats" psql "$DATABASE_URL" -f infra/regen-ercot-node-stats.sql
-  run_step "fill ercot_hub_hourly"  psql "$DATABASE_URL" -f infra/fill-ercot-hub-hourly.sql
+  run_step "fill ercot_hub_da_rt_hourly"  psql "$DATABASE_URL" -f infra/fill-ercot-hub-hourly.sql
   run_step "refresh mv_dispatch_monthly" psql "$DATABASE_URL" -c "REFRESH MATERIALIZED VIEW mv_dispatch_monthly;"
   run_step "refresh mv_capture_monthly"  psql "$DATABASE_URL" -c "REFRESH MATERIALIZED VIEW mv_capture_monthly;"
 }

@@ -1,12 +1,12 @@
 ---
 name: Temperature data seeding
-description: hourly_temperatures table; 11 zones at 21,168 rows; seed script location and climate baselines.
+description: iso_hourly_temps table; 11 zones at 21,168 rows; seed script location and climate baselines.
 ---
 
 # Temperature Data Seeding
 
 ## Table
-`hourly_temperatures` — columns: (iso, zone, year, month, day, hour, temp_f, temp_c)
+`iso_hourly_temps` — columns: (iso, zone, year, month, day, hour, temp_f, temp_c)
 Unique constraint on (iso, zone, year, month, day, hour) — INSERT ON CONFLICT DO NOTHING for idempotence.
 
 ## Final State

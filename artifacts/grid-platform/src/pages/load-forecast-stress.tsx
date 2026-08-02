@@ -67,7 +67,7 @@ const ERCOT_TIER1_GAS_MW = 96_241;
 
 // Renewables Output % → wind/solar capacity factor. Ceilings calibrated so a
 // shared default of 50% reproduces each fuel's real average CF computed from
-// ercot_fuel_mix (Jan 2024–Jun 2026 hourly, gen_mw / EIA-860 nameplate): wind
+// ercot_hourly_gen_output (Jan 2024–Jun 2026 hourly, gen_mw / EIA-860 nameplate): wind
 // mean 34.6% (σ 18.0pp), solar mean 31.6% (σ 40.2pp, day/night bimodal). A
 // single knob can't hit both fuels' 2σ ceilings at once, so the default is
 // prioritized (exact real-average match); max=110% pushes wind to ~76% CF,
@@ -451,7 +451,7 @@ function ErcotPanel(props: {
           </div>
           <p className="text-xs text-muted-foreground mt-3 border-t border-border pt-3">
             <span className="text-foreground font-medium">Methodology: </span>
-            Renewables default (50%) reproduces the real average wind/solar capacity factor from ercot_fuel_mix hourly
+            Renewables default (50%) reproduces the real average wind/solar capacity factor from ercot_hourly_gen_output hourly
             data (Jan 2024–Jun 2026): wind 34.6% CF (σ 18.0pp), solar 31.6% CF (σ 40.2pp, day/night bimodal) — one shared
             knob can't hit both fuels' ceilings exactly, so the default is calibrated to match both real averages and the
             110% max is set by wind's ceiling (~76% CF, just beyond its observed historical max of 74.7%). Gas derate
@@ -662,7 +662,7 @@ function CaisoPanel(props: {
             Wind/solar available MW = nameplate × capacity factor slider. Gas available MW = nameplate × (1 − derate).
             Nuclear/hydro/geothermal/biomass/storage use fixed typical availability factors (95% / 40% / 90% / 85% / 90%)
             — not derived from real dispatch data, unlike ERCOT's PyPSA OPF. Reserve margin = (available − stressed load) / stressed load.
-            Renewables/Gas Derate slider calibration (default, ceilings) is ERCOT-derived (ercot_fuel_mix, thermal_params)
+            Renewables/Gas Derate slider calibration (default, ceilings) is ERCOT-derived (ercot_hourly_gen_output, thermal_params)
             since no equivalent CAISO hourly dataset exists yet. This is a system-wide adequacy screen, not a locational price signal.
           </p>
         </CardContent>

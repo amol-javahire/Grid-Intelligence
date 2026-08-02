@@ -1,7 +1,7 @@
 /**
  * seed-ercot-load-fuelmix.ts
  *
- * Seeds ercot_load_by_zone and ercot_fuel_mix with hourly data
+ * Seeds ercot_load_by_zone and ercot_hourly_gen_output with hourly data
  * covering January 2024 → June 2026 (matching DA/RT price history).
  *
  * Data source: Calibrated synthetic profiles tuned to published ERCOT statistics:
@@ -16,7 +16,7 @@
  *
  * Expected rows:
  *   ercot_load_by_zone:  ~207,984  (8 zones × 25,998 hours)
- *   ercot_fuel_mix:      ~207,984  (8 fuel types × 25,998 hours)
+ *   ercot_hourly_gen_output:      ~207,984  (8 fuel types × 25,998 hours)
  */
 
 import { db } from "@workspace/db";
@@ -197,9 +197,9 @@ function daysInMonth(year: number, month: number): number {
 // ── Main seed ─────────────────────────────────────────────────────────────────
 
 async function main() {
-  console.log("Seeding ercot_load_by_zone + ercot_fuel_mix …");
+  console.log("Seeding ercot_load_by_zone + ercot_hourly_gen_output …");
   console.log("Clearing existing rows …");
-  await db.execute(sql`TRUNCATE TABLE ercot_load_by_zone, ercot_fuel_mix RESTART IDENTITY CASCADE`);
+  await db.execute(sql`TRUNCATE TABLE ercot_load_by_zone, ercot_hourly_gen_output RESTART IDENTITY CASCADE`);
 
   const BATCH = 2000;
   let loadBatch: typeof ercotLoadByZoneTable.$inferInsert[] = [];
@@ -261,7 +261,7 @@ async function main() {
 
   console.log(`\nDone!`);
   console.log(`  ercot_load_by_zone:  ${loadTotal.toLocaleString()} rows`);
-  console.log(`  ercot_fuel_mix:      ${fuelTotal.toLocaleString()} rows`);
+  console.log(`  ercot_hourly_gen_output:      ${fuelTotal.toLocaleString()} rows`);
   process.exit(0);
 }
 

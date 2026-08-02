@@ -183,15 +183,15 @@ def parse_lmp(csv_text: str, price_col_name: str) -> pl.DataFrame | None:
 def setup(conn):
     with conn.cursor() as cur:
         cur.execute("""
-            CREATE TABLE IF NOT EXISTS caiso_node_prices (
+            CREATE TABLE IF NOT EXISTS caiso_nodal_da_rt_hourly (
                 node_name TEXT      NOT NULL,
                 hour      TIMESTAMP NOT NULL,
                 da_price  DOUBLE PRECISION,
                 rt_price  DOUBLE PRECISION,
                 PRIMARY KEY (node_name, hour)
             )""")
-        cur.execute("CREATE INDEX IF NOT EXISTS caiso_node_prices_hour_idx ON caiso_node_prices (hour)")
-        cur.execute("CREATE INDEX IF NOT EXISTS caiso_node_prices_node_idx ON caiso_node_prices (node_name)")
+        cur.execute("CREATE INDEX IF NOT EXISTS caiso_nodal_da_rt_hourly_hour_idx ON caiso_nodal_da_rt_hourly (hour)")
+        cur.execute("CREATE INDEX IF NOT EXISTS caiso_nodal_da_rt_hourly_node_idx ON caiso_nodal_da_rt_hourly (node_name)")
         cur.execute("""
             CREATE TABLE IF NOT EXISTS caiso_price_seed_log (
                 seed_date     DATE NOT NULL,
@@ -226,7 +226,7 @@ def upsert(conn, df: pl.DataFrame, col: str) -> int:
     with conn.cursor() as cur:
         psycopg2.extras.execute_values(
             cur,
-            f"""INSERT INTO caiso_node_prices (node_name, hour, {col})
+            f"""INSERT INTO caiso_nodal_da_rt_hourly (node_name, hour, {col})
                 VALUES %s
                 ON CONFLICT (node_name, hour) DO UPDATE SET {col} = EXCLUDED.{col}""",
             rows, page_size=2000)
@@ -322,9 +322,9 @@ def main():
     if MODE in ("rt", "both"):
         run(conn, "RT")
     with conn.cursor() as cur:
-        cur.execute("SELECT COUNT(*), COUNT(DISTINCT node_name), MIN(hour)::date, MAX(hour)::date FROM caiso_node_prices")
+        cur.execute("SELECT COUNT(*), COUNT(DISTINCT node_name), MIN(hour)::date, MAX(hour)::date FROM caiso_nodal_da_rt_hourly")
         rows, nodes, lo, hi = cur.fetchone()
-    log.info(f"=== caiso_node_prices: {rows:,} rows · {nodes:,} nodes · {lo} → {hi} ===")
+    log.info(f"=== caiso_nodal_da_rt_hourly: {rows:,} rows · {nodes:,} nodes · {lo} → {hi} ===")
     conn.close()
 
 

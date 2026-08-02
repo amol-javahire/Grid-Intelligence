@@ -4,7 +4,7 @@ Seed temperature_forecasts table using climatological projection.
 
 Method:
   - For each future day (Jul 2026 – Jun 2029), find all matching calendar days
-    (same month + day-of-month) in the historical hourly_temperatures table.
+    (same month + day-of-month) in the historical iso_hourly_temps table.
   - Compute the average of those days' daily mean / min / max.
   - Apply a +0.3°F/year climate warming trend from a 2025.5 reference baseline.
 
@@ -46,7 +46,7 @@ ZONES = [
 def build_historical_profiles(cur) -> dict:
     """
     Build a lookup: (iso, zone, month, day) → (mean_f, min_f, max_f)
-    aggregated across all historical years in hourly_temperatures.
+    aggregated across all historical years in iso_hourly_temps.
     """
     print("  Loading historical hourly data...")
     cur.execute("""
@@ -54,7 +54,7 @@ def build_historical_profiles(cur) -> dict:
                AVG(temp_f)::float AS mean_f,
                MIN(temp_f)::float AS min_f,
                MAX(temp_f)::float AS max_f
-        FROM hourly_temperatures
+        FROM iso_hourly_temps
         GROUP BY iso, zone, year, month, day
         ORDER BY iso, zone, year, month, day
     """)

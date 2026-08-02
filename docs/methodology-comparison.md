@@ -200,7 +200,7 @@ Shape_risk_penalty = (1 - correlation) × avg_price × 0.02-0.05
 
 **Recommendation:** This is achievable now that we have:
 - Hourly ERCOT zone load data (174,282 rows in `ercot_load_hourly`)
-- Hourly hub prices (in `ercot_hub_hourly` / `ercot_node_stats`)
+- Hourly hub prices (in `ercot_hub_da_rt_hourly` / `ercot_node_stats`)
 - Technology-specific synthetic generation profiles by zone
 
 Compute shape correlation as: `corr(tech_generation_profile_t, zone_load_t)` using typical diurnal profiles by asset type and season. Populate `grid_stability_score`.

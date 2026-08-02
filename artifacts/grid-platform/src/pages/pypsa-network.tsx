@@ -859,7 +859,7 @@ export default function PypsaNetwork() {
               ["Generator dispatch", "Merit-order by marginal cost (HH × heat rate + $2/MWh VOM). Wind/solar dispatched at CF up to p_nom."],
               ["Shift factors", "DC PTDF-derived B-matrix; 340 buses mapped to 5 EIA sub-BA zones (EAST has no buses in the 345kV model)."],
               ["Solver", "HiGHS LP, typically 2,000–3,000 simplex iterations. Solve time ~0.2s (Tier-2) or ~0.05s (Tier-1)."],
-              ["Historical mode", "Uses real monthly DA averages from ercot_hub_hourly (CDR 13060/13061) — not re-solving OPF with actuals."],
+              ["Historical mode", "Uses real monthly DA averages from ercot_hub_da_rt_hourly (CDR 13060/13061) — not re-solving OPF with actuals."],
             ].map(([k, v]) => (
               <div key={k}>
                 <span className="text-foreground font-medium">{k}: </span>

@@ -108,7 +108,7 @@ Delivered_MWh_yr = Capacity_MW × CF × 8,760 × (1 - Curtailment_Haircut) × Av
 
 ### 4.2 Capture Ratios (fraction of flat hub DA price earned by asset)
 
-Derived from **real ERCOT hourly data** (scoring v6, `ercot_hub_hourly`, Jan 2024–Apr 2026) and CAISO OASIS:
+Derived from **real ERCOT hourly data** (scoring v6, `ercot_hub_da_rt_hourly`, Jan 2024–Apr 2026) and CAISO OASIS:
 
 | Asset Type    | ERCOT  | CAISO | PJM  | Notes |
 |---------------|--------|-------|------|-------|

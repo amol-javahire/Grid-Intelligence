@@ -195,10 +195,109 @@ sudo cp -r artifacts/grid-platform/dist/public/* /var/www/grid-platform/
 ```
 
 No `pm2 restart` is needed for frontend-only changes — nginx serves the static
-build directly. Restart `api-server` only when `artifacts/api-server/` changed.
-Hard-refresh (Ctrl+Shift+R) after deploying; the old bundle is cached.
+build directly. Hard-refresh (Ctrl+Shift+R) after deploying; the old bundle is
+cached.
+
+### API server — MUST BUILD, restart alone does nothing
+
+`infra/start-api.sh` execs `artifacts/api-server/dist/index.mjs`, a compiled
+bundle. `git pull` + `pm2 restart api-server` will happily restart the OLD
+code and give no error. Any change under `artifacts/api-server/src/` needs:
+
+```bash
+pnpm --filter @workspace/api-server build   # runs artifacts/api-server/build.mjs
+pm2 restart api-server
+```
+
+Verify the bundle actually changed: `ls -l artifacts/api-server/dist/index.mjs`
+and check the mtime is now. This cost a full debug cycle on 2026-08-02 — the
+ppa.ts EIA-forward wiring looked broken for two rounds when it had simply
+never been compiled.
 
 ---
+
+## Table Naming Convention (established 2026-08-02)
+
+Price and generation tables follow `{market}_{granularity}_{content}_hourly`.
+Rename existing tables/code together (grep every reference, rename table via
+`ALTER TABLE`/`ALTER INDEX`, sweep code, syntax-check) — do not add a new
+table under the old convention.
+
+**Price tables** — DA + RT as columns on one row (`da_price`, `rt_price`), not
+split into separate DA/RT tables. Splitting would force a join for every
+DA-RT spread calc (`/nodal`, `/congestion` pages depend on this being wide).
+
+| Table | Granularity | Status |
+|---|---|---|
+| `ercot_nodal_da_rt_hourly` | all ERCOT resource nodes | live |
+| `caiso_nodal_da_rt_hourly` | all CAISO resource nodes (2,814) | live |
+| `ercot_hub_da_rt_hourly` | ~15 named hubs/load-zones only | live |
+| `caiso_hub_da_rt_hourly` | NP15/SP15/ZP26 only | live |
+| `pjm_nodal_da_rt_hourly` | all PJM nodes | reserved, not built |
+| `pjm_hub_da_rt_hourly` | PJM hubs | reserved, not built |
+
+**Gen-stack tables** — system-wide generation by FUEL TYPE, hourly (the
+stacked-area "generation mix" chart). NOT per-generator dispatch — see
+`ercot_hourly_dispatch` for that (per-resource SCED telemetry, predates this
+convention, deliberately not renamed — touches a 4.7GB table + `mv_dispatch_monthly`
++ PyPSA queries; flag to the user before ever touching it). Minimum coverage
+required: Jan 2025 onward (both real tables below already start Jan 2024).
+
+| Table | Status |
+|---|---|
+| `ercot_hourly_gen_output` | live, Jan 2024+ (was `ercot_fuel_mix`) |
+| `aeso_hourly_gen_output` | live, Jan 2024+ (was `aeso_generation_mix`) |
+| `caiso_hourly_gen_output` | reserved, not built |
+| `pjm_hourly_gen_output` | reserved, not built |
+
+Per-generator dispatch tables (ERCOT precedent: `ercot_hourly_dispatch`) are a
+DIFFERENT thing from gen-stack tables — one row per generator per hour, not
+aggregated by fuel type. Do not conflate the two when building CAISO's
+per-generator dispatch table.
+
+**Load tables** (min coverage Jan 2025):
+
+| Table | Status |
+|---|---|
+| `ercot_hourly_zonal_load` | exists as `ercot_load_by_zone`, **SYNTHETIC** — rename + real source both pending |
+| `aeso_hourly_load` | real, but duplicated across `aeso_supply_demand.ail_mw` and `aeso_hourly_pool_price.ail_mw` — consolidate |
+| `caiso_hourly_zonal_load` | not built |
+| `pjm_hourly_zonal_load` | not built |
+
+**Other renamed tables:** `hourly_temperatures` → `iso_hourly_temps` (kept
+unified with `iso`/`zone` columns rather than 4 per-market tables, so
+cross-market queries are a filter not a UNION); `aeso_pool_price` →
+`aeso_hourly_pool_price`.
+
+## Real vs synthetic data — CHECK BEFORE TRUSTING ANY TABLE
+
+Several tables hold calibrated SYNTHETIC data with nothing in the table name or
+schema indicating it. This has already caused one wrong conclusion (2026-08:
+`ercot_fuel_mix`/`ercot_load_by_zone` were reported as "live real data, Jan 2024+"
+on the basis of date coverage alone, without checking the seeder header).
+
+**Before describing any table as real, open its seeder and read the header.**
+
+| Table | Reality |
+|---|---|
+| `ercot_hourly_dispatch` | REAL — ERCOT 60-day SCED disclosure |
+| `ercot_nodal_da_rt_hourly`, `caiso_nodal_da_rt_hourly` | REAL — ERCOT CDR / CAISO OASIS |
+| `ercot_hub_da_rt_hourly`, `caiso_hub_da_rt_hourly` | REAL |
+| `aeso_*` | REAL — `apimgw.aeso.ca` |
+| `ercot_hourly_gen_output` | MIXED — check the `source` column (`sced_real` vs `synthetic`) |
+| `ercot_load_by_zone` | SYNTHETIC — `seed-ercot-load-fuelmix.ts`, needs CDR NP6-346-CD |
+| `pjm_node_stats` | model-calibrated, not a real PJM API |
+| `iso_hourly_temps` | MIXED — real Open-Meteo seeder AND two synthetic fallback seeders exist; table has NO source column, so real vs synthetic is currently indistinguishable. Add one before relying on it. |
+
+New tables holding any modelled data MUST carry a `source` column from day one.
+
+### Rebuilding ERCOT gen output from SCED
+
+`infra/rebuild-ercot-gen-output-from-sced.sql` replaces synthetic rows with a
+real fuel-type aggregation of `ercot_hourly_dispatch`, but ONLY for (year,month)
+pairs SCED covers — safe to re-run as gap-filling progresses. Caveat: SCED
+excludes behind-the-meter distributed generation, so solar reads low vs ERCOT's
+published fuel mix. Do not scale to match published totals without labelling it.
 
 ## Key Files
 

@@ -1,6 +1,6 @@
 -- ============================================================
 -- mv_capture_monthly — generation-weighted capture price per fuel/month.
--- Sources hourly prices from ercot_node_prices (all nodes, Jan 2025→now).
+-- Sources hourly prices from ercot_nodal_da_rt_hourly (all nodes, Jan 2025→now).
 --
 -- Gen-weighted zone capture:  Σ(gen × zone_LMP) / Σ(gen)
 -- System reference (hub_avg): Σ(gen × HB_BUSAVG)  / Σ(gen)
@@ -34,14 +34,14 @@ WITH disp AS (
     FROM ercot_hourly_dispatch d
     LEFT JOIN ercot_node_locations nl ON nl.node_name = d.resource_name
     WHERE d.avg_mw > 0
-      AND d.hour >= '2024-12-31'::timestamptz     -- ercot_node_prices starts 2025-01
+      AND d.hour >= '2024-12-31'::timestamptz     -- ercot_nodal_da_rt_hourly starts 2025-01
     GROUP BY 1, 2, 3
 ),
 prices AS (
     SELECT node_name,
            date_trunc('hour', hour) AS h_local,
            rt_price, da_price
-    FROM ercot_node_prices
+    FROM ercot_nodal_da_rt_hourly
     WHERE node_name IN ('LZ_NORTH','LZ_SOUTH','LZ_WEST','LZ_HOUSTON','HB_BUSAVG')
 )
 SELECT

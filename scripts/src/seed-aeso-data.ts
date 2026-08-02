@@ -131,8 +131,8 @@ async function seedPoolPrice() {
       actualForecastBatch.push(`('${ds}', ${he}, ${poolPrice.toFixed(4)}, ${forecastPoolPrice.toFixed(4)}, ${priceForecastError.toFixed(4)}, ${ailMw.toFixed(2)}, ${ailForecastMw.toFixed(2)}, ${windMw.toFixed(2)}, ${forecastWindMw.toFixed(2)}, ${windForecastErrorMw.toFixed(2)}, ${solarMw.toFixed(2)}, ${forecastSolarMw.toFixed(2)}, ${solarForecastErrorMw.toFixed(2)}, 'synthetic')`);
 
       if (poolPriceBatch.length >= CHUNK) {
-        await db.execute(sql.raw(`INSERT INTO aeso_pool_price (date, hour_ending, pool_price, forecast_pool_price, ail_mw, net_gen_mw) VALUES ${poolPriceBatch.join(",")} ON CONFLICT (date, hour_ending) DO NOTHING`));
-        await db.execute(sql.raw(`INSERT INTO aeso_generation_mix (date, hour_ending, gas_mw, coal_mw, wind_mw, solar_mw, hydro_mw, storage_mw, other_mw, total_mw) VALUES ${genMixBatch.join(",")} ON CONFLICT (date, hour_ending) DO NOTHING`));
+        await db.execute(sql.raw(`INSERT INTO aeso_hourly_pool_price (date, hour_ending, pool_price, forecast_pool_price, ail_mw, net_gen_mw) VALUES ${poolPriceBatch.join(",")} ON CONFLICT (date, hour_ending) DO NOTHING`));
+        await db.execute(sql.raw(`INSERT INTO aeso_hourly_gen_output (date, hour_ending, gas_mw, coal_mw, wind_mw, solar_mw, hydro_mw, storage_mw, other_mw, total_mw) VALUES ${genMixBatch.join(",")} ON CONFLICT (date, hour_ending) DO NOTHING`));
         await db.execute(sql.raw(`INSERT INTO aeso_supply_demand (date, hour_ending, ail_mw, available_capacity_mw, reserve_margin_pct, bc_interchange_mw, sk_interchange_mw, net_interchange_mw) VALUES ${supplyDemandBatch.join(",")} ON CONFLICT (date, hour_ending) DO NOTHING`));
         await db.execute(sql.raw(`INSERT INTO aeso_actual_forecast (date, hour_ending, actual_pool_price, forecast_pool_price, price_forecast_error, actual_ail_mw, forecast_ail_mw, actual_wind_mw, forecast_wind_mw, wind_forecast_error_mw, actual_solar_mw, forecast_solar_mw, solar_forecast_error_mw, source) VALUES ${actualForecastBatch.join(",")} ON CONFLICT (date, hour_ending) DO NOTHING`));
         poolPriceBatch.length = 0;
@@ -146,8 +146,8 @@ async function seedPoolPrice() {
 
   // Flush remaining
   if (poolPriceBatch.length > 0) {
-    await db.execute(sql.raw(`INSERT INTO aeso_pool_price (date, hour_ending, pool_price, forecast_pool_price, ail_mw, net_gen_mw) VALUES ${poolPriceBatch.join(",")} ON CONFLICT (date, hour_ending) DO NOTHING`));
-    await db.execute(sql.raw(`INSERT INTO aeso_generation_mix (date, hour_ending, gas_mw, coal_mw, wind_mw, solar_mw, hydro_mw, storage_mw, other_mw, total_mw) VALUES ${genMixBatch.join(",")} ON CONFLICT (date, hour_ending) DO NOTHING`));
+    await db.execute(sql.raw(`INSERT INTO aeso_hourly_pool_price (date, hour_ending, pool_price, forecast_pool_price, ail_mw, net_gen_mw) VALUES ${poolPriceBatch.join(",")} ON CONFLICT (date, hour_ending) DO NOTHING`));
+    await db.execute(sql.raw(`INSERT INTO aeso_hourly_gen_output (date, hour_ending, gas_mw, coal_mw, wind_mw, solar_mw, hydro_mw, storage_mw, other_mw, total_mw) VALUES ${genMixBatch.join(",")} ON CONFLICT (date, hour_ending) DO NOTHING`));
     await db.execute(sql.raw(`INSERT INTO aeso_supply_demand (date, hour_ending, ail_mw, available_capacity_mw, reserve_margin_pct, bc_interchange_mw, sk_interchange_mw, net_interchange_mw) VALUES ${supplyDemandBatch.join(",")} ON CONFLICT (date, hour_ending) DO NOTHING`));
     await db.execute(sql.raw(`INSERT INTO aeso_actual_forecast (date, hour_ending, actual_pool_price, forecast_pool_price, price_forecast_error, actual_ail_mw, forecast_ail_mw, actual_wind_mw, forecast_wind_mw, wind_forecast_error_mw, actual_solar_mw, forecast_solar_mw, solar_forecast_error_mw, source) VALUES ${actualForecastBatch.join(",")} ON CONFLICT (date, hour_ending) DO NOTHING`));
   }

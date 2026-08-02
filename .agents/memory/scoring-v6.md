@@ -24,7 +24,7 @@ These match keys in both `hubZoneNodes` (CDR hub/zone stats) and `ercotZoneCaptu
 
 ### Zone-specific capture prices (Step 0b-new)
 ```sql
-SELECT node, hour, AVG(da_price) FROM ercot_hub_hourly GROUP BY node, hour
+SELECT node, hour, AVG(da_price) FROM ercot_hub_da_rt_hourly GROUP BY node, hour
 ```
 Computes weighted capture price per hub per tech type using GEN_PROFILES shape.
 Real duck-curve differentiation: HB_PAN solar $17.03, HB_WEST solar $20.44,

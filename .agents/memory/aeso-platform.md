@@ -9,8 +9,8 @@ description: Standalone Alberta power market analytics artifact at /aeso/; archi
 - 9 DB tables all prefixed `aeso_*` — defined in `lib/db/src/schema/aeso.ts`, exported in schema index
 
 ## Data Model
-- `aeso_pool_price` — unique(date, hour_ending); ~21k hourly rows Jan2024–May2026
-- `aeso_generation_mix` — unique(date, hour_ending); same date range
+- `aeso_hourly_pool_price` — unique(date, hour_ending); ~21k hourly rows Jan2024–May2026
+- `aeso_hourly_gen_output` — unique(date, hour_ending); same date range
 - `aeso_supply_demand` — unique(date, hour_ending)
 - `aeso_actual_forecast` — unique(date, hour_ending)
 - `aeso_outages`, `aeso_queue_projects`, `aeso_7day_capability`, `aeso_constraint_events`, `aeso_transmission_corridors` — no unique constraint (seed with truncate, not upsert)

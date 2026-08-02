@@ -1,5 +1,5 @@
 -- ============================================================
--- Regenerate ercot_node_stats FROM hourly ercot_node_prices.
+-- Regenerate ercot_node_stats FROM hourly ercot_nodal_da_rt_hourly.
 --
 -- ercot_node_stats is the shared monthly table read by: the scoring engine
 -- (candidates curtailment/congestion/basis dims), all 6 CI pages, ERCOT
@@ -13,7 +13,7 @@
 -- on/off-peak, volatility, min/max: from DA (the primary settlement price).
 -- On-peak = HE07–HE22 Mon–Fri → interval-start hour 6..21, weekday.
 --
--- Only touches 2025-01 onward (ercot_node_prices coverage). Any pre-2025 rows
+-- Only touches 2025-01 onward (ercot_nodal_da_rt_hourly coverage). Any pre-2025 rows
 -- already in ercot_node_stats (hub/zone from the prior seed) are preserved.
 -- Idempotent: DELETE + re-INSERT the 2025+ window.
 -- ============================================================
@@ -48,7 +48,7 @@ SELECT
                AND EXTRACT(hour FROM hour) BETWEEN 6 AND 21))::numeric, 4) AS off_peak_avg,
   ROUND(MIN(da_price)::numeric, 4)                                   AS min_price,
   ROUND(MAX(da_price)::numeric, 4)                                   AS max_price
-FROM ercot_node_prices
+FROM ercot_nodal_da_rt_hourly
 WHERE da_price IS NOT NULL
 GROUP BY node_name, EXTRACT(year FROM hour), EXTRACT(month FROM hour);
 

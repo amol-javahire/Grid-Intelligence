@@ -138,17 +138,17 @@ router.get("/admin/status", requireAdminKey, async (req, res) => {
       UNION ALL SELECT 'transmission_lines', COUNT(*)::int FROM transmission_lines
       UNION ALL SELECT 'ercot_node_stats', COUNT(*)::int FROM ercot_node_stats
       UNION ALL SELECT 'ercot_nodal_stats', COUNT(*)::int FROM ercot_nodal_stats
-      UNION ALL SELECT 'ercot_hub_hourly', COUNT(*)::int FROM ercot_hub_hourly
+      UNION ALL SELECT 'ercot_hub_da_rt_hourly', COUNT(*)::int FROM ercot_hub_da_rt_hourly
       UNION ALL SELECT 'ercot_load_by_zone', COUNT(*)::int FROM ercot_load_by_zone
-      UNION ALL SELECT 'ercot_fuel_mix', COUNT(*)::int FROM ercot_fuel_mix
+      UNION ALL SELECT 'ercot_hourly_gen_output', COUNT(*)::int FROM ercot_hourly_gen_output
       UNION ALL SELECT 'caiso_node_stats', COUNT(*)::int FROM caiso_node_stats
-      UNION ALL SELECT 'caiso_hub_hourly', COUNT(*)::int FROM caiso_hub_hourly
+      UNION ALL SELECT 'caiso_hub_da_rt_hourly', COUNT(*)::int FROM caiso_hub_da_rt_hourly
       UNION ALL SELECT 'pjm_node_stats', COUNT(*)::int FROM pjm_node_stats
       UNION ALL SELECT 'queue_projects', COUNT(*)::int FROM queue_projects
       UNION ALL SELECT 'gas_prices', COUNT(*)::int FROM gas_prices
       UNION ALL SELECT 'generators', COUNT(*)::int FROM generators
       UNION ALL SELECT 'thermal_params', COUNT(*)::int FROM thermal_params
-      UNION ALL SELECT 'hourly_temperatures', COUNT(*)::int FROM hourly_temperatures
+      UNION ALL SELECT 'iso_hourly_temps', COUNT(*)::int FROM iso_hourly_temps
       UNION ALL SELECT 'regulatory_items', COUNT(*)::int FROM regulatory_items
       UNION ALL SELECT 'load_forecasts', COUNT(*)::int FROM load_forecasts
       UNION ALL SELECT 'datacenters', COUNT(*)::int FROM datacenters
@@ -180,7 +180,7 @@ router.get("/admin/jobs/:id", requireAdminKey, (req, res) => {
 // ── POST /api/admin/seed-ercot-load-fuelmix ──────────────────────────────────
 router.post("/admin/seed-ercot-load-fuelmix", requireAdminKey, (req, res) => {
   const jobId = spawnScript("seed-ercot-load-fuelmix");
-  res.json({ jobId, status: "started", message: "Seeding ercot_load_by_zone + ercot_fuel_mix" });
+  res.json({ jobId, status: "started", message: "Seeding ercot_load_by_zone + ercot_hourly_gen_output" });
 });
 
 // ── POST /api/admin/fix-mock-scores ──────────────────────────────────────────
@@ -673,8 +673,8 @@ async function inlineSeedAeso(job: Job) {
       af.push(`('${date}',${he},${poolPrice.toFixed(4)},${fpp.toFixed(4)},${(fpp - poolPrice).toFixed(4)},${ailMw.toFixed(2)},${ailF.toFixed(2)},${windMw.toFixed(2)},${fWind.toFixed(2)},${(fWind - windMw).toFixed(2)},${solarMw.toFixed(2)},${fSolar.toFixed(2)},${(fSolar - solarMw).toFixed(2)},'synthetic')`);
 
       if (pp.length >= CHUNK) {
-        await db.execute(sql.raw(`INSERT INTO aeso_pool_price (date,hour_ending,pool_price,forecast_pool_price,ail_mw,net_gen_mw) VALUES ${pp.join(",")} ON CONFLICT (date,hour_ending) DO NOTHING`));
-        await db.execute(sql.raw(`INSERT INTO aeso_generation_mix (date,hour_ending,gas_mw,coal_mw,wind_mw,solar_mw,hydro_mw,storage_mw,other_mw,total_mw) VALUES ${gm.join(",")} ON CONFLICT (date,hour_ending) DO NOTHING`));
+        await db.execute(sql.raw(`INSERT INTO aeso_hourly_pool_price (date,hour_ending,pool_price,forecast_pool_price,ail_mw,net_gen_mw) VALUES ${pp.join(",")} ON CONFLICT (date,hour_ending) DO NOTHING`));
+        await db.execute(sql.raw(`INSERT INTO aeso_hourly_gen_output (date,hour_ending,gas_mw,coal_mw,wind_mw,solar_mw,hydro_mw,storage_mw,other_mw,total_mw) VALUES ${gm.join(",")} ON CONFLICT (date,hour_ending) DO NOTHING`));
         await db.execute(sql.raw(`INSERT INTO aeso_supply_demand (date,hour_ending,ail_mw,available_capacity_mw,reserve_margin_pct,bc_interchange_mw,sk_interchange_mw,net_interchange_mw) VALUES ${sd.join(",")} ON CONFLICT (date,hour_ending) DO NOTHING`));
         await db.execute(sql.raw(`INSERT INTO aeso_actual_forecast (date,hour_ending,actual_pool_price,forecast_pool_price,price_forecast_error,actual_ail_mw,forecast_ail_mw,actual_wind_mw,forecast_wind_mw,wind_forecast_error_mw,actual_solar_mw,forecast_solar_mw,solar_forecast_error_mw,source) VALUES ${af.join(",")} ON CONFLICT (date,hour_ending) DO NOTHING`));
         pp.length = 0; gm.length = 0; sd.length = 0; af.length = 0;
@@ -683,8 +683,8 @@ async function inlineSeedAeso(job: Job) {
     }
   }
   if (pp.length > 0) {
-    await db.execute(sql.raw(`INSERT INTO aeso_pool_price (date,hour_ending,pool_price,forecast_pool_price,ail_mw,net_gen_mw) VALUES ${pp.join(",")} ON CONFLICT (date,hour_ending) DO NOTHING`));
-    await db.execute(sql.raw(`INSERT INTO aeso_generation_mix (date,hour_ending,gas_mw,coal_mw,wind_mw,solar_mw,hydro_mw,storage_mw,other_mw,total_mw) VALUES ${gm.join(",")} ON CONFLICT (date,hour_ending) DO NOTHING`));
+    await db.execute(sql.raw(`INSERT INTO aeso_hourly_pool_price (date,hour_ending,pool_price,forecast_pool_price,ail_mw,net_gen_mw) VALUES ${pp.join(",")} ON CONFLICT (date,hour_ending) DO NOTHING`));
+    await db.execute(sql.raw(`INSERT INTO aeso_hourly_gen_output (date,hour_ending,gas_mw,coal_mw,wind_mw,solar_mw,hydro_mw,storage_mw,other_mw,total_mw) VALUES ${gm.join(",")} ON CONFLICT (date,hour_ending) DO NOTHING`));
     await db.execute(sql.raw(`INSERT INTO aeso_supply_demand (date,hour_ending,ail_mw,available_capacity_mw,reserve_margin_pct,bc_interchange_mw,sk_interchange_mw,net_interchange_mw) VALUES ${sd.join(",")} ON CONFLICT (date,hour_ending) DO NOTHING`));
     await db.execute(sql.raw(`INSERT INTO aeso_actual_forecast (date,hour_ending,actual_pool_price,forecast_pool_price,price_forecast_error,actual_ail_mw,forecast_ail_mw,actual_wind_mw,forecast_wind_mw,wind_forecast_error_mw,actual_solar_mw,forecast_solar_mw,solar_forecast_error_mw,source) VALUES ${af.join(",")} ON CONFLICT (date,hour_ending) DO NOTHING`));
   }
@@ -1115,17 +1115,17 @@ router.post("/admin/reseed-datacenters", requireAdminKey, (req, res) => {
 });
 
 // ── POST /api/admin/reseed-temperatures ──────────────────────────────────────
-// Spawns seed-temperatures.py — seeds hourly_temperatures for 8 ERCOT zones.
+// Spawns seed-temperatures.py — seeds iso_hourly_temps for 8 ERCOT zones.
 router.post("/admin/reseed-temperatures", requireAdminKey, (req, res) => {
   const jobId = spawnPython("seed-temperatures");
-  res.json({ jobId, statusUrl: `/api/admin/jobs/${jobId}`, message: "Seeding hourly_temperatures (8 ERCOT zones) via seed-temperatures.py" });
+  res.json({ jobId, statusUrl: `/api/admin/jobs/${jobId}`, message: "Seeding iso_hourly_temps (8 ERCOT zones) via seed-temperatures.py" });
 });
 
 // ── POST /api/admin/reseed-temperatures-completion ───────────────────────────
 // Spawns seed-temperatures-completion.py — adds ERCOT WEST + 3 CAISO zones.
 router.post("/admin/reseed-temperatures-completion", requireAdminKey, (req, res) => {
   const jobId = spawnPython("seed-temperatures-completion");
-  res.json({ jobId, statusUrl: `/api/admin/jobs/${jobId}`, message: "Seeding hourly_temperatures completion (ERCOT WEST + NP15/SP15/ZP26) via seed-temperatures-completion.py" });
+  res.json({ jobId, statusUrl: `/api/admin/jobs/${jobId}`, message: "Seeding iso_hourly_temps completion (ERCOT WEST + NP15/SP15/ZP26) via seed-temperatures-completion.py" });
 });
 
 // ── POST /api/admin/reseed-temperature-forecasts ──────────────────────────────
@@ -1147,7 +1147,7 @@ router.post("/admin/reseed-load-forecasts", requireAdminKey, (req, res) => {
 // climatological data + execute_values bulk inserts (~2-3 min, no API calls).
 router.post("/admin/reseed-temperatures-fast", requireAdminKey, (req, res) => {
   const jobId = spawnPython("seed-temperatures-fast");
-  res.json({ jobId, statusUrl: `/api/admin/jobs/${jobId}`, message: "Seeding hourly_temperatures (all 11 zones, synthetic, fast) via seed-temperatures-fast.py" });
+  res.json({ jobId, statusUrl: `/api/admin/jobs/${jobId}`, message: "Seeding iso_hourly_temps (all 11 zones, synthetic, fast) via seed-temperatures-fast.py" });
 });
 
 // ── Node.js async job runner ───────────────────────────────────────────────────
@@ -1191,8 +1191,8 @@ router.post("/admin/seed-temperatures-node", requireAdminKey, (req, res) => {
 
     function daysInMonth(y: number, m: number) { return new Date(y, m, 0).getDate(); }
 
-    await db.execute(sql.raw("TRUNCATE TABLE hourly_temperatures"));
-    job.output.push("Truncated hourly_temperatures — generating synthetic data...");
+    await db.execute(sql.raw("TRUNCATE TABLE iso_hourly_temps"));
+    job.output.push("Truncated iso_hourly_temps — generating synthetic data...");
 
     let totalInserted = 0;
     const BATCH = 3000;
@@ -1212,7 +1212,7 @@ router.post("/admin/seed-temperatures-node", requireAdminKey, (req, res) => {
             rows.push(`('${c.iso}','${c.zone}',${year},${month},${day},${hour},${tf},${tc})`);
             if (rows.length >= BATCH) {
               await db.execute(sql.raw(
-                `INSERT INTO hourly_temperatures (iso,zone,year,month,day,hour,temp_f,temp_c) VALUES ${rows.join(",")} ON CONFLICT (iso,zone,year,month,day,hour) DO NOTHING`
+                `INSERT INTO iso_hourly_temps (iso,zone,year,month,day,hour,temp_f,temp_c) VALUES ${rows.join(",")} ON CONFLICT (iso,zone,year,month,day,hour) DO NOTHING`
               ));
               totalInserted += rows.length; rows = [];
             }
@@ -1221,7 +1221,7 @@ router.post("/admin/seed-temperatures-node", requireAdminKey, (req, res) => {
       }
       if (rows.length > 0) {
         await db.execute(sql.raw(
-          `INSERT INTO hourly_temperatures (iso,zone,year,month,day,hour,temp_f,temp_c) VALUES ${rows.join(",")} ON CONFLICT (iso,zone,year,month,day,hour) DO NOTHING`
+          `INSERT INTO iso_hourly_temps (iso,zone,year,month,day,hour,temp_f,temp_c) VALUES ${rows.join(",")} ON CONFLICT (iso,zone,year,month,day,hour) DO NOTHING`
         ));
         totalInserted += rows.length;
       }
@@ -1229,7 +1229,7 @@ router.post("/admin/seed-temperatures-node", requireAdminKey, (req, res) => {
     }
     job.output.push(`✅ Done — ${totalInserted} rows inserted across 11 zones`);
   });
-  res.json({ jobId, statusUrl: `/api/admin/jobs/${jobId}`, message: "Seeding hourly_temperatures via Node.js (11 zones, no Python, ~30s)" });
+  res.json({ jobId, statusUrl: `/api/admin/jobs/${jobId}`, message: "Seeding iso_hourly_temps via Node.js (11 zones, no Python, ~30s)" });
 });
 
 export default router;

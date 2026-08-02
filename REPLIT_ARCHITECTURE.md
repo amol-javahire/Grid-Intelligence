@@ -16,12 +16,12 @@ migration can rebuild each tab's data faithfully.
 ## Migration context (as of 2026-07-22)
 
 The Azure DB is a **partial migration** — only the ERCOT price/dispatch pipeline was
-seeded. Populated on Azure: `ercot_hourly_dispatch` (24.9M), `ercot_node_prices`
+seeded. Populated on Azure: `ercot_hourly_dispatch` (24.9M), `ercot_nodal_da_rt_hourly`
 (11.7M, our fresh hourly DA+RT seed), `ercot_node_locations` (819), `queue_projects`
-(3,493), `hourly_temperatures`, `gas_forwards`, `datacenters`, `regulatory_items`,
+(3,493), `iso_hourly_temps`, `gas_forwards`, `datacenters`, `regulatory_items`,
 `caiso_node_stats` (77, partial). **Empty/critical gap:** `candidates` (0 — the whole
 PPA screening universe), `generators` (31, should be ~6,163), `screenings`,
-`caiso_hub_hourly`, `pjm_node_stats`, `gas_prices`, `ercot_buses`, `ercot_lines`,
+`caiso_hub_da_rt_hourly`, `pjm_node_stats`, `gas_prices`, `ercot_buses`, `ercot_lines`,
 `load_forecasts`, `temperature_forecasts`.
 
 **Migration plan (executing 2026-07-23+):** `pg_dump --data-only --column-inserts` the
@@ -30,7 +30,7 @@ targets → load. `candidates`/`generators` re-seeded from **latest EIA-860** in
 copied (Replit's are stale).
 
 **Data vintage rules (user directive, 2026-07-22):**
-- **ERCOT** stays latest — do NOT overwrite `ercot_hourly_dispatch`, `ercot_node_prices`,
+- **ERCOT** stays latest — do NOT overwrite `ercot_hourly_dispatch`, `ercot_nodal_da_rt_hourly`,
   `ercot_node_locations`, `ercot_node_stats`, `ercot_nodal_stats`.
 - **EIA** data (`candidates`, `generators`) → re-seed from latest EIA-860 vintage.
 - Bulk-load all data first, then revise tab by tab (user checks each tab).
@@ -46,10 +46,10 @@ copied (Replit's are stale).
 | `screenings` | Rankings (save), Saved Screenings | empty/missing |
 | `ercot_node_stats` | ERCOT Historical, Nodal, all 6 CI pages, Gas/Spark, Heat-Rate | present (360; regen from hourly) |
 | `caiso_node_stats` | CAISO Historical, Nodal | 77 (partial) |
-| `caiso_hub_hourly` | CAISO Hourly | **empty** |
-| `ercot_hub_hourly` | ERCOT Historical (Hourly Shape) | present |
+| `caiso_hub_da_rt_hourly` | CAISO Hourly | **empty** |
+| `ercot_hub_da_rt_hourly` | ERCOT Historical (Hourly Shape) | present |
 | `ercot_load_by_zone` | ERCOT Historical (Zone Load) | empty |
-| `ercot_fuel_mix` | ERCOT Historical (Fuel Mix) | empty |
+| `ercot_hourly_gen_output` | ERCOT Historical (Fuel Mix) | empty |
 | `pjm_node_stats` | (PJM historical/scoring) | **empty** |
 | `queue_projects` | Queue, Dashboard, Map, RECs, Rankings (Interconnect dim) | 3,493 (ok) |
 | `transmission_lines` | Map (lazy layer) | check (HIFLD 23,674) |
@@ -57,16 +57,16 @@ copied (Replit's are stale).
 | `gas_forwards` | ERCOT Gas (Forward Curve) | present |
 | `regulatory_items` | Regulatory & Tax | present (30) |
 | `datacenters` | AI & Datacenters, Map | present (55) |
-| `hourly_temperatures` | Weather (actuals) | present |
+| `iso_hourly_temps` | Weather (actuals) | present |
 | `temperature_forecasts` | Weather (climate forecast) | empty |
 | `load_forecasts` | EV Charging, Load Forecast Stress | empty |
 | `ercot_buses` / `ercot_lines` / `ercot_bus_shift_factors` | Nodal (shift factors), PyPSA topology | **empty** |
 | `mv_dispatch_monthly` | ERCOT Dispatch (supply stack, summary) | **missing MV** |
-| `mv_capture_monthly` | ERCOT Dispatch (capacity factor, capture) | rebuilt on ercot_node_prices |
+| `mv_capture_monthly` | ERCOT Dispatch (capacity factor, capture) | rebuilt on ercot_nodal_da_rt_hourly |
 
 Materialized views to (re)create on Azure: `mv_dispatch_monthly` (38,820 rows —
 supply-stack/summary), `mv_capture_monthly` (capture — already repointed to
-`ercot_node_prices`).
+`ercot_nodal_da_rt_hourly`).
 
 ---
 
@@ -104,13 +104,13 @@ supply-stack/summary), `mv_capture_monthly` (capture — already repointed to
 ## GROUP 2 — Market Data (Historical)
 
 ### /ercot — ERCOT Historical
-- **Tabs:** DA/RT Prices, On/Off-Peak, Volatility & Neg-Prices (all `ercot_node_stats` via `useListErcotNodeStats({node,year})`, 15 nodes, YoY toggle); Zone Load (`GET /api/ercot/load-by-zone?year=` → `ercot_load_by_zone`, 8 EIA-930 zones); Fuel Mix (`GET /api/ercot/fuel-mix?year=` → `ercot_fuel_mix`); Hourly Shape (`GET /api/ercot/hub-hourly?node=&year=&month=` → `ercot_hub_hourly`, 24-bar avg DA).
+- **Tabs:** DA/RT Prices, On/Off-Peak, Volatility & Neg-Prices (all `ercot_node_stats` via `useListErcotNodeStats({node,year})`, 15 nodes, YoY toggle); Zone Load (`GET /api/ercot/load-by-zone?year=` → `ercot_load_by_zone`, 8 EIA-930 zones); Fuel Mix (`GET /api/ercot/fuel-mix?year=` → `ercot_hourly_gen_output`); Hourly Shape (`GET /api/ercot/hub-hourly?node=&year=&month=` → `ercot_hub_da_rt_hourly`, 24-bar avg DA).
 
 ### /caiso — CAISO Historical
 - **API:** `useListCaisoNodeStats({node,year})` → `caiso_node_stats`. Nodes NP15/SP15/ZP26, 2024–2026. Sub-tabs: DA vs RT, On/Off-Peak, Volatility & Neg-Prices.
 
 ### /caiso-hourly — CAISO Hourly
-- **API:** `GET /api/caiso/hub-hourly?node=&year=&month=` + `/coverage` → `caiso_hub_hourly` (63,495 rows: 3 nodes × 29 months DA+RT). 24-bar DA / RT / DA−RT basis (|basis|>15 red, >5 amber); coverage grid; monthly stats.
+- **API:** `GET /api/caiso/hub-hourly?node=&year=&month=` + `/coverage` → `caiso_hub_da_rt_hourly` (63,495 rows: 3 nodes × 29 months DA+RT). 24-bar DA / RT / DA−RT basis (|basis|>15 red, >5 amber); coverage grid; monthly stats.
 
 ### /nodal — Nodal Analysis
 - **APIs/tables:** `useListErcotNodeStats` (2 ERCOT nodes), `useListCaisoNodeStats` (CAISO), `useGetErcotBusShiftFactors()` (340-bus PTDF), `useGetErcotBusLoad()`. Dual-node price compare + basis spread; CAISO zone compare; DA/RT/spread toggle.
@@ -118,7 +118,7 @@ supply-stack/summary), `mv_capture_monthly` (capture — already repointed to
 
 ### /ercot-dispatch — ERCOT Dispatch / SCED
 - **4 tabs:** Supply Stack (`GET /api/ercot/dispatch/supply-stack?date=` → `ercot_hourly_dispatch` via **`mv_dispatch_monthly`**; merit-order step chart); Monthly Summary (`GET /api/ercot/dispatch/summary` → `mv_dispatch_monthly`, 38,820 rows); Capacity Factor + Capture Price (`GET /api/ercot/dispatch/capture` → **`mv_capture_monthly`**). CF = SUM(gen_mwh)/(MAX(hsl_mw)×hours). 1,215 resources, offer sentinels −$250/$5,000 stripped.
-- **Note:** this is the tab we've been repointing to `ercot_node_prices` (Capture Prices/Rates + Capacity Factors slider). `mv_dispatch_monthly` still needs creating on Azure.
+- **Note:** this is the tab we've been repointing to `ercot_nodal_da_rt_hourly` (Capture Prices/Rates + Capacity Factors slider). `mv_dispatch_monthly` still needs creating on Azure.
 
 ### /ercot-gas — ERCOT Gas & Spark Spread
 - **5 tabs:** Gas Prices (`gas_prices` — HH & Waha, Waha basis), Spark Spread (`gas_prices` + `ercot_node_stats` — Power DA − gas×heat_rate), Heat Rate (Power DA / gas ×1000; CCGT 6500–7500, CT 9000–11000), Forward Curve (`gas_prices` + forwards — synthetic power fwd = gas_fwd × HR × seasonal), Multi-Node Summary.
@@ -180,7 +180,7 @@ supply-stack/summary), `mv_capture_monthly` (capture — already repointed to
 ## GROUP 7 — Load & Demand Intelligence
 
 ### /weather — Weather & Temperature
-- **APIs:** `useGetTemperature` / `useGetTemperatureStats` → `hourly_temperatures` (21,168/zone: 8 ERCOT + 3 CAISO); `useGetTemperatureForecast` / overview → `temperature_forecasts` (12,056, Jul 2026–Jun 2029). Sub-tabs: daily avg, hourly profile, monthly stats (HDD/CDD), climate forecast (+0.3°F/yr).
+- **APIs:** `useGetTemperature` / `useGetTemperatureStats` → `iso_hourly_temps` (21,168/zone: 8 ERCOT + 3 CAISO); `useGetTemperatureForecast` / overview → `temperature_forecasts` (12,056, Jul 2026–Jun 2029). Sub-tabs: daily avg, hourly profile, monthly stats (HDD/CDD), climate forecast (+0.3°F/yr).
 
 ### /ev-charging — EV Charging Load
 - **API:** `GET /api/load-forecast/overview` → `load_forecasts` (`ev_mw` col). EV projections hardcoded (ERCOT 380K→830K EVs by 2029 @1.51kW; CAISO 1.9M→3.55M @1.40kW). Zone breakdown bars.

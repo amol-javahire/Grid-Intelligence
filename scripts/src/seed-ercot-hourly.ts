@@ -7,7 +7,7 @@
  * RTM: 15-min intervals per hour → averaged to hourly.
  * DAM: already hourly.
  *
- * Stores to ercot_hub_hourly table.
+ * Stores to ercot_hub_da_rt_hourly table.
  * ~240,000 rows expected (15 nodes × ~2.25 years × 8,760 hr/yr)
  */
 
@@ -207,7 +207,7 @@ async function main() {
   // "Fully seeded" = all 15 nodes present with both DA and RT for that year-month
   const existingRes = await db.execute<{ year: number; month: number; node_count: number }>(sql`
     SELECT year, month, COUNT(DISTINCT node) AS node_count
-    FROM ercot_hub_hourly
+    FROM ercot_hub_da_rt_hourly
     WHERE da_price IS NOT NULL AND rt_price IS NOT NULL
     GROUP BY year, month
   `);
@@ -281,7 +281,7 @@ async function main() {
     process.stdout.write(`\r  ${done * BATCH} / ${rows.length}`);
   }
 
-  console.log(`\n✓ Inserted ${rows.length} hourly rows into ercot_hub_hourly.`);
+  console.log(`\n✓ Inserted ${rows.length} hourly rows into ercot_hub_da_rt_hourly.`);
   process.exit(0);
 }
 

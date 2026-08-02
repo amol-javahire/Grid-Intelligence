@@ -51,7 +51,7 @@ router.get("/aeso/rankings", async (req, res) => {
             / NULLIF(SUM(mv.metered_mw), 0)                    AS capture_price,
           COUNT(*) FILTER (WHERE pp.pool_price < 0)            AS neg_price_hours
         FROM aeso_metered_volume mv
-        JOIN aeso_pool_price pp
+        JOIN aeso_hourly_pool_price pp
           ON pp.date = mv.date AND pp.hour_ending = mv.hour_ending
         WHERE mv.date >= (CURRENT_DATE - (${months} || ' months')::interval)
           AND mv.metered_mw > 0
@@ -80,7 +80,7 @@ router.get("/aeso/rankings", async (req, res) => {
     // for capture rate. Alberta has one price, so this is unambiguous.
     const [ref] = (await db.execute<{ avg_pool: number | null; hrs: number | null }>(sql`
       SELECT AVG(pool_price)::float AS avg_pool, COUNT(*)::float AS hrs
-      FROM aeso_pool_price
+      FROM aeso_hourly_pool_price
       WHERE date >= (CURRENT_DATE - (${months} || ' months')::interval)
     `)).rows;
 

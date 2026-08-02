@@ -17,7 +17,7 @@ import {
    Historical Prices — Alberta power and gas, monthly.
 
    Two independent series joined on calendar month:
-     · POWER — AESO pool price, from our own aeso_pool_price table via
+     · POWER — AESO pool price, from our own aeso_hourly_pool_price table via
        /api/aeso/pool-price/stats (monthly avg/min/max/volatility/spike and
        negative-hour counts). Coverage is whatever we have seeded.
      · GAS — Government of Alberta monthly natural gas reference price,

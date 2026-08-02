@@ -1003,7 +1003,7 @@ export default function PpaCalculator() {
           <CardContent className="text-xs text-slate-400 space-y-1.5">
             {[
               ["Contract structure", "VPPA: buyer pays fixed strike, receives floating hub DA settlement. Net cashflow = (DA − strike) × MWh."],
-              ["Capture price", "CDR hub DA monthly averages × technology timing ratio (solar=0.724, wind=1.010, storage=1.797 for ERCOT) from ercot_hub_hourly."],
+              ["Capture price", "CDR hub DA monthly averages × technology timing ratio (solar=0.724, wind=1.010, storage=1.797 for ERCOT) from ercot_hub_da_rt_hourly."],
               ["P10/P50/P90", "Monte Carlo over price volatility, curtailment uncertainty, and basis risk. P10 = adverse 10th percentile; P90 = favourable."],
               ["Tax credits", "ITC: 30% base + 10% domestic content adder (solar, storage). PTC: $27.50/MWh base (2024) × 10yr for qualifying wind."],
               ["WACC", "Project-level real WACC (equity/debt blended). Nominal cashflows discounted at real WACC + inflation."],

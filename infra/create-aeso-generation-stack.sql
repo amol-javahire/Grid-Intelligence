@@ -17,7 +17,7 @@
 -- it is what makes AVG(monthly_capture_rate) unnecessary — that average
 -- overweights months where the asset barely ran.
 --
--- HOUR SPINE: hours come from aeso_pool_price, never from aeso_metered_volume.
+-- HOUR SPINE: hours come from aeso_hourly_pool_price, never from aeso_metered_volume.
 -- Assets have gaps (~17% of hours missing fleet-wide). Counting only metered
 -- hours would drop an asset's offline hours out of the denominator and inflate
 -- its capacity factor. On the price spine a missing hour is zero generation,
@@ -52,7 +52,7 @@ SELECT
     SUM(pool_price)                       AS sum_price,
     AVG(pool_price)                       AS avg_pool_price,
     COUNT(*) FILTER (WHERE pool_price <= 0) AS zero_or_neg_hours
-FROM aeso_pool_price
+FROM aeso_hourly_pool_price
 WHERE pool_price IS NOT NULL
 GROUP BY 1;
 
@@ -87,7 +87,7 @@ WITH gen AS (
         COUNT(*) FILTER (WHERE pp.pool_price < 0
                            AND mv.metered_mw > 0)       AS neg_price_gen_hours
     FROM aeso_metered_volume mv
-    JOIN aeso_pool_price pp
+    JOIN aeso_hourly_pool_price pp
       ON pp.date = mv.date AND pp.hour_ending = mv.hour_ending
     WHERE pp.pool_price IS NOT NULL
     GROUP BY 1, 2
@@ -98,7 +98,7 @@ cap AS (
         pm.month,
         w.asset_id,
         COUNT(*) AS capacity_hours_raw     -- hours in month inside the window
-    FROM aeso_pool_price pp
+    FROM aeso_hourly_pool_price pp
     JOIN LATERAL (SELECT date_trunc('month', pp.date)::date AS month) pm ON TRUE
     JOIN aeso_asset_window w
       ON pp.date >= w.first_metered AND pp.date <= w.last_metered

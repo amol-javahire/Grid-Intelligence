@@ -21,13 +21,13 @@ import { GAS_HISTORY, impliedHeatRate } from "@/lib/alberta-gas-history";
    BOTTOM: origination (what to do about it).
 
    Every panel is wired only to sources proven to hold data:
-     · aeso_pool_price          — 22.5k hourly rows
+     · aeso_hourly_pool_price          — 22.5k hourly rows
      · aeso_metered_volume      — 14.9M hourly generator rows
      · aeso_asset_registry      — 230 CSD generators with MC + fuel type
      · /api/aeso/csd            — live scrape of the AESO CSD report
      · forward curve + gas history — static, sourced modules
 
-   Deliberately NOT wired to aeso_generation_mix, aeso_queue_projects,
+   Deliberately NOT wired to aeso_hourly_gen_output, aeso_queue_projects,
    aeso_outages or aeso_supply_demand. Those were the reason the previous
    dashboard rendered every tile as "---": the route didn't fail, it returned
    nulls from four never-seeded tables and the page had no way to say so.

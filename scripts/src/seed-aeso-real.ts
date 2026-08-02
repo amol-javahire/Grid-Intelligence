@@ -127,7 +127,7 @@ async function seedPoolPrice(): Promise<void> {
     SELECT EXTRACT(YEAR FROM date)::int AS y,
            EXTRACT(MONTH FROM date)::int AS m,
            COUNT(*) AS cnt
-    FROM aeso_pool_price
+    FROM aeso_hourly_pool_price
     GROUP BY y, m
   `);
   const existing = new Set<string>(
@@ -160,7 +160,7 @@ async function seedPoolPrice(): Promise<void> {
       }).join(",\n");
 
       await db.execute(sql.raw(`
-        INSERT INTO aeso_pool_price (date, hour_ending, pool_price, forecast_pool_price, rolling_30d_avg)
+        INSERT INTO aeso_hourly_pool_price (date, hour_ending, pool_price, forecast_pool_price, rolling_30d_avg)
         VALUES ${values}
         ON CONFLICT (date, hour_ending) DO UPDATE SET
           pool_price             = EXCLUDED.pool_price,

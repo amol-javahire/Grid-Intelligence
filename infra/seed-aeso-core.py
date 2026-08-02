@@ -160,7 +160,7 @@ def seed_pool_price(conn) -> int:
         if batch:
             with conn.cursor() as c:
                 psycopg2.extras.execute_values(c, """
-                    INSERT INTO aeso_pool_price (date, hour_ending, pool_price, forecast_pool_price)
+                    INSERT INTO aeso_hourly_pool_price (date, hour_ending, pool_price, forecast_pool_price)
                     VALUES %s
                     ON CONFLICT (date, hour_ending) DO UPDATE SET
                       pool_price = EXCLUDED.pool_price,
@@ -244,7 +244,7 @@ def main():
 
     with conn.cursor() as c:
         c.execute("""
-            SELECT 'aeso_pool_price', COUNT(*), MIN(date)::text, MAX(date)::text FROM aeso_pool_price
+            SELECT 'aeso_hourly_pool_price', COUNT(*), MIN(date)::text, MAX(date)::text FROM aeso_hourly_pool_price
             UNION ALL
             SELECT 'aeso_asset_registry', COUNT(*), NULL, NULL FROM aeso_asset_registry
         """)

@@ -2,7 +2,7 @@ import { pgTable, serial, date, integer, numeric, timestamp, unique } from "driz
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
-export const aesoPoolPriceTable = pgTable("aeso_pool_price", {
+export const aesoPoolPriceTable = pgTable("aeso_hourly_pool_price", {
   id: serial("id").primaryKey(),
   date: date("date").notNull(),
   hourEnding: integer("hour_ending").notNull(),

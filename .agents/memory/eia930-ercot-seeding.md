@@ -1,6 +1,6 @@
 ---
 name: EIA-930 ERCOT load and fuel mix seeding
-description: How to seed ercot_load_by_zone and ercot_fuel_mix with real EIA-930 data; zone names; auth notes
+description: How to seed ercot_load_by_zone and ercot_hourly_gen_output with real EIA-930 data; zone names; auth notes
 ---
 
 ## Rule

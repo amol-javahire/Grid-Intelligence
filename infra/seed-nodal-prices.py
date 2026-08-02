@@ -5,7 +5,7 @@ seed-nodal-prices.py — ERCOT DA and RT hourly settlement point prices for all 
 DA:  np4-190-cd — DAM Settlement Point Prices (hourly, ~950 nodes/day)
 RT:  np6-905-cd — Settlement Point Prices at Resource Nodes (15-min → aggregated to hourly)
 
-Stores in: ercot_node_prices (node_name, hour, da_price, rt_price)
+Stores in: ercot_nodal_da_rt_hourly (node_name, hour, da_price, rt_price)
 Logs in:   ercot_price_seed_log (seed_date, price_type, rows_inserted)
 
 Usage:
@@ -199,7 +199,7 @@ def _upsert_da(conn, date, rows) -> int:
     with conn.cursor() as cur:
         psycopg2.extras.execute_values(
             cur,
-            """INSERT INTO ercot_node_prices (node_name, hour, da_price)
+            """INSERT INTO ercot_nodal_da_rt_hourly (node_name, hour, da_price)
                VALUES %s
                ON CONFLICT (node_name, hour) DO UPDATE SET da_price = EXCLUDED.da_price""",
             [(r["node_name"], r["hour"], r["da_price"]) for r in rows],
@@ -283,7 +283,7 @@ def _upsert_rt(conn, date, rows) -> int:
     with conn.cursor() as cur:
         psycopg2.extras.execute_values(
             cur,
-            """INSERT INTO ercot_node_prices (node_name, hour, rt_price)
+            """INSERT INTO ercot_nodal_da_rt_hourly (node_name, hour, rt_price)
                VALUES %s
                ON CONFLICT (node_name, hour) DO UPDATE SET rt_price = EXCLUDED.rt_price""",
             [(r["node_name"], r["hour"], r["rt_price"]) for r in rows],
@@ -297,7 +297,7 @@ def _upsert_rt(conn, date, rows) -> int:
 def setup_tables(conn):
     with conn.cursor() as cur:
         cur.execute("""
-            CREATE TABLE IF NOT EXISTS ercot_node_prices (
+            CREATE TABLE IF NOT EXISTS ercot_nodal_da_rt_hourly (
                 node_name TEXT        NOT NULL,
                 hour      TIMESTAMP   NOT NULL,
                 da_price  DOUBLE PRECISION,

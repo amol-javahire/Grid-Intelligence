@@ -33,7 +33,7 @@ router.get("/aeso/dashboard", async (req, res) => {
       SELECT pool_price::text AS latest_pool_price,
              ail_mw::text AS latest_ail_mw,
              date::text AS latest_date
-      FROM aeso_pool_price
+      FROM aeso_hourly_pool_price
       ORDER BY date DESC, hour_ending DESC
       LIMIT 1
     `);
@@ -50,7 +50,7 @@ router.get("/aeso/dashboard", async (req, res) => {
     const avgResult = await db.execute<{ avg_price: string | null; spike_count: string | null }>(sql`
       SELECT AVG(pool_price)::text AS avg_price,
              COUNT(*) FILTER (WHERE pool_price >= 200)::text AS spike_count
-      FROM aeso_pool_price
+      FROM aeso_hourly_pool_price
       WHERE date >= CURRENT_DATE - INTERVAL '30 days'
     `);
     const avgRow = avgResult.rows[0];
@@ -71,7 +71,7 @@ router.get("/aeso/dashboard", async (req, res) => {
     const queueRow = queueResult.rows[0];
 
     // Generation mix by fuel — sourced from the METERED VOLUME fleet (14.9M
-    // real rows joined to the CSD asset registry), NOT aeso_generation_mix.
+    // real rows joined to the CSD asset registry), NOT aeso_hourly_gen_output.
     // That table was never seeded; querying it returned nulls and was the
     // reason this whole dashboard rendered as "---". See the Generation Stack
     // tab, which uses the same underlying data.
@@ -136,7 +136,7 @@ router.get("/aeso/dashboard", async (req, res) => {
       // Per-source availability so the UI can say "not seeded" instead of
       // rendering a silent "---" that reads like a broken page.
       sources: {
-        poolPrice:     { live: !!priceRow?.latest_pool_price, table: "aeso_pool_price" },
+        poolPrice:     { live: !!priceRow?.latest_pool_price, table: "aeso_hourly_pool_price" },
         meteredVolume: { live: totalGen > 0,                  table: "aeso_metered_volume" },
         assetRegistry: { live: totalMc > 0,                   table: "aeso_asset_registry" },
         supplyDemand:  { live: !!reserveRow?.latest_reserve_margin_pct, table: "aeso_supply_demand" },
@@ -163,7 +163,7 @@ router.get("/aeso/pool-price", async (req, res) => {
       SELECT id, date::text, hour_ending,
              pool_price::text, forecast_pool_price::text,
              ail_mw::text, net_gen_mw::text
-      FROM aeso_pool_price
+      FROM aeso_hourly_pool_price
       WHERE (${from ?? null}::date IS NULL OR date >= ${from ?? null}::date)
         AND (${to ?? null}::date IS NULL OR date <= ${to ?? null}::date)
       ORDER BY date ASC, hour_ending ASC
@@ -201,7 +201,7 @@ router.get("/aeso/pool-price/stats", async (req, res) => {
         COUNT(*) FILTER (WHERE pool_price >= 300)::text AS spike_count,
         COUNT(*) FILTER (WHERE pool_price < 0)::text AS neg_count,
         STDDEV(pool_price)::text AS volatility
-      FROM aeso_pool_price
+      FROM aeso_hourly_pool_price
       WHERE pool_price IS NOT NULL
       GROUP BY 1, 2
       ORDER BY 1, 2
@@ -236,7 +236,7 @@ router.get("/aeso/pool-price/spikes", async (req, res) => {
       SELECT id, date::text, hour_ending,
              pool_price::text, forecast_pool_price::text,
              ail_mw::text, net_gen_mw::text
-      FROM aeso_pool_price
+      FROM aeso_hourly_pool_price
       WHERE pool_price >= ${thresh}
       ORDER BY pool_price DESC
       LIMIT ${lim}
@@ -271,7 +271,7 @@ router.get("/aeso/generation", async (req, res) => {
              gas_mw::text, coal_mw::text, wind_mw::text,
              solar_mw::text, hydro_mw::text, storage_mw::text,
              other_mw::text, total_mw::text
-      FROM aeso_generation_mix
+      FROM aeso_hourly_gen_output
       WHERE (${from ?? null}::date IS NULL OR date >= ${from ?? null}::date)
         AND (${to ?? null}::date IS NULL OR date <= ${to ?? null}::date)
       ORDER BY date ASC, hour_ending ASC
@@ -313,7 +313,7 @@ router.get("/aeso/generation/monthly", async (req, res) => {
         AVG(hydro_mw)::text AS avg_hydro_mw,
         AVG(coal_mw)::text AS avg_coal_mw,
         AVG(total_mw)::text AS avg_total_mw
-      FROM aeso_generation_mix
+      FROM aeso_hourly_gen_output
       GROUP BY 1, 2
       ORDER BY 1, 2
     `);

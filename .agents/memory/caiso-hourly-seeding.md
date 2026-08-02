@@ -1,6 +1,6 @@
 ---
 name: CAISO Hourly Seeding
-description: caiso_hub_hourly table seeding details — endpoints, format, and idempotency logic
+description: caiso_hub_da_rt_hourly table seeding details — endpoints, format, and idempotency logic
 ---
 
 ## Rule

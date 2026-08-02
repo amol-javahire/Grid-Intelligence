@@ -23,7 +23,7 @@ description: How to seed the production database — admin endpoints, auth, and 
 
 **Why:** SheetJS parses the entire 21.3 MB file into memory as a JS object. Autoscale containers have throttled CPU.
 
-**How to apply:** If ercot_hub_hourly shows 0 rows after triggering seed-ercot-hourly, do NOT assume it's stuck — wait 1-3 hours before concluding failure. Keep the container alive by making periodic admin API calls.
+**How to apply:** If ercot_hub_da_rt_hourly shows 0 rows after triggering seed-ercot-hourly, do NOT assume it's stuck — wait 1-3 hours before concluding failure. Keep the container alive by making periodic admin API calls.
 
 ## Inline seed endpoints (fallback for any table)
 - `POST /api/admin/reseed-aeso-inline` — seeds all 9 AESO tables using live db connection, no subprocess
@@ -55,8 +55,8 @@ description: How to seed the production database — admin endpoints, auth, and 
 - generators: 31 (ERCOT thermal)
 - thermal_params: 31 (ERCOT thermal)
 - ercot_load_by_zone: 174,282
-- ercot_fuel_mix: 167,190
-- ercot_hub_hourly: 327,195
+- ercot_hourly_gen_output: 167,190
+- ercot_hub_da_rt_hourly: 327,195
 - ercot_node_stats: 30,948 (1,100 prod = 15 hub/zone only; resource nodes missing)
 - pjm_node_stats: 14,336 (416 prod = outdated)
-- caiso_hub_hourly: 65,655
+- caiso_hub_da_rt_hourly: 65,655

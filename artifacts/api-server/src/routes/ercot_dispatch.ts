@@ -168,7 +168,7 @@ router.get("/ercot/dispatch/capacity-factors", async (req, res) => {
 // ── Capture prices + rates ─────────────────────────────────────────────────────
 // GET /api/ercot/dispatch/capture?months=24
 // Returns generation-weighted hub capture price per fuel type per month.
-// Data available through Dec 2025 (ercot_hub_hourly coverage).
+// Data available through Dec 2025 (ercot_hub_da_rt_hourly coverage).
 router.get("/ercot/dispatch/capture", async (req, res) => {
   try {
     const months = Math.min(Number(req.query.months ?? 24), 30);

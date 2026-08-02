@@ -43,7 +43,7 @@ const GROUPS: GuideGroup[] = [
         status: "live",
         summary:
           "Landing page with live stat cards — latest pool price, today's AIL, generation mix snapshot, and active queue project count. Gives a one-glance read on current Alberta market conditions before drilling into any specific tab.",
-        dataSource: "aeso_pool_price, aeso_supply_demand, aeso_generation_mix, aeso_queue_projects (latest hour)",
+        dataSource: "aeso_hourly_pool_price, aeso_supply_demand, aeso_hourly_gen_output, aeso_queue_projects (latest hour)",
       },
       {
         title: "Historical Prices",
@@ -53,7 +53,7 @@ const GROUPS: GuideGroup[] = [
         status: "live",
         summary:
           "Monthly Alberta pool price and natural gas reference price, most recent first, with a range slider and a combined power/gas chart. Pool price is Alberta's single system-wide clearing price (energy-only, no nodal LMPs yet). The gas series is the Government of Alberta monthly reference price (a royalty netback, not an AECO-C spot settle) back to 1994.",
-        dataSource: "aeso_pool_price (real, AESO API) + GoA monthly gas reference price 1994–present",
+        dataSource: "aeso_hourly_pool_price (real, AESO API) + GoA monthly gas reference price 1994–present",
       },
       {
         title: "CSD — Current Supply & Demand",
@@ -269,8 +269,8 @@ export default function Guide() {
               </thead>
               <tbody className="divide-y divide-border">
                 {[
-                  ["Dashboard / Pool Price", "AESO Public API poolprice-api/v1.1 -> aeso_pool_price (real)", "Manual seed-aeso-real run; no scheduler."],
-                  ["Generation Mix", "aeso_generation_mix from seed-aeso-data (calibrated synthetic)", "Manual synthetic reseed; seed-aeso-real does not populate this table."],
+                  ["Dashboard / Pool Price", "AESO Public API poolprice-api/v1.1 -> aeso_hourly_pool_price (real)", "Manual seed-aeso-real run; no scheduler."],
+                  ["Generation Mix", "aeso_hourly_gen_output from seed-aeso-data (calibrated synthetic)", "Manual synthetic reseed; seed-aeso-real does not populate this table."],
                   ["Supply & Demand", "Live AESO ETS CSDReportServlet plus stored aeso_supply_demand history", "CSD polls every 5 minutes while open; stored history is not scheduled."],
                   ["Outages", "AESO ETS daily and monthly outage reports (live scrape)", "Fetched on tab load/revisit after the 5-minute client cache; no background poll."],
                   ["7-Day Capacity", "AESO ETS SevenDaysHourlyAvailableCapabilityReportServlet (real)", "Polled every 10 minutes while the tab is open."],

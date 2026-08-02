@@ -90,7 +90,7 @@ The platform has two target users:
 - Fuel types: Gas (CC + simple cycle), Coal, Wind, Solar, Hydro, Biomass/Other, Energy Storage
 - Public CSV/API: http://ets.aeso.ca/ets_web/ip/Market/Reports/CSDReportServlet with generation mix report codes
 - Also available as hourly metered volumes by fuel category
-- Target table: `aeso_generation_mix` — columns: `date`, `hour`, `gas_mw`, `coal_mw`, `wind_mw`, `solar_mw`, `hydro_mw`, `storage_mw`, `other_mw`, `total_mw`
+- Target table: `aeso_hourly_gen_output` — columns: `date`, `hour`, `gas_mw`, `coal_mw`, `wind_mw`, `solar_mw`, `hydro_mw`, `storage_mw`, `other_mw`, `total_mw`
 
 ### 4. Constrained Generation — Congestion Events
 **URL:** https://www.aeso.ca/market/market-and-system-reporting/constrained-down-generation/
@@ -179,7 +179,7 @@ The platform has two target users:
 
 ```sql
 -- Core pool price (primary time series — the AESO equivalent of ERCOT hub nodes)
-CREATE TABLE aeso_pool_price (
+CREATE TABLE aeso_hourly_pool_price (
   id SERIAL PRIMARY KEY,
   date DATE NOT NULL,
   hour_ending INTEGER NOT NULL,  -- 1-24 (Alberta uses HE convention)
@@ -192,7 +192,7 @@ CREATE TABLE aeso_pool_price (
 );
 
 -- Hourly generation mix by fuel type
-CREATE TABLE aeso_generation_mix (
+CREATE TABLE aeso_hourly_gen_output (
   id SERIAL PRIMARY KEY,
   date DATE NOT NULL,
   hour_ending INTEGER NOT NULL,
@@ -408,13 +408,13 @@ GET  /pypsa/scenarios                — list of named OPF scenarios (base/high-
 - Parse CSV: columns `Date`, `Hour Ending (HE)`, `Pool Price ($/MWh)`, `AIL (MW)`, `Net Generation (MW)`
 - Handle Alberta timezone (Mountain Time, UTC-7 summer / UTC-6 winter)
 - Hour Ending (HE) convention: HE1 = midnight-1am, HE24 = 11pm-midnight
-- Insert into `aeso_pool_price` with ON CONFLICT DO NOTHING
+- Insert into `aeso_hourly_pool_price` with ON CONFLICT DO NOTHING
 - Target: ~22,000 rows (Jan 2024–present)
 
 ### seed-aeso-generation-mix.ts
 - Source: AESO ETS CSD report or generation mix CSV downloads
 - Hourly fuel-type breakdown from Jan 2024
-- Target: ~22,000 rows in `aeso_generation_mix`
+- Target: ~22,000 rows in `aeso_hourly_gen_output`
 
 ### seed-aeso-queue.ts
 - Parse AESO connection project reporting page (public HTML/CSV)

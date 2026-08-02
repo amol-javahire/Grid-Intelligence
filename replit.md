@@ -148,14 +148,14 @@ The Q&A Copilot should eventually answer natural-language questions about the pl
 | `caiso_node_stats` | CAISO NP15/SP15/ZP26 monthly DA/RT stats (all real from OASIS) |
 | `pjm_node_stats` | PJM 8 hubs/zones monthly DA/RT stats |
 | `queue_projects` | Interconnection queue records (ERCOT, CAISO, PJM) |
-| `ercot_hub_hourly` | ERCOT hub/zone hourly DA+RT prices (Python XML parser from CDR) |
-| `caiso_hub_hourly` | CAISO NP15/SP15/ZP26 hourly DAM + HASP prices |
+| `ercot_hub_da_rt_hourly` | ERCOT hub/zone hourly DA+RT prices (Python XML parser from CDR) |
+| `caiso_hub_da_rt_hourly` | CAISO NP15/SP15/ZP26 hourly DAM + HASP prices |
 | `conversations`, `messages` | Q&A Copilot chat history |
 | `ercot_buses`, `ercot_lines` | ERCOT 340-bus / line topology for PyPSA Tier-2 network |
 | `ercot_bus_shift_factors` | DC PTDF-derived shift factors per bus, mapped to EIA sub-BA zones |
 | `ercot_load_by_zone` | Real EIA-930 hourly load, 8 ERCOT zones |
-| `ercot_fuel_mix` | Real EIA-930 hourly fuel mix, 8 fuel types |
-| `hourly_temperatures` | Historical hourly temps, 11 zones (8 ERCOT + 3 CAISO) |
+| `ercot_hourly_gen_output` | Real EIA-930 hourly fuel mix, 8 fuel types |
+| `iso_hourly_temps` | Historical hourly temps, 11 zones (8 ERCOT + 3 CAISO) |
 | `temperature_forecasts` | 3yr climatological temperature projections, 11 zones |
 | `load_forecasts` | 3yr daily load forecasts (base + EV + datacenter increments), 8 ERCOT zones |
 | `datacenters` | 55 curated hyperscaler/colo facilities (ERCOT/CAISO/PJM) |

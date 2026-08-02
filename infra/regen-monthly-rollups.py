@@ -6,7 +6,7 @@ Replaces the stale Replit monthly values in:
   - ercot_node_stats   (hubs + load zones: HB_*, LZ_*)   — column `node`, `node_type`
   - ercot_nodal_stats  (resource nodes: everything else) — column `settlement_point`
 
-Source: ercot_node_prices (hourly da_price / rt_price, seeded by seed-nodal-prices.py).
+Source: ercot_nodal_da_rt_hourly (hourly da_price / rt_price, seeded by seed-nodal-prices.py).
 
 All aggregation happens IN Postgres (GROUP BY) — no dataframe round-trip.
 This is the correct tool for an in-DB source→rollup→dest transform; Polars is for
@@ -61,7 +61,7 @@ SELECT
   ROUND(AVG(da_price) FILTER (WHERE NOT ({ON_PEAK}))::numeric, 4)    AS off_peak_avg,
   ROUND(MIN(da_price)::numeric, 4)                                   AS min_price,
   ROUND(MAX(da_price)::numeric, 4)                                   AS max_price
-FROM ercot_node_prices
+FROM ercot_nodal_da_rt_hourly
 WHERE (node_name LIKE 'HB\\_%' OR node_name LIKE 'LZ\\_%')
   AND da_price IS NOT NULL
 GROUP BY node_name, year, month;
@@ -87,7 +87,7 @@ SELECT
   ROUND(MIN(da_price)::numeric, 4)                                   AS min_price,
   ROUND(MAX(da_price)::numeric, 4)                                   AS max_price,
   COUNT(*)                                                           AS sample_count
-FROM ercot_node_prices
+FROM ercot_nodal_da_rt_hourly
 WHERE node_name NOT LIKE 'HB\\_%'
   AND node_name NOT LIKE 'LZ\\_%'
   AND da_price IS NOT NULL
@@ -117,10 +117,10 @@ def main():
             SELECT COUNT(DISTINCT node_name),
                    COUNT(*) FILTER (WHERE da_price IS NOT NULL),
                    COUNT(*) FILTER (WHERE rt_price IS NOT NULL)
-            FROM ercot_node_prices
+            FROM ercot_nodal_da_rt_hourly
         """)
         nodes, da_rows, rt_rows = cur.fetchone()
-    log.info(f"Source ercot_node_prices: {nodes:,} nodes | {da_rows:,} DA rows | {rt_rows:,} RT rows")
+    log.info(f"Source ercot_nodal_da_rt_hourly: {nodes:,} nodes | {da_rows:,} DA rows | {rt_rows:,} RT rows")
     if rt_rows == 0:
         log.warning("No RT rows yet — avg_rt_price / neg_price_percent will be NULL. "
                     "Re-run this after RT seeding completes.")

@@ -434,7 +434,7 @@ router.get("/ercot/hub-hourly", async (req, res) => {
       sql`SELECT hour,
              ROUND(AVG(da_price::numeric), 4) AS da_price,
              ROUND(AVG(rt_price::numeric), 4) AS rt_price
-          FROM ercot_hub_hourly
+          FROM ercot_hub_da_rt_hourly
           WHERE node = ${node}
             AND year = ${yr}
             AND month = ${mo}
@@ -442,7 +442,7 @@ router.get("/ercot/hub-hourly", async (req, res) => {
           ORDER BY hour`
     );
     const totalQ = await db.execute<{ cnt: string }>(
-      sql`SELECT COUNT(*) AS cnt FROM ercot_hub_hourly`
+      sql`SELECT COUNT(*) AS cnt FROM ercot_hub_da_rt_hourly`
     );
     res.json({
       node, year: yr, month: mo,
@@ -466,7 +466,7 @@ router.get("/ercot/hub-hourly/nodes", async (req, res) => {
       sql`SELECT node, node_type,
              COUNT(DISTINCT year) AS year_count,
              COUNT(*) AS row_count
-          FROM ercot_hub_hourly
+          FROM ercot_hub_da_rt_hourly
           GROUP BY node, node_type
           ORDER BY node`
     );
@@ -502,7 +502,7 @@ router.get("/caiso/hub-hourly", async (req, res) => {
       sql`SELECT hour,
              ROUND(AVG(da_price::numeric), 4) AS da_price,
              ROUND(AVG(rt_price::numeric), 4) AS rt_price
-          FROM caiso_hub_hourly
+          FROM caiso_hub_da_rt_hourly
           WHERE node = ${node}
             AND year = ${yr}
             AND month = ${mo}
@@ -510,7 +510,7 @@ router.get("/caiso/hub-hourly", async (req, res) => {
           ORDER BY hour`
     );
     const totalQ = await db.execute<{ cnt: string }>(
-      sql`SELECT COUNT(*) AS cnt FROM caiso_hub_hourly`
+      sql`SELECT COUNT(*) AS cnt FROM caiso_hub_da_rt_hourly`
     );
     res.json({
       node, year: yr, month: mo,
@@ -532,12 +532,12 @@ router.get("/caiso/hub-hourly/coverage", async (req, res) => {
   try {
     const rows = await db.execute<{ node: string; year: number; month: number; row_count: string }>(
       sql`SELECT node, year, month, COUNT(*) AS row_count
-          FROM caiso_hub_hourly
+          FROM caiso_hub_da_rt_hourly
           GROUP BY node, year, month
           ORDER BY node, year, month`
     );
     const totalQ = await db.execute<{ cnt: string }>(
-      sql`SELECT COUNT(*) AS cnt FROM caiso_hub_hourly`
+      sql`SELECT COUNT(*) AS cnt FROM caiso_hub_da_rt_hourly`
     );
     res.json({
       totalRows: parseInt(totalQ.rows[0]?.cnt ?? "0", 10),
@@ -593,7 +593,7 @@ router.get("/ercot/fuel-mix", async (req, res) => {
       SELECT month, fuel_type,
              ROUND(AVG(gen_mw), 1)  AS avg_mw,
              ROUND(MAX(gen_mw), 1)  AS peak_mw
-      FROM   ercot_fuel_mix
+      FROM   ercot_hourly_gen_output
       WHERE  year = ${year}
       GROUP  BY month, fuel_type
       ORDER  BY month, fuel_type
@@ -746,7 +746,7 @@ router.get("/temperature", async (req, res) => {
       zone: string; day: number; hour: number; temp_f: number; temp_c: number;
     }>(sql`
       SELECT zone, day, hour, temp_f, temp_c
-      FROM   hourly_temperatures
+      FROM   iso_hourly_temps
       WHERE  iso   = ${iso}
         AND  year  = ${year}
         AND  month = ${month}
@@ -849,7 +849,7 @@ router.get("/temperature/stats", async (req, res) => {
              ROUND(MIN(temp_f)::numeric, 1) AS min_f,
              ROUND(MAX(temp_f)::numeric, 1) AS max_f,
              COUNT(*) AS count
-      FROM   hourly_temperatures
+      FROM   iso_hourly_temps
       WHERE  iso = ${iso}
       GROUP  BY zone, year, month
       ORDER  BY zone, year, month
@@ -889,7 +889,7 @@ router.get("/ercot/hourly-profile", async (_req, res) => {
         SELECT year, month, day, hour,
           SUM(gen_mw) FILTER (WHERE fuel_type = 'wind')  AS wind_mw,
           SUM(gen_mw) FILTER (WHERE fuel_type = 'solar') AS solar_mw
-        FROM ercot_fuel_mix GROUP BY year, month, day, hour
+        FROM ercot_hourly_gen_output GROUP BY year, month, day, hour
       ) f ON z.year = f.year AND z.month = f.month AND z.day = f.day AND z.hour = f.hour
       GROUP BY z.hour ORDER BY z.hour
     `);

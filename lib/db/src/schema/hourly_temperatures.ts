@@ -1,7 +1,7 @@
 import { pgTable, serial, varchar, smallint, real, unique } from "drizzle-orm/pg-core";
 
 export const hourlyTemperatures = pgTable(
-  "hourly_temperatures",
+  "iso_hourly_temps",
   {
     id:     serial("id").primaryKey(),
     iso:    varchar("iso",  { length: 10 }).notNull(),

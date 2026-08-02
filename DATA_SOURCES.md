@@ -14,17 +14,17 @@ deployment (2026-07). Companion to [REPLIT_ARCHITECTURE.md](REPLIT_ARCHITECTURE.
 | `candidates` | ~3,875 / 6,163 | **EIA 860** Annual Generator Report — `eia.gov/electricity/data/eia860/xls/eia8602025ER.zip` (**2025 vintage**) | none | Annual (~Jun) | `extract-eia860.py` → `seed-candidates.ts` → 4 scoring scripts → `assign-and-score-nodal.ts` |
 | `queue_projects` | ~1,793 ERCOT + CAISO | ERCOT GIS Report pg7-200-er via `gridstatus` lib; CAISO queue | none (ERCOT) | Quarterly | `seed-ercot-queue-real.py` (pypsa venv); `seed-queue-real.ts` (CAISO) |
 | `ercot_node_stats` | ~800 nodes × 29 mo | ERCOT CDR 12301 (monthly); Authenticated API for >12mo history | ERCOT_PASSWORD (auth API); CDR public | Monthly (CDR 7-day window) | `seed-ercot-nodes-cdr.ts`; gap-fill `POST /pypsa/admin/seed?mode=gaps` |
-| `ercot_hub_hourly` | ~21K | ERCOT CDR 13060 (DAM hourly) + 13061 (RTM 15-min→hourly) | none (public CDR) | Monthly (add doclookupIds) | `seed-ercot-hourly.ts` (XML parse, 22MB files) |
-| `caiso_hub_hourly` | 63,495 | CAISO OASIS API — PRC_LMP/DAM + PRC_HASP_LMP/HASP | none | Monthly (idempotent) | `seed-caiso-hourly.ts` (31-day max/request) |
+| `ercot_hub_da_rt_hourly` | ~21K | ERCOT CDR 13060 (DAM hourly) + 13061 (RTM 15-min→hourly) | none (public CDR) | Monthly (add doclookupIds) | `seed-ercot-hourly.ts` (XML parse, 22MB files) |
+| `caiso_hub_da_rt_hourly` | 63,495 | CAISO OASIS API — PRC_LMP/DAM + PRC_HASP_LMP/HASP | none | Monthly (idempotent) | `seed-caiso-hourly.ts` (31-day max/request) |
 | `caiso_node_stats` | 3 nodes × 29 mo | CAISO OASIS monthly aggregates | none | Monthly | `seed-caiso-nodes.ts` / `seed-caiso-real.ts` |
 | `pjm_node_stats` | PJM hub/zone | PJM DataMiner 2 API | PJM free account | Monthly | `seed-pjm-nodes.ts` / `seed-pjm.ts` |
 | `gas_prices` | 651 | Henry Hub: EIA API v2 (NG.RNGWHHD.D), FRED DHHNGSP fallback; Waha: oilpriceapi.com | EIA_API_KEY; Waha key | Daily/weekly | `seed-gas-prices.ts` (uses `curl`, not node https) |
 | `ercot_hourly_dispatch` | ~26M | ERCOT CDR NP3-965-ER SCED 60-Day Disclosure | ERCOT_USERNAME + PASSWORD + SUBSCRIPTION_KEY | Monthly (60-day window) | `seed-ercot-dispatch.py` (pypsa venv) — **note: we replaced with `infra/seed-sced-gap.py`, direct API + Polars** |
 | `mv_dispatch_monthly` | 38,820 | MV — aggregates `ercot_hourly_dispatch` by year/month/resource | n/a | after dispatch seed | `REFRESH MATERIALIZED VIEW mv_dispatch_monthly` |
-| `mv_capture_monthly` | 179 | MV — gen-weighted hub price by fuel/month; joins dispatch + hub_hourly | n/a | after seed | `REFRESH MATERIALIZED VIEW mv_capture_monthly` — **we repointed to `ercot_node_prices` (`infra/create-mv-capture-monthly.sql`)** |
+| `mv_capture_monthly` | 179 | MV — gen-weighted hub price by fuel/month; joins dispatch + hub_hourly | n/a | after seed | `REFRESH MATERIALIZED VIEW mv_capture_monthly` — **we repointed to `ercot_nodal_da_rt_hourly` (`infra/create-mv-capture-monthly.sql`)** |
 | `ercot_load_by_zone` | 8 zones × mo | EIA-930 region-sub-ba-data (ERCO, 8 weather zones) | EIA_API_KEY | Monthly | `seed-ercot-load-fuelmix.ts` |
-| `ercot_fuel_mix` | 8 fuels × mo | EIA-930 fuel-type-data (ERCO) | EIA_API_KEY | Monthly | `seed-ercot-load-fuelmix.ts` (same script) |
-| `hourly_temperatures` | 21,168/zone (11 zones) | Climatological baselines (NOAA normals) hardcoded in seeder | none | one-time | `seed-temperatures-completion.py` (pypsa venv) |
+| `ercot_hourly_gen_output` | 8 fuels × mo | EIA-930 fuel-type-data (ERCO) | EIA_API_KEY | Monthly | `seed-ercot-load-fuelmix.ts` (same script) |
+| `iso_hourly_temps` | 21,168/zone (11 zones) | Climatological baselines (NOAA normals) hardcoded in seeder | none | one-time | `seed-temperatures-completion.py` (pypsa venv) |
 | `temperature_forecasts` | 12,056 (11 zones × 1,096 d, Jul2026–Jun2029) | Climatology + 0.3°F/yr trend; Open-Meteo CMIP6 supplement | none | when window expires | `compute-load-forecast.py` |
 | `load_forecasts` | 8,768 (8 zones × 1,096 d) | OLS regression on temp+calendar (R² 0.88–0.92); EV+DC layered | none | after temps update | `compute-load-forecast.py` |
 | `datacenters` | 55 | Manually curated (press releases, ERCOT large-load filings) | none | Manual quarterly | `seed-datacenters.py` (edit DATACENTERS list) |
@@ -40,7 +40,7 @@ deployment (2026-07). Companion to [REPLIT_ARCHITECTURE.md](REPLIT_ARCHITECTURE.
 | Secret | Used for | Obtain | Fallback |
 |--------|----------|--------|----------|
 | `ERCOT_USERNAME` / `ERCOT_PASSWORD` / `ERCOT_SUBSCRIPTION_KEY` | SCED dispatch + node-stats gap-fill | ERCOT Developer Portal (mis.ercot.com) | CDR public (7-day window) for node stats; dispatch blocked without |
-| `EIA_API_KEY` | gas_prices (Henry Hub), ercot_load_by_zone, ercot_fuel_mix | eia.gov/opendata (free, instant) | Henry Hub→FRED (no auth); load/fuel-mix **no fallback** |
+| `EIA_API_KEY` | gas_prices (Henry Hub), ercot_load_by_zone, ercot_hourly_gen_output | eia.gov/opendata (free, instant) | Henry Hub→FRED (no auth); load/fuel-mix **no fallback** |
 | `WAHA_API_KEY` (oilpriceapi.com) | Waha gas price | oilpriceapi.com (paid) | Waha falls back to HH proxy for LZ_WEST/HB_PAN/HB_WEST scoring |
 | `AI_INTEGRATIONS_OPENAI_API_KEY` | Q&A Copilot LLM + web search | Replit AI Integrations | Copilot errors; rest unaffected |
 
@@ -75,7 +75,7 @@ added to the VM `.env` before running the fresh-seed scripts (not needed for pg_
 ### 3C. One-time / ad-hoc
 - `transmission_lines` — HIFLD (geometry normalization required)
 - `datacenters` / `generators`+`thermal_params` — manual edits then re-run
-- `hourly_temperatures` / `temperature_forecasts` / `load_forecasts` — extend window via `compute-load-forecast.py`
+- `iso_hourly_temps` / `temperature_forecasts` / `load_forecasts` — extend window via `compute-load-forecast.py`
 
 ---
 

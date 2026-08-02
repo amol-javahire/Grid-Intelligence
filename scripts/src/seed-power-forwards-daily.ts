@@ -27,12 +27,12 @@
 import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
 
-const REFERENCE: Record<string, { node: string; table: "ercot_hub_hourly" | "caiso_hub_hourly" }> = {
-  ERCOT: { node: "HB_NORTH", table: "ercot_hub_hourly" },
+const REFERENCE: Record<string, { node: string; table: "ercot_hub_da_rt_hourly" | "caiso_hub_da_rt_hourly" }> = {
+  ERCOT: { node: "HB_NORTH", table: "ercot_hub_da_rt_hourly" },
   // Node names are the values as STORED in the hourly tables, which are NOT the
   // source API's identifiers (CAISO OASIS calls this TH_SP15_GEN-APND;
   // seed-caiso-hourly stores plain "SP15"). Verified against the live tables.
-  CAISO: { node: "SP15", table: "caiso_hub_hourly" },
+  CAISO: { node: "SP15", table: "caiso_hub_da_rt_hourly" },
 };
 
 const SHAPE_YEAR = 2025;

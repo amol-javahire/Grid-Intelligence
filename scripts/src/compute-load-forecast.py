@@ -3,7 +3,7 @@
 Temperature → Load regression forecast for ERCOT zones.
 
 Steps:
-  1. Join hourly_temperatures + ercot_load_by_zone → daily aggregates
+  1. Join iso_hourly_temps + ercot_load_by_zone → daily aggregates
   2. Fit OLS per zone: avg_load ~ a + b*temp + c*temp^2 + d*sin(2π*m/12) + e*cos(2π*m/12) + f*is_weekend
   3. Apply coefficients to temperature_forecasts (Jul 2026 – Jun 2029) → base_mw
   4. Add EV increment (growth above Jun-2026 baseline, by zone)
@@ -116,7 +116,7 @@ def main():
                 AVG(l.load_mw) AS avg_load,
                 -- weekend detection: day-of-week from date
                 EXTRACT(DOW FROM MAKE_DATE(t.year::int, t.month::int, t.day::int)) IN (0,6) AS is_weekend
-            FROM hourly_temperatures t
+            FROM iso_hourly_temps t
             JOIN ercot_load_by_zone l
               ON t.zone = l.zone
              AND t.year = l.year AND t.month = l.month AND t.day = l.day AND t.hour = l.hour

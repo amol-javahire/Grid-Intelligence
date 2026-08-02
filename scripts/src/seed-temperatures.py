@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Seed hourly_temperatures table from Open-Meteo archive API.
+Seed iso_hourly_temps table from Open-Meteo archive API.
 Covers Jan 2024 – May 2026 for 8 ERCOT zones and 3 CAISO zones.
 
 Run from project root:
@@ -86,7 +86,7 @@ def main():
             chunk.append((iso, zone_code, yr, mo, dy, hr, tf, tc))
             if len(chunk) >= 500:
                 cur.executemany("""
-                    INSERT INTO hourly_temperatures
+                    INSERT INTO iso_hourly_temps
                       (iso, zone, year, month, day, hour, temp_f, temp_c)
                     VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
                     ON CONFLICT ON CONSTRAINT hourly_temperatures_uniq DO UPDATE
@@ -98,7 +98,7 @@ def main():
 
         if chunk:
             cur.executemany("""
-                INSERT INTO hourly_temperatures
+                INSERT INTO iso_hourly_temps
                   (iso, zone, year, month, day, hour, temp_f, temp_c)
                 VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
                 ON CONFLICT ON CONSTRAINT hourly_temperatures_uniq DO UPDATE
@@ -110,7 +110,7 @@ def main():
         print(f"    ✓ {zone_code} done")
         time.sleep(0.5)  # be polite to Open-Meteo
 
-    cur.execute("SELECT iso, zone, COUNT(*) FROM hourly_temperatures GROUP BY iso, zone ORDER BY iso, zone")
+    cur.execute("SELECT iso, zone, COUNT(*) FROM iso_hourly_temps GROUP BY iso, zone ORDER BY iso, zone")
     rows = cur.fetchall()
     total = sum(r[2] for r in rows)
     print(f"\n=== Seeding complete: {total:,} rows ===")

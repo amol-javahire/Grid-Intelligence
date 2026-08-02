@@ -34,7 +34,7 @@ Register free: https://developer-apim.aeso.ca
 | Current supply & demand (snapshot) | `currentsupplydemand-api/v2/csd/summary/current` |
 
 ## DB tables written to
-- `aeso_pool_price` — with columns: rolling_30d_avg, day_ahead_forecast_price, rt_forecast_price (added)
+- `aeso_hourly_pool_price` — with columns: rolling_30d_avg, day_ahead_forecast_price, rt_forecast_price (added)
 - `aeso_actual_forecast` — with columns: day_ahead_forecast_pool_price, rt_forecast_pool_price, ail_forecast_error_mw (added)
 - `aeso_generation_outage` — with column: approved_outage_mw (added)
 - `aeso_operating_reserve` — new table

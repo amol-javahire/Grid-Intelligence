@@ -577,13 +577,13 @@ def run_battery(
     # ── Fetch real hourly DA + RT prices ──────────────────────────────────────
     rows = fetch_all(
         """SELECT hour, da_price, rt_price
-           FROM ercot_hub_hourly
+           FROM ercot_hub_da_rt_hourly
            WHERE node = %s AND year = %s AND month = %s
            ORDER BY hour""",
         (node, year, month),
     )
     if not rows:
-        return {"error": f"No hourly data for {node} {year}-{month:02d}. Seed ercot_hub_hourly first."}
+        return {"error": f"No hourly data for {node} {year}-{month:02d}. Seed ercot_hub_da_rt_hourly first."}
 
     hourly: dict[int, dict] = {}
     for r in rows:
@@ -603,7 +603,7 @@ def run_battery(
     # Battery Revenue is a historical backtest ("what would this battery have
     # earned in June 2025?"), so per TECHNICAL_NOTES §5a it must use actual
     # settled prices, not modelled ones. Two real sources replace the model:
-    #   • zone price  ← ercot_node_prices RT at the storage zone's load zone
+    #   • zone price  ← ercot_nodal_da_rt_hourly RT at the storage zone's load zone
     #                   (RT embeds the congestion + curtailment signal the
     #                    modelled LMP was only approximating; negative RT hours
     #                    ARE curtailment events)
@@ -622,7 +622,7 @@ def run_battery(
     zone_rows = fetch_all(
         """SELECT EXTRACT(hour FROM hour)::int + 1 AS he,
                   AVG(rt_price) AS rt, AVG(da_price) AS da
-             FROM ercot_node_prices
+             FROM ercot_nodal_da_rt_hourly
             WHERE node_name = ANY(%s)
               AND EXTRACT(year  FROM hour) = %s
               AND EXTRACT(month FROM hour) = %s

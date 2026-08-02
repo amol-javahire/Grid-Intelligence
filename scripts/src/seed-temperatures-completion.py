@@ -63,7 +63,7 @@ for iso, zone in zones_to_seed:
 
         cur.executemany(
             """
-            INSERT INTO hourly_temperatures (iso, zone, year, month, day, hour, temp_f, temp_c)
+            INSERT INTO iso_hourly_temps (iso, zone, year, month, day, hour, temp_f, temp_c)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (iso, zone, year, month, day, hour) DO NOTHING
             """,

@@ -1,6 +1,6 @@
 ---
 name: ERCOT Hourly CDR Seeder
-description: How the 263k-row ercot_hub_hourly table was built from CDR XLSX files via Python multiprocessing
+description: How the 263k-row ercot_hub_da_rt_hourly table was built from CDR XLSX files via Python multiprocessing
 ---
 
 ## The approach that works
@@ -23,8 +23,8 @@ Python multiprocessing XML parser (`scripts/parse_ercot_hourly.py`) using `zipfi
 ## Bulk load command
 
 ```bash
-psql "$DATABASE_URL" -c "TRUNCATE ercot_hub_hourly;"
-psql "$DATABASE_URL" -c "\COPY ercot_hub_hourly(node,node_type,year,month,day,hour,da_price,rt_price) FROM '/tmp/ercot_hourly_data.csv' WITH (FORMAT csv, NULL '')"
+psql "$DATABASE_URL" -c "TRUNCATE ercot_hub_da_rt_hourly;"
+psql "$DATABASE_URL" -c "\COPY ercot_hub_da_rt_hourly(node,node_type,year,month,day,hour,da_price,rt_price) FROM '/tmp/ercot_hourly_data.csv' WITH (FORMAT csv, NULL '')"
 ```
 
 ## Result

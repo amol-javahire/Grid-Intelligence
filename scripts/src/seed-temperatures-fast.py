@@ -1,6 +1,6 @@
 """
 seed-temperatures-fast.py
-Seeds hourly_temperatures for all 11 zones (8 ERCOT + 3 CAISO) using
+Seeds iso_hourly_temps for all 11 zones (8 ERCOT + 3 CAISO) using
 synthetic climatological data and psycopg2.extras.execute_values for
 fast bulk inserts. Runs in ~2-3 minutes, no external API calls.
 
@@ -60,9 +60,9 @@ def main():
     cur = conn.cursor()
 
     # Truncate and reseed cleanly
-    cur.execute("TRUNCATE hourly_temperatures")
+    cur.execute("TRUNCATE iso_hourly_temps")
     conn.commit()
-    print("Truncated hourly_temperatures. Seeding all 11 zones...")
+    print("Truncated iso_hourly_temps. Seeding all 11 zones...")
 
     rng = random.Random(42)
     grand_total = 0
@@ -82,7 +82,7 @@ def main():
             execute_values(
                 cur,
                 """
-                INSERT INTO hourly_temperatures
+                INSERT INTO iso_hourly_temps
                   (iso, zone, year, month, day, hour, temp_f, temp_c)
                 VALUES %s
                 ON CONFLICT (iso, zone, year, month, day, hour) DO UPDATE

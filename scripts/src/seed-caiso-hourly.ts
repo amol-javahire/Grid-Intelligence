@@ -160,7 +160,7 @@ async function main() {
   const existingRows = await db.execute<{ node: string; year: number; month: number; has_rt: string }>(
     sql`SELECT node, year, month,
            MAX(CASE WHEN rt_price IS NOT NULL THEN 1 ELSE 0 END)::text AS has_rt
-        FROM caiso_hub_hourly
+        FROM caiso_hub_da_rt_hourly
         GROUP BY node, year, month`
   );
   // Only skip months where RT is already populated

@@ -12,7 +12,7 @@ doesn't. Drives both the seeding roadmap and the final tab architecture.
 
 | Table | Rows | Coverage |
 |-------|------|----------|
-| `caiso_hub_hourly` | 65,655 | 3 zones (NP15/SP15/ZP26) × ~29 months, DA + RT hourly |
+| `caiso_hub_da_rt_hourly` | 65,655 | 3 zones (NP15/SP15/ZP26) × ~29 months, DA + RT hourly |
 | `caiso_node_stats` | 81 | 3 zones × ~27 months, monthly aggregates |
 | `queue_projects` | (shared) | CAISO interconnection queue included in the 3,493 total |
 | `caiso_node_locations` | **missing** | Blocks `assign-and-score-nodal` — see task #17 |

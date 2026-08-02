@@ -204,10 +204,10 @@ TABLE queue_projects  (interconnection queue — ERCOT/CAISO/PJM)
   id, project_name, market, fuel_type, capacity_mw, status, queue_date,
   interconnection_node, county, state, latitude, longitude
 
-TABLE ercot_hub_hourly  (263,130 rows — hourly DA+RT for 15 ERCOT hub/zone nodes)
+TABLE ercot_hub_da_rt_hourly  (263,130 rows — hourly DA+RT for 15 ERCOT hub/zone nodes)
   node, node_type, year, month, day, hour, da_price, rt_price
 
-TABLE hourly_temperatures  (232,848 rows — real observed hourly weather Jan 2024–Jun 2026)
+TABLE iso_hourly_temps  (232,848 rows — real observed hourly weather Jan 2024–Jun 2026)
   iso (ERCOT/CAISO), zone (COAS/EAST/FWES/NCEN/NRTH/SCEN/SOUT/WEST/NP15/SP15/ZP26),
   year, month, day, hour, temp_f, temp_c
 
@@ -248,7 +248,7 @@ ${topCandidates.rows.map(r => `  ${r.name.substring(0,35).padEnd(36)} ${r.market
 ${pipelineSummary.rows.map(r => `  ${r.market.padEnd(7)} ${r.asset_type.padEnd(14)} n=${String(r.count).padStart(5)}  avg_score=${r.avg_score}  avg_mw=${r.avg_mw}`).join("\n")}
 
 ━━━ PLATFORM TABS — ADDITIONAL CONTEXT ━━━
-Temperature tab: Real hourly temperatures by zone (hourly_temperatures, Jan 2024–Jun 2026) + 3-yr daily forecast (temperature_forecasts, Jul 2026–Jun 2029). Use for cooling/heating degree days, load-temperature regression, summer peak risk. ERCOT zones: COAS/EAST/FWES/NCEN/NRTH/SCEN/SOUT/WEST. CAISO zones: NP15/SP15/ZP26.
+Temperature tab: Real hourly temperatures by zone (iso_hourly_temps, Jan 2024–Jun 2026) + 3-yr daily forecast (temperature_forecasts, Jul 2026–Jun 2029). Use for cooling/heating degree days, load-temperature regression, summer peak risk. ERCOT zones: COAS/EAST/FWES/NCEN/NRTH/SCEN/SOUT/WEST. CAISO zones: NP15/SP15/ZP26.
 
 EV Charging tab: Shows EV fleet adoption impact on ERCOT load by zone. Uses load_forecasts.ev_increment_mw. Peak EV charging typically 6-10 PM; overnight level-2 is 10 PM–6 AM. NCEN (Dallas) and SCEN (Austin/San Antonio) expect highest EV growth. Use load_forecasts for forward-looking zone load projections.
 
@@ -518,7 +518,7 @@ router.post("/aeso/chat", async (req, res) => {
                ROUND(AVG(pool_price)::numeric, 2)::text AS avg_price,
                ROUND(MAX(pool_price)::numeric, 2)::text AS max_price,
                COUNT(CASE WHEN pool_price >= 999 THEN 1 END)::text AS spikes
-        FROM aeso_pool_price
+        FROM aeso_hourly_pool_price
         WHERE date >= NOW() - INTERVAL '12 months'
         GROUP BY year, month ORDER BY year, month
         LIMIT 24
@@ -533,7 +533,7 @@ router.post("/aeso/chat", async (req, res) => {
           ROUND(AVG(storage_mw)::numeric, 1)::text AS storage_mw,
           ROUND(AVG(other_mw)::numeric, 1)::text   AS other_mw,
           ROUND(AVG(total_mw)::numeric, 1)::text   AS total_mw
-        FROM aeso_generation_mix
+        FROM aeso_hourly_gen_output
         WHERE date >= NOW() - INTERVAL '6 months'
       `),
       db.execute<{ year: number; month: number; avg_constrained: string; avg_unconstrained: string; avg_spread: string }>(sql`
@@ -590,7 +590,7 @@ BC intertie: ~1,200 MW import / 1,800 MW export rated capacity. SK intertie: ~15
 SMP (System Marginal Price) = unconstrained market clearing price. Pool Price > SMP = congestion rent.
 
 ━━━ DATABASE SCHEMA ━━━
-TABLE aeso_pool_price  — hourly Alberta pool price
+TABLE aeso_hourly_pool_price  — hourly Alberta pool price
   date DATE, hour_ending INT, pool_price NUMERIC,
   rolling_30d_avg NUMERIC, day_ahead_forecast_price NUMERIC
 
@@ -600,7 +600,7 @@ TABLE aeso_actual_forecast  — AIL + price forecasts vs actuals
   actual_wind_mw NUMERIC, forecast_wind_mw NUMERIC,
   actual_solar_mw NUMERIC, forecast_solar_mw NUMERIC
 
-TABLE aeso_generation_mix  — hourly generation by fuel (wide format, one row per hour)
+TABLE aeso_hourly_gen_output  — hourly generation by fuel (wide format, one row per hour)
   date DATE, hour_ending INT,
   gas_mw NUMERIC, coal_mw NUMERIC, wind_mw NUMERIC, solar_mw NUMERIC,
   hydro_mw NUMERIC, storage_mw NUMERIC, other_mw NUMERIC, total_mw NUMERIC

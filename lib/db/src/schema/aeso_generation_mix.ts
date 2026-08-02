@@ -2,7 +2,7 @@ import { pgTable, serial, date, integer, numeric, timestamp, unique } from "driz
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
-export const aesoGenerationMixTable = pgTable("aeso_generation_mix", {
+export const aesoGenerationMixTable = pgTable("aeso_hourly_gen_output", {
   id: serial("id").primaryKey(),
   date: date("date").notNull(),
   hourEnding: integer("hour_ending").notNull(),

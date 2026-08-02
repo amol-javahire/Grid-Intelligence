@@ -1,6 +1,6 @@
 import { pgTable, serial, text, numeric, integer, timestamp, index, uniqueIndex } from "drizzle-orm/pg-core";
 
-export const caisoHubHourlyTable = pgTable("caiso_hub_hourly", {
+export const caisoHubHourlyTable = pgTable("caiso_hub_da_rt_hourly", {
   id:        serial("id").primaryKey(),
   node:      text("node").notNull(),
   nodeType:  text("node_type").notNull(),
@@ -12,9 +12,9 @@ export const caisoHubHourlyTable = pgTable("caiso_hub_hourly", {
   rtPrice:   numeric("rt_price", { precision: 10, scale: 4 }),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (t) => [
-  uniqueIndex("caiso_hub_hourly_uq").on(t.node, t.year, t.month, t.day, t.hour),
-  index("caiso_hub_hourly_node_idx").on(t.node),
-  index("caiso_hub_hourly_time_idx").on(t.year, t.month, t.day, t.hour),
+  uniqueIndex("caiso_hub_da_rt_hourly_uq").on(t.node, t.year, t.month, t.day, t.hour),
+  index("caiso_hub_da_rt_hourly_node_idx").on(t.node),
+  index("caiso_hub_da_rt_hourly_time_idx").on(t.year, t.month, t.day, t.hour),
 ]);
 
 export type CaisoHubHourly = typeof caisoHubHourlyTable.$inferSelect;

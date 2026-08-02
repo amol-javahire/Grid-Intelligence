@@ -2,7 +2,7 @@
 """
 Targeted ERCOT hourly gap-fill for 2026 (Jan-May 2026).
 Downloads fresh CDR ZIP files with updated 2026 doclookupIds,
-parses RTM + DAM for all 15 hub/zone nodes, inserts into ercot_hub_hourly.
+parses RTM + DAM for all 15 hub/zone nodes, inserts into ercot_hub_da_rt_hourly.
 """
 import os, sys, struct, zlib, zipfile, io, urllib.request, psycopg2
 from collections import defaultdict
@@ -254,7 +254,7 @@ def main():
     if not rows:
         print("No rows — check column mapping"); sys.exit(1)
 
-    print("Inserting into ercot_hub_hourly...", flush=True)
+    print("Inserting into ercot_hub_da_rt_hourly...", flush=True)
     conn = psycopg2.connect(db_url)
     cur = conn.cursor()
     inserted = 0
@@ -263,14 +263,14 @@ def main():
         batch = rows[i:i+BATCH]
         args = ",".join(cur.mogrify("(%s,%s,%s,%s,%s,%s,%s,%s)", r).decode() for r in batch)
         cur.execute(f"""
-            INSERT INTO ercot_hub_hourly (node,node_type,year,month,day,hour,da_price,rt_price)
+            INSERT INTO ercot_hub_da_rt_hourly (node,node_type,year,month,day,hour,da_price,rt_price)
             VALUES {args} ON CONFLICT DO NOTHING
         """)
         inserted += cur.rowcount
         conn.commit()
         print(f"  {i+len(batch)}/{len(rows)} rows processed, {cur.rowcount} inserted", flush=True)
     cur.close(); conn.close()
-    print(f"\n✓ Inserted {inserted} new rows for 2026 Jan-May into ercot_hub_hourly.", flush=True)
+    print(f"\n✓ Inserted {inserted} new rows for 2026 Jan-May into ercot_hub_da_rt_hourly.", flush=True)
 
 if __name__ == "__main__":
     main()

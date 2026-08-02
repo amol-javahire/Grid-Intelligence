@@ -23,7 +23,7 @@ Unique constraint: (iso, zone, year, month, day)
 
 ## Climatological Projection Method
 `seed-temperature-forecast.py` (climatology branch):
-1. Fetch all historical daily means/mins/maxs from `hourly_temperatures` (GROUP BY iso, zone, year, month, day)
+1. Fetch all historical daily means/mins/maxs from `iso_hourly_temps` (GROUP BY iso, zone, year, month, day)
 2. Average across years for same (month, day) key
 3. For each future date: add warming trend = (target_year_decimal - 2025.5) × 0.3°F/yr
 4. Upsert into temperature_forecasts with model='climatology_+0.3F/yr'

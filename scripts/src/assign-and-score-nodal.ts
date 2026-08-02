@@ -30,7 +30,7 @@ import { sql } from "drizzle-orm";
 const RADIUS_KM = 200;
 
 // ── Real ERCOT hourly DA price profile (HB_BUSAVG, Jan 2024–May 2026 avg) ───
-// Source: ercot_hub_hourly table (317k rows). Index 0 = HE1 (midnight-1am).
+// Source: ercot_hub_da_rt_hourly table (317k rows). Index 0 = HE1 (midnight-1am).
 // Key insight: prices DIP to $18-20 during peak solar (HE10-HE14) and SPIKE
 // to $42-71 after solar drops (HE18-HE21). This is the ERCOT duck curve.
 // Flat average = $31.42/MWh.
@@ -63,7 +63,7 @@ const HEAT_RATE: Record<string, number> = {
   coal:        9.5,   // avg coal steam plant
 };
 
-// Map ERCOT queue zone → hub/zone key in ercot_hub_hourly (for zone-specific capture prices)
+// Map ERCOT queue zone → hub/zone key in ercot_hub_da_rt_hourly (for zone-specific capture prices)
 const QUEUE_ZONE_TO_HUB: Record<string, string> = {
   LZ_HOUSTON: "LZ_HOUSTON", HB_HOUSTON: "HB_HOUSTON",
   LZ_WEST:    "LZ_WEST",    HB_WEST:    "HB_WEST",
@@ -354,7 +354,7 @@ function capturePriceScore(
   let sysAvg: number;
   if (market === "ERCOT") {
     sysAvg = ercotBusAvg;
-    // Preferred path: zone-specific capture price from ercot_hub_hourly
+    // Preferred path: zone-specific capture price from ercot_hub_da_rt_hourly
     if (ercotHubCapPrice != null) {
       // Gas/coal: deduct fuel variable cost → score on net margin basis
       const fuelCost = (HEAT_RATE[assetType] ?? 0) * effectiveGas;
@@ -527,7 +527,7 @@ async function main() {
   try {
     const hubHourlyRaw = await db.execute<{ node: string; hour: number; avg_da: number }>(sql`
       SELECT node, hour, AVG(da_price)::float AS avg_da
-      FROM ercot_hub_hourly
+      FROM ercot_hub_da_rt_hourly
       GROUP BY node, hour
       ORDER BY node, hour
     `);
@@ -1053,7 +1053,7 @@ async function main() {
       } else {
         signal = ercotSignalStats(signalZone);
       }
-      // v7: zone-specific capture price from ercot_hub_hourly using geo-derived zone
+      // v7: zone-specific capture price from ercot_hub_da_rt_hourly using geo-derived zone
       const hubKey = QUEUE_ZONE_TO_HUB[signalZone] ?? signalZone;
       const hubPrices = ercotZoneCapturePrice.get(hubKey) ?? ercotZoneCapturePrice.get("HB_BUSAVG");
       if (hubPrices) {

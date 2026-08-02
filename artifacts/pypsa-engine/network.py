@@ -186,7 +186,7 @@ def _load_fuel_mix_from_db(year: int, month: int, day: int, hour: int) -> dict[s
         cur = conn.cursor()
         cur.execute("""
             SELECT fuel_type, CAST(gen_mw AS float)
-            FROM ercot_fuel_mix
+            FROM ercot_hourly_gen_output
             WHERE year = %s AND month = %s AND day = %s AND hour = %s
         """, (year, month, day, hour))
         rows = cur.fetchall()

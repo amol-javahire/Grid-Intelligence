@@ -1,7 +1,7 @@
 """
 seed-ercot-real-data.py
 
-Replaces synthetic data in ercot_load_by_zone and ercot_fuel_mix with
+Replaces synthetic data in ercot_load_by_zone and ercot_hourly_gen_output with
 REAL hourly data from EIA-930 (Hourly Electric Grid Monitor).
 
 Sources:
@@ -104,7 +104,7 @@ def main():
 
     print("Truncating existing data …")
     cur.execute(
-        "TRUNCATE TABLE ercot_load_by_zone, ercot_fuel_mix RESTART IDENTITY CASCADE"
+        "TRUNCATE TABLE ercot_load_by_zone, ercot_hourly_gen_output RESTART IDENTITY CASCADE"
     )
     conn.commit()
     print("Truncated.\n")
@@ -184,7 +184,7 @@ def main():
             psycopg2.extras.execute_values(
                 cur,
                 """
-                INSERT INTO ercot_fuel_mix (year, month, day, hour, fuel_type, gen_mw)
+                INSERT INTO ercot_hourly_gen_output (year, month, day, hour, fuel_type, gen_mw)
                 VALUES %s
                 ON CONFLICT DO NOTHING
                 """,
@@ -211,7 +211,7 @@ def main():
 
     print(f"\nDone!")
     print(f"  ercot_load_by_zone : {total_load:,} rows")
-    print(f"  ercot_fuel_mix     : {total_fuel:,} rows")
+    print(f"  ercot_hourly_gen_output     : {total_fuel:,} rows")
 
 
 if __name__ == "__main__":
