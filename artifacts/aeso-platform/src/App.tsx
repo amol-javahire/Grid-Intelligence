@@ -11,6 +11,7 @@ import Outages from "@/pages/outages";
 import SevenDayCapacity from "@/pages/7day-capacity";
 import Queue from "@/pages/queue";
 import Congestion from "@/pages/congestion";
+import TransmissionCapability from "@/pages/transmission-capability";
 import AesoQACopilot from "@/pages/qa";
 import LTA from "@/pages/lta";
 import REM from "@/pages/rem";
@@ -43,6 +44,7 @@ function Router() {
         <Route path="/outages" component={Outages} />
         <Route path="/7day-capacity" component={SevenDayCapacity} />
         <Route path="/queue" component={Queue} />
+        <Route path="/transmission-capability" component={TransmissionCapability} />
         <Route path="/congestion" component={Congestion} />
         <Route path="/lta" component={LTA} />
         <Route path="/rem" component={REM} />

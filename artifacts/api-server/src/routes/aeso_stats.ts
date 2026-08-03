@@ -1332,4 +1332,102 @@ router.post("/aeso/major-projects/refresh", (req, res) => {
   triggerReseed("seed-alberta-major-projects", res, req.log);
 });
 
+// ─── Transmission Capability (AESO Sept 2025 assessment) ────────────────────
+//
+// Source: Transmission-Capability-Results-Sept-2025.xlsx, AESO's own published
+// workbook. Capability MW = additional generation connectable at that bus
+// before N-0 thermal congestion, at the 0.5 percentile of the historical
+// duration curve.
+//
+// TWO THINGS THE UI MUST STATE, because misreading either would mislead a
+// siting decision:
+//  1. SCOPE. The study covers ONLY the South and Central East planning regions
+//     (17 areas + one Calgary bus). There is NO data for Edmonton, Wabamun,
+//     Fort McMurray, Grande Prairie or Peace River. Absence of a substation
+//     here does not mean zero headroom — it means unstudied.
+//  2. STATUS. AESO states these values are INDICATIVE, not guaranteed in the
+//     Connection Process, and are limited to category A thermal congestion.
+
+router.get("/aeso/transmission-capability/areas", async (req, res) => {
+  try {
+    const rows = await db.execute<Record<string, unknown>>(sql`
+      SELECT planning_area_code, planning_area_name,
+             COUNT(*)::int                                       AS buses,
+             COUNT(*) FILTER (WHERE capability_mw = 0)::int       AS zero_buses,
+             ROUND(SUM(capability_mw))::int                       AS headroom_mw,
+             ROUND(MAX(capability_mw))::int                       AS best_bus_mw,
+             COUNT(DISTINCT facility_code)::int                   AS facilities
+      FROM aeso_substation_capability
+      GROUP BY planning_area_code, planning_area_name
+      ORDER BY SUM(capability_mw) DESC
+    `);
+    res.json({
+      areas: rows.rows,
+      asOf: "2025-09-26",
+      source: "AESO Transmission Capability Results, Sept 2025 Assessment",
+      studyArea: "South and Central East planning regions only",
+    });
+  } catch (err) {
+    req.log?.error({ err }, "transmission-capability/areas failed");
+    res.status(500).json({ error: "query_failed" });
+  }
+});
+
+router.get("/aeso/transmission-capability/substations", async (req, res) => {
+  try {
+    const area = req.query.area ? Number(req.query.area) : null;
+    const kv = req.query.voltage ? Number(req.query.voltage) : null;
+    const minMw = req.query.minMw ? Number(req.query.minMw) : null;
+
+    const rows = await db.execute<Record<string, unknown>>(sql`
+      SELECT facility_name, facility_code, tfo,
+             planning_area_code, planning_area_name,
+             bus_number, voltage_kv, capability_mw::float8 AS capability_mw
+      FROM aeso_substation_capability
+      WHERE (${area}::int IS NULL OR planning_area_code = ${area}::int)
+        AND (${kv}::int IS NULL OR voltage_kv = ${kv}::int)
+        AND (${minMw}::float8 IS NULL OR capability_mw >= ${minMw}::float8)
+      ORDER BY capability_mw DESC, facility_name
+    `);
+    res.json({ substations: rows.rows, count: rows.rows.length });
+  } catch (err) {
+    req.log?.error({ err }, "transmission-capability/substations failed");
+    res.status(500).json({ error: "query_failed" });
+  }
+});
+
+router.get("/aeso/transmission-capability/lines", async (req, res) => {
+  try {
+    const area = req.query.area ? Number(req.query.area) : null;
+    const kv = req.query.voltage ? Number(req.query.voltage) : null;
+
+    // A line is reported once per endpoint, so 491 rows cover 328 physical
+    // lines. Collapse to one row per line, keeping the LOWER of the two
+    // endpoint capabilities — the binding constraint for anyone connecting to
+    // that line. Reporting the higher value would overstate available headroom.
+    const rows = await db.execute<Record<string, unknown>>(sql`
+      SELECT line_name,
+             MIN(voltage_kv)::int                       AS voltage_kv,
+             MIN(capability_mw)::float8                 AS binding_capability_mw,
+             MAX(capability_mw)::float8                 AS max_endpoint_mw,
+             STRING_AGG(DISTINCT substation_name, ' ↔ ' ORDER BY substation_name) AS endpoints,
+             MIN(endpoint_a)                            AS endpoint_a,
+             MIN(endpoint_b)                            AS endpoint_b,
+             MIN(planning_area_code)::int               AS planning_area_code,
+             MIN(planning_area_name)                    AS planning_area_name,
+             MIN(tfo)                                   AS tfo,
+             COUNT(*)::int                              AS endpoint_rows
+      FROM aeso_line_capability
+      WHERE (${area}::int IS NULL OR planning_area_code = ${area}::int)
+        AND (${kv}::int IS NULL OR voltage_kv = ${kv}::int)
+      GROUP BY line_name
+      ORDER BY MIN(capability_mw) ASC, line_name
+    `);
+    res.json({ lines: rows.rows, count: rows.rows.length });
+  } catch (err) {
+    req.log?.error({ err }, "transmission-capability/lines failed");
+    res.status(500).json({ error: "query_failed" });
+  }
+});
+
 export default router;

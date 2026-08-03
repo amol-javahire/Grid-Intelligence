@@ -13,7 +13,7 @@ import {
   TrendingUp,
   Workflow,
   Eye,
-  BookOpen, Calculator, BarChart3, Flame, FileSignature } from "lucide-react";
+  BookOpen, Calculator, BarChart3, Flame, FileSignature, Zap } from "lucide-react";
 
 const navItems = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
@@ -25,6 +25,7 @@ const navItems = [
   { href: "/outages", label: "Outages", icon: AlertTriangle },
   { href: "/7day-capacity", label: "7-Day Capacity", icon: CalendarDays },
   { href: "/queue", label: "Project Pipeline", icon: ListOrdered },
+  { href: "/transmission-capability", label: "Transmission Capability", icon: Zap },
   { href: "/congestion", label: "Congestion", icon: Route },
   { href: "/npv", label: "DCF Valuation", icon: Calculator },
   { href: "/offtake", label: "Offtake (PPA / VPPA)", icon: FileSignature },
