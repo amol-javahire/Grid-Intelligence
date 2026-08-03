@@ -14,7 +14,16 @@ const TABLE_DISPLAY_LIMIT = 100;
 // https://integrate.api.nvidia.com/v1 with a matching model id.
 // NOTE: tool-calling is required by this route; verify the chosen model
 // supports function calling before switching.
-const CHAT_MODEL = process.env.CHAT_MODEL ?? "gpt-5.4";
+// Default is an 8B model on purpose. Measured on NVIDIA's free tier
+// (2026-08-03, prompt "say ok", max_tokens 64):
+//   meta/llama-3.3-70b-instruct → 112 s, and a 504 on one attempt
+//   meta/llama-3.1-8b-instruct  →   0.4 s
+// The 70B tiers are queued behind shared capacity, and nginx's default
+// proxy_read_timeout (60 s) kills anything slower than that regardless of
+// whether the provider eventually answers. The old default here was
+// "gpt-5.4", which is not a model NIM serves at all.
+// NOTE: this route requires tool calling — verify any replacement supports it.
+const CHAT_MODEL = process.env.CHAT_MODEL ?? "meta/llama-3.1-8b-instruct";
 
 // Sampling params, env-tunable so a provider swap needs no code change.
 //
@@ -489,8 +498,22 @@ Supported routes (use exact format [Label](/path?params)):
     sendEvent({ done: true });
     res.end();
   } catch (err) {
-    req.log.error({ err }, "chat error");
-    sendEvent({ error: "Failed to generate response. Please try again." });
+    // Log the PROVIDER's actual message, not just the Error wrapper. A bare
+    // "chat error" hid a real fault for weeks: the UI said "Failed to generate
+    // response", the log said nothing useful, and the cause (an upstream 4xx
+    // from the LLM gateway) was invisible. OpenAI-SDK errors carry status +
+    // body, so pull them out explicitly.
+    const e = err as { status?: number; code?: string; message?: string; error?: unknown };
+    req.log.error(
+      { err, status: e?.status, code: e?.code, providerError: e?.error, model: CHAT_MODEL },
+      `chat error: ${e?.status ?? "?"} ${e?.message ?? String(err)}`,
+    );
+    // Surface status/code to the client — enough to diagnose, no secrets.
+    sendEvent({
+      error: e?.status
+        ? `LLM request failed (HTTP ${e.status}${e.code ? ` ${e.code}` : ""}). Check api-server logs.`
+        : "Failed to generate response. Please try again.",
+    });
     res.end();
   }
 });

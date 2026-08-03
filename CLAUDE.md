@@ -340,6 +340,25 @@ published fuel mix. Do not scale to match published totals without labelling it.
 - SCED seeding: 2025-12-06 → 2026-07-21 still in progress (running via `seed-sced-gap.py`)
 - DNS: verify `nslookup gridintel.ca` → 20.98.152.245
 - HTTPS: `sudo certbot --nginx -d gridintel.ca -d www.gridintel.ca`
-- Q&A Copilot: swap OpenAI → Claude API
+- Q&A Copilot: LLM provider is **NVIDIA NIM**, not OpenAI, despite the legacy
+  `AI_INTEGRATIONS_OPENAI_*` env names (Replit provisioned them). Prefer
+  `LLM_BASE_URL` / `LLM_API_KEY`; the old names still work as a fallback.
+  - `https://integrate.api.nvidia.com/v1`, key format `nvapi-...`
+  - **70B models are unusable on the free tier**: measured 112 s for a
+    two-token reply, plus an outright 504. 8B answers in 0.4 s. nginx's
+    default `proxy_read_timeout` (60 s) kills anything slower anyway, so
+    raising the model size means raising that too.
+  - Client now has a 45 s timeout (`LLM_TIMEOUT_MS`) so failures surface fast
+    instead of hanging behind the SDK's ~10 min default.
+  - Route requires TOOL CALLING — verify any replacement model supports it.
+  - **If 8B proves too weak at multi-step tool planning, switch to Kimi K2.5**
+    (`https://api.moonshot.ai/v1`, OpenAI-compatible, supports tool calling).
+    ~$0.60/$3.00 per M tokens — at <100 queries/month that is well under
+    $1/month. Decision 2026-08-03: stayed on the free NVIDIA 8B because volume
+    is tiny and nothing needed changing; revisit if answer quality bites.
+  - Ollama / self-hosting is NOT viable on this VM: D2as_v6 is 2 vCPU / 8 GB,
+    no GPU, already shared with Postgres, api-server and PyPSA (which spikes to
+    3 GB). A quantised 8B on CPU runs ~2-4 tok/s — slower than the 70B problem
+    it would be solving.
 - TimescaleDB compression: `SELECT add_compression_policy('ercot_hourly_dispatch', INTERVAL '7 days');`
 - PJM real queue data (future, from pjm.com)
