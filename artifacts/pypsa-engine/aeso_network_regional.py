@@ -61,10 +61,13 @@ WHAT THIS MODEL DOES NOT DO
   simulation, no storage state-of-charge across periods).
 """
 
+import logging
 import pypsa
 import numpy as np
 import pandas as pd
 from typing import Optional
+
+logger = logging.getLogger("pypsa-engine")
 
 
 # ─── Bus definitions ─────────────────────────────────────────────────────────
@@ -157,6 +160,7 @@ def build_network(
     solar_cf: float = 0.22,
     gas_price_mmbtu: float = 4.50,
     line_overrides: Optional[dict] = None,
+    use_real_generators: bool = True,
 ) -> pypsa.Network:
     """
     Build the 9-bus network. system_load_scale multiplies every region's
@@ -183,22 +187,69 @@ def build_network(
 
     gas_mw_cost = gas_price_mmbtu * 7.0  # ~7.0 MMBtu/MWh average fleet heat rate
 
-    for region, fuels in REGION_GENERATION.items():
-        for carrier, p_nom in fuels.items():
-            mc = CARRIER_MC[carrier]
-            if carrier == "ccgt":
-                mc = gas_mw_cost
-            elif carrier == "cogen":
-                mc = gas_mw_cost * 0.82  # cogen typically more efficient / partially offset by heat sales
-            elif carrier == "scgt":
-                mc = gas_mw_cost * 1.7  # open-cycle peaker heat rate penalty
-            p_max_pu = 1.0
-            if carrier == "wind":
-                p_max_pu = wind_cf
-            elif carrier == "solar":
-                p_max_pu = solar_cf
-            net.add("Generator", f"{carrier}_{region}", bus=region, carrier=carrier,
-                     p_nom=p_nom, marginal_cost=mc, p_max_pu=p_max_pu, p_min_pu=0.0)
+    # ── Supply stack ──────────────────────────────────────────────────────────
+    # Preferred: ~230 REAL units from aeso_asset_registry, priced from real
+    # aeso_merit_order offers. Fallback: the ~30 aggregated (region, carrier)
+    # LTP blocks below.
+    #
+    # This matters for congestion, not cosmetics. The aggregated stack has only
+    # ~6 distinct prices, so a 1,000 MW load swing leaves the same block
+    # marginal and every bus returns an identical, unchanging LMP — which is
+    # what was reported 2026-08 and looked like a solver bug but is just the
+    # arithmetic of a 6-step supply curve. Real per-unit offers give hundreds
+    # of steps, so the marginal unit — and therefore LMP — actually moves.
+    real_stack = None
+    if use_real_generators:
+        try:
+            from aeso_generators import load_real_generators
+            real_stack = load_real_generators()
+        except Exception as e:
+            logger.warning("Real generator load failed (%s) — using LTP blocks", e)
+            real_stack = None
+
+    if real_stack:
+        for g in real_stack["generators"]:
+            carrier = g["carrier"]
+            # Gas units still track the gas-price lever ONLY where the price is
+            # an assumption. A real submitted offer already embeds that unit's
+            # own fuel cost and must not be overwritten by a generic heat rate.
+            mc = g["marginal_cost"]
+            if g["price_source"] == "carrier_assumption":
+                if carrier == "ccgt":
+                    mc = gas_mw_cost
+                elif carrier == "cogen":
+                    mc = gas_mw_cost * 0.82
+                elif carrier == "scgt":
+                    mc = gas_mw_cost * 1.7
+            p_max_pu = wind_cf if carrier == "wind" else solar_cf if carrier == "solar" else 1.0
+            net.add("Generator", g["name"], bus=g["bus"], carrier=carrier,
+                    p_nom=g["p_nom"], marginal_cost=mc,
+                    p_max_pu=p_max_pu, p_min_pu=0.0)
+        net._aeso_stack_source = "asset_registry"          # type: ignore[attr-defined]
+        net._aeso_stack_diagnostics = real_stack["diagnostics"]  # type: ignore[attr-defined]
+    else:
+        for region, fuels in REGION_GENERATION.items():
+            for carrier, p_nom in fuels.items():
+                mc = CARRIER_MC[carrier]
+                if carrier == "ccgt":
+                    mc = gas_mw_cost
+                elif carrier == "cogen":
+                    mc = gas_mw_cost * 0.82  # cogen typically more efficient / partially offset by heat sales
+                elif carrier == "scgt":
+                    mc = gas_mw_cost * 1.7  # open-cycle peaker heat rate penalty
+                p_max_pu = 1.0
+                if carrier == "wind":
+                    p_max_pu = wind_cf
+                elif carrier == "solar":
+                    p_max_pu = solar_cf
+                net.add("Generator", f"{carrier}_{region}", bus=region, carrier=carrier,
+                         p_nom=p_nom, marginal_cost=mc, p_max_pu=p_max_pu, p_min_pu=0.0)
+        net._aeso_stack_source = "ltp_aggregated_blocks"   # type: ignore[attr-defined]
+        net._aeso_stack_diagnostics = {
+            "unit_count": sum(len(f) for f in REGION_GENERATION.values()),
+            "distinct_price_steps": len(set(CARRIER_MC.values())),
+            "note": "Aggregated LTP blocks — too coarse for meaningful nodal price separation.",
+        }  # type: ignore[attr-defined]
 
     for region, load_mw in REGION_LOAD.items():
         net.add("Load", f"Load_{region}", bus=region, p_set=load_mw * system_load_scale)
@@ -313,6 +364,13 @@ def run_opf(
     return {
         "model_label": MODEL_LABEL,
         "disclaimer": MODEL_DISCLAIMER,
+        # Which supply stack actually produced these prices. 'asset_registry' =
+        # ~230 real units with real merit-order offers; 'ltp_aggregated_blocks'
+        # = ~30 coarse blocks with ~6 prices, which cannot produce meaningful
+        # nodal separation. Surfaced so the UI never presents the coarse model's
+        # flat LMPs as a real congestion result.
+        "supply_stack_source": getattr(net, "_aeso_stack_source", "unknown"),
+        "supply_stack": getattr(net, "_aeso_stack_diagnostics", {}),
         "status": "optimal" if model_status == "optimal" else model_status,
         "solver_status": solver_status,
         "termination_condition": termination_condition,

@@ -29,6 +29,7 @@
     "seed-aeso-real": "tsx ./src/seed-aeso-real.ts",
     "seed-aeso-queue-real": "tsx ./src/seed-aeso-queue-real.ts",
     "seed-alberta-major-projects": "tsx ./src/seed-alberta-major-projects.ts",
+    "inspect-aeso-assets": "tsx ./src/inspect-aeso-assets.ts",
     "seed-ercot-load-fuelmix": "tsx ./src/seed-ercot-load-fuelmix.ts",
     "seed-gas-prices": "tsx ./src/seed-gas-prices.ts",
     "seed-gas-forwards": "tsx ./src/seed-gas-forwards.ts",
