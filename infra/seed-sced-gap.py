@@ -303,7 +303,81 @@ def get_seeded(conn) -> set:
         return {r[0] for r in cur.fetchall()}
 
 
+def inspect_day(data_date: datetime.date) -> None:
+    """
+    Read-only: download one day's SCED archive and report what is ACTUALLY in
+    the raw ERCOT file — every distinct Resource Type code with row counts and
+    MW, plus the file list inside the ZIP and the detected column names.
+
+    Written 2026-08-02 because storage (PWRSTR) went missing entirely from the
+    2026 seed: the backfill arithmetic showed 896 'other' resources resolving
+    into gas/solar/coal/nuclear with ZERO batteries, meaning they were never
+    ingested rather than merely mislabelled. Nothing in the seeder filters them
+    out, so the question is what the source file contains.
+
+    Usage: python infra/seed-sced-gap.py --inspect 2026-03-15
+    """
+    post_date = data_date + datetime.timedelta(days=60)
+    log.info(f"Inspecting data_date={data_date} (published ~{post_date})")
+
+    doc_ids = list_archives(post_date)
+    if not doc_ids:
+        log.error(f"No archives published on {post_date}. Try a different date.")
+        return
+    log.info(f"{len(doc_ids)} archive(s) found; reading the first")
+
+    zip_buf = download_zip(doc_ids[0])
+    with zipfile.ZipFile(zip_buf) as zf:
+        names = zf.namelist()
+        log.info(f"--- {len(names)} file(s) in archive ---")
+        for n in names:
+            log.info(f"    {n}")
+
+        target = [n for n in names if "Gen_Resource_Data" in n and n.endswith(".csv")]
+        if not target:
+            log.error("No Gen_Resource_Data CSV in this archive.")
+            return
+
+        df = pl.read_csv(io.BytesIO(zf.read(target[0])),
+                         infer_schema_length=10000, ignore_errors=True)
+
+    log.info(f"--- columns ({len(df.columns)}) ---")
+    for c in df.columns:
+        log.info(f"    {c}")
+
+    type_col = next((c for c in ["Resource Type", "ResourceType", "RESOURCE_TYPE"]
+                     if c in df.columns), None)
+    if type_col is None:
+        log.error("No Resource Type column found.")
+        return
+
+    out_col = next((c for c in ["Telemetered Net Output", "OutputMW", "OUTPUT_MW", "outputMW"]
+                    if c in df.columns), None)
+
+    log.info("--- DISTINCT Resource Type codes in the raw file ---")
+    summary = (df.group_by(type_col)
+                 .agg([pl.len().alias("rows")])
+                 .sort("rows", descending=True))
+    for row in summary.iter_rows(named=True):
+        code = str(row[type_col])
+        mapped = RESOURCE_TYPE_MAP.get(code.strip().upper(), "*** UNMAPPED -> other ***")
+        log.info(f"    {code:<12} {row['rows']:>10,} rows   → {mapped}")
+
+    if out_col:
+        nulls = df.select(pl.col(out_col).is_null().sum()).item()
+        log.info(f"--- '{out_col}': {nulls:,} null of {len(df):,} rows ---")
+
+
 def main():
+    # --inspect <YYYY-MM-DD>: read-only source check, no DB writes.
+    if "--inspect" in sys.argv:
+        i = sys.argv.index("--inspect")
+        if i + 1 >= len(sys.argv):
+            log.error("--inspect requires a date, e.g. --inspect 2026-03-15")
+            sys.exit(1)
+        inspect_day(datetime.date.fromisoformat(sys.argv[i + 1]))
+        return
+
     conn = psycopg2.connect(DATABASE_URL)
     seeded = get_seeded(conn)
     log.info(f"Already seeded: {len(seeded)} days")
