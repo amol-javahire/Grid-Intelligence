@@ -376,6 +376,33 @@ def inspect_day(data_date: datetime.date) -> None:
         nulls = df.select(pl.col(out_col).is_null().sum()).item()
         log.info(f"--- '{out_col}': {nulls:,} null of {len(df):,} rows ---")
 
+    # ── ESR (battery) file ──────────────────────────────────────────────────
+    # ERCOT moved Energy Storage Resources OUT of Gen_Resource_Data into
+    # 60d_ESR_Data_in_SCED (single-model ESR, ~Dec 2025). PWRSTR no longer
+    # appears above, which is why storage went missing from the 2026 seed
+    # entirely rather than merely being mislabelled. Different schema, so dump
+    # it rather than assuming — batteries both charge and discharge, so the
+    # sign convention matters and must be read off the real columns.
+    esr = [n for n in names if "ESR_Data_in_SCED" in n and n.endswith(".csv")]
+    if not esr:
+        log.info("--- no ESR file in this archive ---")
+        return
+
+    with zipfile.ZipFile(zip_buf) as zf:
+        edf = pl.read_csv(io.BytesIO(zf.read(esr[0])),
+                          infer_schema_length=10000, ignore_errors=True)
+
+    log.info(f"--- ESR file: {esr[0]} — {len(edf):,} rows, {len(edf.columns)} columns ---")
+    for c in edf.columns:
+        log.info(f"    {c}")
+
+    ename = next((c for c in edf.columns if "Resource Name" in c), None)
+    if ename:
+        log.info(f"--- ESR: {edf[ename].n_unique():,} distinct resources ---")
+        log.info("--- ESR sample (first 3 rows) ---")
+        for row in edf.head(3).iter_rows(named=True):
+            log.info("    " + " | ".join(f"{k}={v}" for k, v in list(row.items())[:12]))
+
 
 def main():
     # --inspect <YYYY-MM-DD>: read-only source check, no DB writes.
