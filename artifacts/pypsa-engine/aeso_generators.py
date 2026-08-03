@@ -60,9 +60,160 @@ logger = logging.getLogger("pypsa-engine")
 # three intertie boundaries (no generation sits on the boundary buses).
 INTERNAL_BUSES = ["NORTHWEST", "NORTHEAST", "CENTRAL", "EDMONTON", "CALGARY", "SOUTH"]
 
+# ── PLANT NAME → BUS, the primary mapping ────────────────────────────────────
+#
+# PROVENANCE — READ THIS BEFORE CITING ANY CONGESTION RESULT.
+# AESO's public API carries NO location data. Verified 2026-08-02 by probing
+# every candidate endpoint (scripts/src/probe-aeso-endpoints.ts):
+#   assetlist-api      → asset_ID, asset_name, asset_type, operating_status,
+#                        pool_participant_ID/name.  No location field.
+#   currentsupplydemand→ asset, fuel_type, maximum_capability, net_generation.
+#                        No location field.
+#   aeso_asset_registry.location is empty for all 3,728 rows as a result.
+#
+# So assets are placed by matching their NAME against known Alberta plant
+# locations below. This is real geography but it is NOT an AESO-published
+# mapping — it is assembled knowledge, and it is tagged per entry:
+#   "high" — unambiguous, well-known major facility whose location is not in
+#            reasonable doubt (Genesee, Syncrude, Shepard, Sheerness...).
+#   "low"  — plausible but worth verifying against a sourced facility list
+#            (AUC facility registry, or AESO Information Document 2010-001R
+#            "Facility Modelling Data and List of Electrical Facilities").
+#
+# Anything unmatched is reported with its MW and EXCLUDED — never silently
+# assigned to a default bus. Capacity-weighted confidence is returned in the
+# diagnostics so the UI can state how much of the fleet is high-confidence.
+#
+# fragment (lowercase, matched as substring of asset_name) → (bus, confidence)
+PLANT_NAME_TO_BUS: dict[str, tuple[str, str]] = {
+    # ── EDMONTON: Wabamun/Genesee thermal cluster + capital region ──
+    "genesee": ("EDMONTON", "high"),      # Warburg, SW of Edmonton
+    "keephills": ("EDMONTON", "high"),    # Wabamun
+    "sundance": ("EDMONTON", "high"),     # Wabamun
+    "wabamun": ("EDMONTON", "high"),
+    "clover bar": ("EDMONTON", "high"),
+    "rossdale": ("EDMONTON", "high"),
+    "scotford": ("EDMONTON", "high"),     # Shell, Fort Saskatchewan
+    "redwater": ("EDMONTON", "high"),
+    "sturgeon": ("EDMONTON", "high"),     # Sturgeon refinery, Redwater
+    "heartland": ("EDMONTON", "high"),
+    "strathcona": ("EDMONTON", "high"),   # Suncor Strathcona refinery cogen
+    "edmonton": ("EDMONTON", "high"),
+    "leduc": ("EDMONTON", "low"),
+    "acheson": ("EDMONTON", "low"),
+    "villeneuve": ("EDMONTON", "low"),
+    # ── NORTHEAST: Fort McMurray / Athabasca oil sands cogeneration ──
+    "syncrude": ("NORTHEAST", "high"),
+    "mildred lake": ("NORTHEAST", "high"),
+    "base plant": ("NORTHEAST", "high"),  # Suncor Base Plant
+    "firebag": ("NORTHEAST", "high"),
+    "mackay river": ("NORTHEAST", "high"),
+    "muskeg river": ("NORTHEAST", "high"),
+    "horizon": ("NORTHEAST", "high"),     # CNRL Horizon
+    "kearl": ("NORTHEAST", "high"),
+    "albian": ("NORTHEAST", "high"),
+    "jackpine": ("NORTHEAST", "high"),
+    "fort hills": ("NORTHEAST", "high"),
+    "long lake": ("NORTHEAST", "high"),
+    "surmont": ("NORTHEAST", "high"),
+    "christina lake": ("NORTHEAST", "high"),
+    "foster creek": ("NORTHEAST", "high"),
+    "jackfish": ("NORTHEAST", "high"),
+    "cold lake": ("NORTHEAST", "high"),
+    "primrose": ("NORTHEAST", "low"),
+    "sunrise": ("NORTHEAST", "low"),
+    "cenovus": ("NORTHEAST", "low"),
+    "suncor": ("NORTHEAST", "low"),
+    "mcmurray": ("NORTHEAST", "high"),
+    # ── CENTRAL: Red Deer / Hanna / Forestburg / Battle River ──
+    "joffre": ("CENTRAL", "high"),        # near Red Deer
+    "sheerness": ("CENTRAL", "high"),     # Hanna
+    "battle river": ("CENTRAL", "high"),  # Forestburg
+    "red deer": ("CENTRAL", "high"),
+    "rimbey": ("CENTRAL", "low"),
+    "hanna": ("CENTRAL", "high"),
+    "halkirk": ("CENTRAL", "high"),       # wind, near Castor
+    "paintearth": ("CENTRAL", "high"),
+    "castor": ("CENTRAL", "low"),
+    "provost": ("CENTRAL", "low"),
+    "wainwright": ("CENTRAL", "low"),
+    "drumheller": ("CENTRAL", "low"),
+    "stettler": ("CENTRAL", "low"),
+    "sharp hills": ("CENTRAL", "high"),   # Oyen, east-central
+    "oyen": ("CENTRAL", "low"),
+    "cavalier": ("CENTRAL", "low"),
+    "sundre": ("CENTRAL", "low"),
+    "nevis": ("CENTRAL", "low"),
+    # ── CALGARY ──
+    "shepard": ("CALGARY", "high"),
+    "calgary": ("CALGARY", "high"),
+    "balzac": ("CALGARY", "high"),
+    "bearspaw": ("CALGARY", "high"),      # Bow River hydro
+    "ghost": ("CALGARY", "high"),
+    "horseshoe": ("CALGARY", "high"),
+    "kananaskis": ("CALGARY", "high"),
+    "barrier": ("CALGARY", "high"),
+    "pocaterra": ("CALGARY", "high"),
+    "interlakes": ("CALGARY", "low"),
+    "spray": ("CALGARY", "low"),
+    "airdrie": ("CALGARY", "low"),
+    "langdon": ("CALGARY", "high"),
+    "strathmore": ("CALGARY", "low"),
+    "carseland": ("CALGARY", "low"),
+    # ── SOUTH: Lethbridge / Pincher Creek / Brooks / Medicine Hat ──
+    "travers": ("SOUTH", "high"),         # solar, Lomond/Vulcan
+    "buffalo plains": ("SOUTH", "high"),  # wind, Lomond
+    "blackspring": ("SOUTH", "high"),
+    "castle rock": ("SOUTH", "high"),     # Pincher Creek
+    "pincher": ("SOUTH", "high"),
+    "oldman": ("SOUTH", "high"),
+    "waterton": ("SOUTH", "high"),
+    "medicine hat": ("SOUTH", "high"),
+    "lethbridge": ("SOUTH", "high"),
+    "brooks": ("SOUTH", "high"),
+    "suffield": ("SOUTH", "high"),
+    "whitla": ("SOUTH", "high"),
+    "windrise": ("SOUTH", "high"),
+    "forty mile": ("SOUTH", "high"),
+    "jenner": ("SOUTH", "high"),
+    "hays": ("SOUTH", "low"),
+    "taber": ("SOUTH", "low"),
+    "vauxhall": ("SOUTH", "low"),
+    "burdett": ("SOUTH", "low"),
+    "bow island": ("SOUTH", "low"),
+    "chin chute": ("SOUTH", "low"),
+    "st. mary": ("SOUTH", "low"),
+    "raymond": ("SOUTH", "low"),
+    "magrath": ("SOUTH", "low"),
+    "summerview": ("SOUTH", "high"),      # Pincher Creek wind
+    "ardenville": ("SOUTH", "low"),
+    "cowley": ("SOUTH", "low"),
+    "empress": ("SOUTH", "low"),
+    "cassils": ("SOUTH", "low"),
+    "rainbow": ("NORTHWEST", "high"),     # Rainbow Lake
+    # ── NORTHWEST: Grande Prairie / Peace / Whitecourt / Hinton ──
+    "grande prairie": ("NORTHWEST", "high"),
+    "valleyview": ("NORTHWEST", "high"),
+    "fox creek": ("NORTHWEST", "high"),
+    "peace river": ("NORTHWEST", "high"),
+    "whitecourt": ("NORTHWEST", "high"),
+    "hinton": ("NORTHWEST", "high"),
+    "cascade": ("NORTHWEST", "low"),      # Cascade Power, near Edson — Edson sits
+                                          # near the NW/Edmonton boundary; verify.
+    "sexsmith": ("NORTHWEST", "low"),
+    "wapiti": ("NORTHWEST", "low"),
+    "sturgeon lake": ("NORTHWEST", "low"),
+    "high level": ("NORTHWEST", "low"),
+    "manning": ("NORTHWEST", "low"),
+    "fort nelson": ("NORTHWEST", "low"),
+    "grovedale": ("NORTHWEST", "low"),
+    "sundance mine": ("EDMONTON", "low"),
+}
+
 # Free-text location fragment (lowercased substring) → planning-region bus.
-# Ordered longest-first at match time so "fort mcmurray" wins over "fort".
-# EXTEND THIS from inspect-aeso-assets output; unmatched assets are reported.
+# Retained as a SECOND chance in case AESO ever populates `location`, and used
+# ahead of the name map when a location string is present. Confirmed empty for
+# every row as of 2026-08-02, so today this never fires.
 LOCATION_TO_BUS: dict[str, str] = {
     # ── Northwest: Peace River / Grande Prairie / Valleyview-Fox Creek ──
     "grande prairie": "NORTHWEST", "peace river": "NORTHWEST", "valleyview": "NORTHWEST",
@@ -137,6 +288,29 @@ def _map_location(location: Optional[str]) -> Optional[str]:
         if frag in loc and len(frag) > best_len:
             best, best_len = bus, len(frag)
     return best
+
+
+def _map_asset_name(asset_name: Optional[str]) -> tuple[Optional[str], Optional[str]]:
+    """
+    Match a plant name → (bus, confidence). Longest fragment wins so
+    "sundance mine" beats "sundance" and "base plant" isn't shadowed.
+
+    Asset names look like "GNR1 Genesee Repower 1", "SCR6 Firebag",
+    "EGC1 Shepard" — the AESO asset ID prefix is harmless to the substring
+    match. Returns (None, None) when nothing matches, so the caller can report
+    it rather than guess.
+    """
+    if not asset_name:
+        return None, None
+    name = asset_name.strip().lower()
+    if not name:
+        return None, None
+    best: Optional[tuple[str, str]] = None
+    best_len = 0
+    for frag, (bus, conf) in PLANT_NAME_TO_BUS.items():
+        if frag in name and len(frag) > best_len:
+            best, best_len = (bus, conf), len(frag)
+    return best if best else (None, None)
 
 
 def _map_carrier(fuel: Optional[str], sub_fuel: Optional[str]) -> str:
@@ -218,18 +392,33 @@ def load_real_generators(offer_days: int = 30) -> Optional[dict[str, Any]]:
     mapped_mw = 0.0
     total_mw = 0.0
     priced_real = 0
+    mw_by_confidence: dict[str, float] = {"high": 0.0, "low": 0.0}
 
     for asset_id, name, fuel, sub_fuel, cap, location, status in assets:
         cap = float(cap)
+
+        # Skip retired/inactive BEFORE counting toward the fleet total, or
+        # coverage is measured against a denominator that includes plants that
+        # no longer exist. (The registry holds 1,573 retired assets.)
+        if status and str(status).strip().lower() in {
+            "retired", "decommissioned", "cancelled", "inactive", "suspended"
+        }:
+            continue
+
         total_mw += cap
 
-        if status and str(status).strip().lower() in {"retired", "decommissioned", "cancelled"}:
+        # Location column first (empty in practice today), then plant name.
+        bus = _map_location(location)
+        confidence = "high" if bus else None
+        if bus is None:
+            bus, confidence = _map_asset_name(name)
+
+        if bus is None:
+            key = str(name or asset_id or "(unnamed)")
+            unmapped[key] = unmapped.get(key, 0.0) + cap
             continue
 
-        bus = _map_location(location)
-        if bus is None:
-            unmapped[str(location or "(empty)")] = unmapped.get(str(location or "(empty)"), 0.0) + cap
-            continue
+        mw_by_confidence[confidence or "low"] = mw_by_confidence.get(confidence or "low", 0.0) + cap
 
         carrier = _map_carrier(fuel, sub_fuel)
         offer = offers.get(asset_id)
@@ -248,6 +437,7 @@ def load_real_generators(offer_days: int = 30) -> Optional[dict[str, Any]]:
             "p_nom": cap,
             "marginal_cost": mc,
             "price_source": src,
+            "location_confidence": confidence or "low",
         })
         mapped_mw += cap
 
@@ -255,11 +445,12 @@ def load_real_generators(offer_days: int = 30) -> Optional[dict[str, Any]]:
 
     if unmapped:
         logger.warning("=" * 62)
-        logger.warning("UNMAPPED AESO locations (%.0f MW, %.1f%% of fleet):",
+        logger.warning("UNPLACED AESO assets (%.0f MW, %.1f%% of active fleet):",
                        sum(unmapped.values()), 100 * (1 - coverage))
-        for loc, mw in sorted(unmapped.items(), key=lambda kv: -kv[1])[:25]:
-            logger.warning("    %-40s %8.1f MW", loc[:40], mw)
-        logger.warning("Add these to LOCATION_TO_BUS in aeso_generators.py.")
+        for loc, mw in sorted(unmapped.items(), key=lambda kv: -kv[1])[:30]:
+            logger.warning("    %-44s %8.1f MW", loc[:44], mw)
+        logger.warning("Add these plant names to PLANT_NAME_TO_BUS in aeso_generators.py.")
+        logger.warning("They are EXCLUDED from the model, not defaulted to a bus.")
         logger.warning("=" * 62)
 
     if mapped_mw < MIN_PLAUSIBLE_MW or coverage < MIN_LOCATION_COVERAGE:
@@ -274,23 +465,32 @@ def load_real_generators(offer_days: int = 30) -> Optional[dict[str, Any]]:
     for g in generators:
         by_bus[g["bus"]] = by_bus.get(g["bus"], 0.0) + g["p_nom"]
 
+    hi_mw = mw_by_confidence.get("high", 0.0)
     diagnostics = {
         "unit_count": len(generators),
         "mapped_mw": round(mapped_mw, 1),
-        "total_registry_mw": round(total_mw, 1),
+        "total_active_registry_mw": round(total_mw, 1),
         "location_coverage_pct": round(100 * coverage, 1),
+        # Location provenance. AESO publishes NO generator locations, so buses
+        # come from a hand-built plant-name map — see PLANT_NAME_TO_BUS. State
+        # this wherever congestion output is shown.
+        "location_method": "plant_name_map (AESO publishes no location data)",
+        "high_confidence_mw": round(hi_mw, 1),
+        "low_confidence_mw": round(mw_by_confidence.get("low", 0.0), 1),
+        "high_confidence_pct_of_placed": round(100 * hi_mw / mapped_mw, 1) if mapped_mw else 0.0,
         "units_with_real_offer_price": priced_real,
         "units_with_assumed_price": len(generators) - priced_real,
         "distinct_price_steps": len({round(g["marginal_cost"], 2) for g in generators}),
         "capacity_by_bus_mw": {k: round(v, 1) for k, v in sorted(by_bus.items())},
-        "unmapped_locations_mw": {k: round(v, 1) for k, v in
-                                  sorted(unmapped.items(), key=lambda kv: -kv[1])[:25]},
+        "unplaced_assets_mw": {k: round(v, 1) for k, v in
+                               sorted(unmapped.items(), key=lambda kv: -kv[1])[:30]},
     }
 
     logger.info(
-        "Real AESO stack: %d units, %.0f MW, %.0f%% located, %d distinct price steps "
-        "(%d real offers / %d assumed)",
+        "Real AESO stack: %d units, %.0f MW placed (%.0f%% of active fleet, "
+        "%.0f%% high-confidence), %d distinct price steps (%d real offers / %d assumed)",
         len(generators), mapped_mw, 100 * coverage,
+        diagnostics["high_confidence_pct_of_placed"],
         diagnostics["distinct_price_steps"], priced_real, len(generators) - priced_real,
     )
 
