@@ -29,8 +29,17 @@ ERCOT_CLIENT_ID = os.environ.get("ERCOT_CLIENT_ID", "fec253ea-0d06-4272-a5e6-b47
 DEFAULT_START = datetime.date(2025, 12, 6)
 DEFAULT_END   = datetime.date.today() - datetime.timedelta(days=60)  # SCED 60-day lag
 
-START = datetime.date.fromisoformat(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_START
-END   = datetime.date.fromisoformat(sys.argv[2]) if len(sys.argv) > 2 else DEFAULT_END
+# Positional date args, ignoring any --flags (and their values) so that
+# `--inspect 2026-03-15` isn't parsed here as a START date.
+_pos_args = [a for a in sys.argv[1:] if not a.startswith("--")]
+if "--inspect" in sys.argv:
+    # --inspect consumes the date that follows it; it is not a range bound.
+    _i = sys.argv.index("--inspect")
+    if _i + 1 < len(sys.argv) and sys.argv[_i + 1] in _pos_args:
+        _pos_args.remove(sys.argv[_i + 1])
+
+START = datetime.date.fromisoformat(_pos_args[0]) if len(_pos_args) > 0 else DEFAULT_START
+END   = datetime.date.fromisoformat(_pos_args[1]) if len(_pos_args) > 1 else DEFAULT_END
 
 # ERCOT resource-type CODES → readable category.
 #

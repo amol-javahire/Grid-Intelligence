@@ -168,9 +168,15 @@ pm2 logs pypsa-engine --lines 50
 pm2 restart all
 
 # SCED gap seeder (run in background)
+# NOTE: the venv is under artifacts/pypsa-engine/, NOT the repo root.
+# A bare `.venv/bin/python` from ~/grid-intelligence does not exist.
 set -a; source .env; set +a
-nohup .venv/bin/python infra/seed-sced-gap.py > /tmp/sced-gap.log 2>&1 &
+nohup artifacts/pypsa-engine/.venv/bin/python infra/seed-sced-gap.py > /tmp/sced-gap.log 2>&1 &
 tail -f /tmp/sced-gap.log
+
+# Read-only source check — dumps the raw ERCOT Resource Type codes for one day,
+# flagging any not in RESOURCE_TYPE_MAP. Run this before trusting a re-seed.
+artifacts/pypsa-engine/.venv/bin/python infra/seed-sced-gap.py --inspect 2026-03-15
 ```
 
 ---
