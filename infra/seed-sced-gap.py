@@ -75,13 +75,20 @@ RESOURCE_TYPE_MAP = {
 # vocabulary change fails LOUDLY next time instead of quietly inflating "other".
 _unmapped_types: dict[str, int] = {}
 
+# Every category actually written this run — used for the completeness check
+# at the end of main(). Catches a whole source file disappearing, which the
+# unmapped-code warning cannot see.
+_types_seen: set[str] = set()
+
 
 def map_resource_type(raw) -> str:
     code = str(raw).strip().upper()
     mapped = RESOURCE_TYPE_MAP.get(code)
     if mapped is None:
         _unmapped_types[code] = _unmapped_types.get(code, 0) + 1
+        _types_seen.add("other")
         return "other"
+    _types_seen.add(mapped)
     return mapped
 
 # ── ERCOT Auth ────────────────────────────────────────────────────────────────
@@ -257,9 +264,26 @@ def seed_day(conn, data_date: datetime.date) -> int:
 
         with zipfile.ZipFile(zip_buf) as zf:
             for name in zf.namelist():
-                # Only process the Gen Resource dispatch file
-                if "Gen_Resource_Data" not in name or not name.endswith(".csv"):
+                if not name.endswith(".csv"):
                     continue
+
+                # TWO dispatch files, not one. ERCOT moved Energy Storage
+                # Resources out of Gen_Resource_Data into ESR_Data_in_SCED
+                # (single-model ESR, ~Dec 2025). Reading only the Gen file
+                # meant batteries vanished from the seed entirely from Jan 2026
+                # — 324 resources missing, not merely mislabelled. Verified via
+                # --inspect 2026-03-15: the ESR file carries Resource Type='ESR'
+                # for every row, so the category is forced rather than mapped.
+                # Negative MW = charging; that sign is kept, matching how the
+                # 2024-25 PWRSTR rows were stored.
+                if "Gen_Resource_Data" in name:
+                    force_type = None
+                elif "ESR_Data_in_SCED" in name:
+                    force_type = "storage"
+                    _types_seen.add("storage")
+                else:
+                    continue
+
                 csv_bytes = zf.read(name)
                 try:
                     agg = aggregate_day(csv_bytes, data_date)
@@ -267,7 +291,7 @@ def seed_day(conn, data_date: datetime.date) -> int:
                         (
                             row["resource_name"],
                             row["hour"],
-                            map_resource_type(row["resource_type"]),
+                            force_type or map_resource_type(row["resource_type"]),
                             row["avg_mw"],
                             row["max_mw"],
                             row["hsl"],
@@ -291,6 +315,7 @@ def seed_day(conn, data_date: datetime.date) -> int:
                (resource_name, hour, resource_type, avg_mw, max_mw, hsl, lsl, base_point, online_intervals)
                VALUES %s
                ON CONFLICT (resource_name, hour) DO UPDATE SET
+                 resource_type=EXCLUDED.resource_type,
                  avg_mw=EXCLUDED.avg_mw, max_mw=EXCLUDED.max_mw,
                  hsl=EXCLUDED.hsl, lsl=EXCLUDED.lsl,
                  base_point=EXCLUDED.base_point,
@@ -452,6 +477,22 @@ def main():
         log.warning("=" * 62)
     else:
         log.info("All resource_type codes mapped cleanly.")
+
+    # Completeness check. The unmapped-code warning above catches a renamed
+    # code, but NOT a whole file going missing — which is exactly what happened
+    # when ERCOT moved batteries into ESR_Data_in_SCED and storage silently
+    # dropped to zero for six months. Assert every expected fuel actually
+    # appeared in this run.
+    EXPECTED = {"wind", "solar", "natural_gas", "coal", "nuclear", "hydro", "storage"}
+    missing = EXPECTED - _types_seen
+    if missing:
+        log.warning("=" * 62)
+        log.warning(f"MISSING fuel types this run: {', '.join(sorted(missing))}")
+        log.warning("A whole source file may have moved or been renamed —")
+        log.warning("run `--inspect <date>` and compare the archive file list.")
+        log.warning("=" * 62)
+    else:
+        log.info(f"All {len(EXPECTED)} expected fuel types present.")
 
 
 if __name__ == "__main__":
