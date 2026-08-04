@@ -151,6 +151,40 @@ const QUEUE_ZONE_TO_LOAD_ZONE: Record<string, string> = {
   WTG_ERCOT:  "WEST", SUN_ERCOT:  "SCEN",
 };
 
+// ── CAISO queue zone (price hub) → EIA load zone (DLAP) ──────────────────────
+// CAISO prices at hubs but publishes LOAD at DLAPs — different partitions by
+// market design, so this crosswalk is unavoidable and approximate.
+//   NP15 = north of Path 15          → PG&E
+//   ZP26 = between Path 15 and 26    → predominantly PG&E (Central Valley)
+//   SP15 = south of Path 26          → SCE (12.3 GW) dominates SDG&E (2.2 GW)
+const CAISO_QUEUE_ZONE_TO_LOAD_ZONE: Record<string, string> = {
+  NP15: "PGAE", ZP26: "PGAE", SP15: "SCE",
+};
+
+// ── PJM queue zone → EIA load zone ───────────────────────────────────────────
+// EIA abbreviates PJM's zones differently from PJM's own Data Miner (see
+// CLAUDE.md). Utility zones map one-to-one; the four PRICE HUBS have no load
+// series of their own, so each maps to the largest load zone in its footprint.
+const PJM_QUEUE_ZONE_TO_LOAD_ZONE: Record<string, string> = {
+  PSEG: "PS", PENELEC: "PN", PPL: "PL", BGE: "BC", DOM: "DOM",
+  JCPL: "JC", APS: "AP", PECO: "PE", PEPCO: "PEP", AECO: "AE", METED: "ME",
+  // Price hubs → representative load zone
+  "AEP-DAYTON HUB": "AEP",   // AEP is PJM's largest zone at 15.9 GW
+  "NI HUB":         "CE",    // Northern Illinois = ComEd
+  "WESTERN HUB":    "AEP",   // western PJM
+  "EASTERN HUB":    "PE",    // eastern PJM = PECO
+};
+
+/** Load table + market timezone per market, for the shape-risk profiles. */
+const LOAD_SOURCE: Record<string, { table: string; tz: string; genTable: string }> = {
+  ERCOT: { table: "ercot_hourly_zonal_load", tz: "America/Chicago",
+           genTable: "ercot_hourly_gen_output_by_fuel_agg" },
+  CAISO: { table: "caiso_hourly_zonal_load", tz: "America/Los_Angeles",
+           genTable: "caiso_hourly_gen_output_by_fuel_agg" },
+  PJM:   { table: "pjm_hourly_zonal_load",   tz: "America/New_York",
+           genTable: "pjm_hourly_gen_output_by_fuel_agg" },
+};
+
 const CF: Record<string, Record<string, number>> = {
   solar:       { ERCOT: 0.27, CAISO: 0.29, PJM: 0.22 },
   wind:        { ERCOT: 0.38, CAISO: 0.28, PJM: 0.35 },  // ERCOT 0.40→0.38 (Potomac 2024 SOTM); CAISO 0.32→0.28
@@ -455,46 +489,69 @@ function pearsonCorrelation(a: number[], b: number[]): number {
   return (denA * denB) === 0 ? 0 : num / (denA * denB);
 }
 
+/**
+ * Dispatchable / baseload technologies have a CONSTANT hourly profile, so a
+ * Pearson correlation against load is undefined (zero variance). These are
+ * domain scores for dispatch flexibility, not measurements — and they are
+ * legitimately market-invariant: a CCGT's ability to follow load does not
+ * depend on which ISO it sits in.
+ */
+const FLAT_TECH_SHAPE: Record<string, number> = {
+  natural_gas: 72, // dispatchable — can ramp to the evening peak
+  nuclear:     62, // baseload — predictable but inflexible
+  biomass:     65, // semi-dispatchable
+  geothermal:  65, // baseload
+  coal:        58, // inflexible baseload
+};
+
+/**
+ * Shape Risk — Pearson correlation between a technology's real generation
+ * profile and real zonal load, both in MARKET-LOCAL time.
+ *
+ * REWRITTEN 2026-08-04. Previously only ERCOT computed a correlation; CAISO and
+ * PJM returned hardcoded per-technology constants. That made Shape Risk a DEAD
+ * DIMENSION for ~3,900 of 6,163 candidates — all 936 CAISO solar projects
+ * scored exactly 26.0 and all 1,184 PJM solar projects exactly 52.0, so
+ * choosing the "Best Shape Risk" objective reordered nothing inside those
+ * markets. It applied a market-level offset and nothing else.
+ *
+ * Both sides are now measured:
+ *   load profile  ← {market}_hourly_zonal_load            (EIA-930, real)
+ *   gen profile   ← {market}_hourly_gen_output_by_fuel_agg (EIA-930, real)
+ *
+ * Using each market's OWN generation shape matters. The GEN_PROFILES constant
+ * is ERCOT-calibrated — its wind curve is West-Texas overnight-peaking, which
+ * is wrong for CAISO (Tehachapi and San Gorgonio peak in the evening) and wrong
+ * for PJM (flatter, frontal-driven). Correlating an ERCOT wind shape against
+ * California load would produce a confident and meaningless number.
+ * GEN_PROFILES now survives only as a fallback where a market publishes no
+ * series for that fuel — notably storage, since EIA-930 reports a clean BAT
+ * series for ERCOT but none for CISO or PJM.
+ */
 function shapeRiskScore(
   assetType: string, queueZone: string, market: string,
-  ercotZoneProfiles: Map<string, number[]>,
+  loadProfiles: Map<string, number[]>,
+  genProfiles: Map<string, number[]>,
 ): number {
-  if (market === "ERCOT") {
-    // Flat-output / fully-dispatchable tech: Pearson is undefined (constant gen profile).
-    // Use fixed domain scores reflecting real ERCOT dispatch flexibility.
-    const ERCOT_FLAT: Record<string, number> = {
-      natural_gas: 72, // dispatchable — can ramp to evening peak
-      nuclear:     62, // baseload — predictable but inflexible
-      biomass:     65, // semi-dispatchable
-      geothermal:  65, // baseload
-      coal:        58, // inflexible baseload
-    };
-    if (assetType in ERCOT_FLAT) return ERCOT_FLAT[assetType]!;
-    // Variable-output tech: real Pearson correlation with ERCOT zone load
-    const loadZone = QUEUE_ZONE_TO_LOAD_ZONE[queueZone] ?? "COAS";
-    const loadProfile = ercotZoneProfiles.get(loadZone);
-    const genProfile = GEN_PROFILES[assetType] ?? GEN_PROFILES.natural_gas;
-    if (!loadProfile || loadProfile.length < 24) return 55;
-    const corr = pearsonCorrelation(genProfile, loadProfile);
-    return Math.round(Math.min(95, Math.max(5, 50 + corr * 45)) * 100) / 100;
-  }
-  if (market === "CAISO") {
-    // CAISO: more extreme duck curve; solar shape risk highest (early-morning and evening spike)
-    const CAISO_SHAPE: Record<string, number> = {
-      solar: 26, wind: 62, storage: 88, natural_gas: 72, nuclear: 68,
-      hydro: 75, biomass: 68, geothermal: 70, coal: 65,
-    };
-    return CAISO_SHAPE[assetType] ?? 55;
-  }
-  if (market === "PJM") {
-    // PJM load peaks late afternoon; solar better aligned than ERCOT/CAISO
-    const PJM_SHAPE: Record<string, number> = {
-      solar: 52, wind: 58, storage: 78, natural_gas: 68, nuclear: 65,
-      hydro: 72, biomass: 65, geothermal: 68, coal: 62,
-    };
-    return PJM_SHAPE[assetType] ?? 55;
-  }
-  return 52;
+  if (assetType in FLAT_TECH_SHAPE) return FLAT_TECH_SHAPE[assetType]!;
+
+  let loadZone: string | undefined;
+  if (market === "ERCOT")      loadZone = QUEUE_ZONE_TO_LOAD_ZONE[queueZone] ?? "COAS";
+  else if (market === "CAISO") loadZone = CAISO_QUEUE_ZONE_TO_LOAD_ZONE[queueZone] ?? "SCE";
+  else if (market === "PJM")   loadZone = PJM_QUEUE_ZONE_TO_LOAD_ZONE[queueZone] ?? "AEP";
+  if (!loadZone) return 52;
+
+  const loadProfile = loadProfiles.get(`${market}|${loadZone}`);
+  const genProfile  = genProfiles.get(`${market}|${assetType}`)
+    ?? GEN_PROFILES[assetType]
+    ?? GEN_PROFILES.natural_gas;
+
+  if (!loadProfile || loadProfile.length < 24) return 55;
+  if (!genProfile  || genProfile.length  < 24) return 55;
+
+  const corr = pearsonCorrelation(genProfile, loadProfile);
+  if (!Number.isFinite(corr)) return 55;
+  return Math.round(Math.min(95, Math.max(5, 50 + corr * 45)) * 100) / 100;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -508,31 +565,80 @@ async function main() {
     console.log(`     ${tech.padEnd(12)} → ${(r * 100).toFixed(1)}% capture`);
   }
 
-  // ── Step 0a: Load ERCOT zone load profiles (shape risk) ───────────────────
-  console.log("\n📡 Loading ERCOT zone load profiles (shape risk computation)...");
-  // TIMEZONE: ercot_load_by_zone comes from EIA-930 and stores UTC in `hour`
-  // (proven 2026-08-03: July load peaks at hour 22 = 17:00 CDT). GEN_PROFILES
-  // below is LOCAL, hour-beginning, index 0 = HE1. Reading `hour` directly
-  // correlated a local generation shape against a UTC load shape — five hours
-  // apart — which drove solar's Pearson negative (its midday peak landed on the
-  // 07:00 CDT load trough) and wind's positive (its overnight peak landed on the
-  // 19:00 CDT load peak). With score = 50 + corr*45 that is roughly a 40-point
-  // swing in grid_stability_score, biasing ERCOT rankings toward wind and
-  // against solar. Convert to Central before indexing.
-  const zoneLoadRaw = await db.execute<{ zone: string; hour: number; avg_load: string }>(sql`
-    SELECT zone,
-           EXTRACT(hour FROM (make_timestamp(year, month, day, hour, 0, 0)
-             AT TIME ZONE 'UTC') AT TIME ZONE 'America/Chicago')::int AS hour,
-           AVG(load_mw)::float AS avg_load
-    FROM ercot_load_by_zone
-    GROUP BY zone, 2 ORDER BY zone, 2
-  `);
-  const ercotZoneLoadProfiles = new Map<string, number[]>();
-  for (const r of zoneLoadRaw.rows) {
-    if (!ercotZoneLoadProfiles.has(r.zone)) ercotZoneLoadProfiles.set(r.zone, Array(24).fill(0));
-    ercotZoneLoadProfiles.get(r.zone)![r.hour] = Number(r.avg_load);
+  // ── Step 0a: load + generation hourly profiles for ALL THREE markets ──────
+  //
+  // TIMEZONE — the reason both queries convert rather than reading `hour`:
+  // every *_hourly_zonal_load and *_hourly_gen_output_by_fuel_agg table comes
+  // from EIA-930 and stores UTC (proven 2026-08-03: ERCOT solar peaks at hour
+  // 19 = 14:00 CDT, July load at hour 22 = 17:00 CDT). Reading `hour` directly
+  // correlated shapes five to seven hours apart. For ERCOT that drove solar's
+  // Pearson negative — its midday peak landed on the 07:00 CDT load trough —
+  // and wind's positive, a ~40-point swing in grid_stability_score that biased
+  // rankings toward wind and against solar. Convert to market-local first.
+  console.log("\n📡 Loading zonal load profiles (ERCOT/CAISO/PJM, market-local)...");
+  const loadProfiles = new Map<string, number[]>();
+  for (const [market, src] of Object.entries(LOAD_SOURCE)) {
+    const raw = await db.execute<{ zone: string; hour: number; avg_load: string }>(sql`
+      SELECT zone,
+             EXTRACT(hour FROM (make_timestamp(year, month, day, hour, 0, 0)
+               AT TIME ZONE 'UTC') AT TIME ZONE ${src.tz})::int AS hour,
+             AVG(load_mw)::float AS avg_load
+      FROM ${sql.raw(src.table)}
+      GROUP BY zone, 2 ORDER BY zone, 2
+    `);
+    const zones = new Set<string>();
+    for (const r of raw.rows) {
+      const key = `${market}|${r.zone}`;
+      if (!loadProfiles.has(key)) loadProfiles.set(key, Array(24).fill(0));
+      loadProfiles.get(key)![r.hour] = Number(r.avg_load);
+      zones.add(r.zone);
+    }
+    console.log(`   ${market.padEnd(5)} ${zones.size} zones (${src.tz})`);
   }
-  console.log(`   Loaded ${ercotZoneLoadProfiles.size} zone profiles: ${[...ercotZoneLoadProfiles.keys()].join(", ")}`);
+
+  // Real per-market generation shapes, normalised 0-1 by that fuel's own peak.
+  // Only the SHAPE matters for a correlation, so normalising keeps the maps
+  // comparable and makes them readable when logged.
+  console.log("📡 Deriving real generation shapes per market (replaces ERCOT-calibrated constants)...");
+  const genProfiles = new Map<string, number[]>();
+  for (const [market, src] of Object.entries(LOAD_SOURCE)) {
+    const raw = await db.execute<{ fuel_type: string; hour: number; avg_mw: string }>(sql`
+      SELECT fuel_type,
+             EXTRACT(hour FROM (make_timestamp(year, month, day, hour, 0, 0)
+               AT TIME ZONE 'UTC') AT TIME ZONE ${src.tz})::int AS hour,
+             AVG(gen_mw)::float AS avg_mw
+      FROM ${sql.raw(src.genTable)}
+      GROUP BY fuel_type, 2 ORDER BY fuel_type, 2
+    `);
+    const byFuel = new Map<string, number[]>();
+    for (const r of raw.rows) {
+      if (!byFuel.has(r.fuel_type)) byFuel.set(r.fuel_type, Array(24).fill(0));
+      byFuel.get(r.fuel_type)![r.hour] = Number(r.avg_mw);
+    }
+    const kept: string[] = [];
+    for (const [fuel, profile] of byFuel) {
+      const peak = Math.max(...profile);
+      // A flat or empty series carries no shape information and would make the
+      // correlation undefined. CAISO/PJM `other` is also net-NEGATIVE (their
+      // battery fleets land there because EIA-930 publishes no BAT series for
+      // those BAs), which cannot be normalised meaningfully — skip it and let
+      // storage fall back to the modelled profile rather than silently
+      // correlating against a negative series.
+      if (!Number.isFinite(peak) || peak <= 0) continue;
+      const spread = peak - Math.min(...profile);
+      if (spread / peak < 0.02) continue;   // effectively constant
+      genProfiles.set(`${market}|${fuel}`, profile.map(v => v / peak));
+      kept.push(fuel);
+    }
+    console.log(`   ${market.padEnd(5)} shapes: ${kept.sort().join(", ") || "(none)"}`);
+  }
+  for (const tech of ["solar", "wind", "storage"]) {
+    const missing = Object.keys(LOAD_SOURCE).filter(m => !genProfiles.has(`${m}|${tech}`));
+    if (missing.length) {
+      console.log(`   ⚠  ${tech}: no real series for ${missing.join(", ")} — falling back to ` +
+                  `ERCOT-calibrated GEN_PROFILES for those markets`);
+    }
+  }
 
   // ── Step 0b-new: Load ERCOT hub hourly profiles (zone-specific capture prices) ──
   console.log("📡 Loading ERCOT hub hourly profiles (zone-specific capture prices)...");
@@ -1113,7 +1219,7 @@ async function main() {
       interconnectRisk: interconnectRiskScore(queueZone, market, ercotQueueMap, caisoQueueMap, pjmQueueMap, ercotMaxMw, caisoMaxMw, pjmMaxMw).toFixed(2),
       recScore:         recScore(assetType, market, capacityMw).toFixed(2),
       capScore:         capacityScore(capacityMw).toFixed(2),
-      shapeRisk:        shapeRiskScore(assetType, queueZone, market, ercotZoneLoadProfiles).toFixed(2),
+      shapeRisk:        shapeRiskScore(assetType, queueZone, market, loadProfiles, genProfiles).toFixed(2),
     };
   };
 
