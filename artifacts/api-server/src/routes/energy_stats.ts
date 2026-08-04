@@ -877,7 +877,12 @@ router.get("/ercot/hourly-profile", async (_req, res) => {
     const rows = await db.execute<{
       hour: number; system_load_mw: number; wind_mw: number; solar_mw: number;
     }>(sql`
-      SELECT z.hour,
+      -- Both source tables are EIA-930 UTC, so this join is internally correct.
+      -- Convert to Central HERE rather than with a fixed offset in JS: the old
+      -- `hour - 6` was CST year-round and so ran an hour late through DST,
+      -- which is most of the cooling season and therefore most of what matters.
+      SELECT EXTRACT(hour FROM (make_timestamp(z.year, z.month, z.day, z.hour, 0, 0)
+               AT TIME ZONE 'UTC') AT TIME ZONE 'America/Chicago')::int AS hour,
         ROUND(AVG(z.total_load))::int  AS system_load_mw,
         ROUND(AVG(f.wind_mw))::int     AS wind_mw,
         ROUND(AVG(f.solar_mw))::int    AS solar_mw
@@ -891,11 +896,11 @@ router.get("/ercot/hourly-profile", async (_req, res) => {
           SUM(gen_mw) FILTER (WHERE fuel_type = 'solar') AS solar_mw
         FROM ercot_hourly_gen_output GROUP BY year, month, day, hour
       ) f ON z.year = f.year AND z.month = f.month AND z.day = f.day AND z.hour = f.hour
-      GROUP BY z.hour ORDER BY z.hour
+      GROUP BY 1 ORDER BY 1
     `);
     res.json(rows.rows.map(r => ({
-      hour:         Number(r.hour),
-      ctHour:       ((Number(r.hour) - 6) + 24) % 24, // approx Central Time
+      hour:         Number(r.hour),   // already Central — converted in SQL above
+      ctHour:       Number(r.hour),   // kept for API compatibility
       systemLoadMw: Number(r.system_load_mw),
       windMw:       Number(r.wind_mw),
       solarMw:      Number(r.solar_mw),

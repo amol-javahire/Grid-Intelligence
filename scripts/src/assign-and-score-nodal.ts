@@ -510,10 +510,22 @@ async function main() {
 
   // ── Step 0a: Load ERCOT zone load profiles (shape risk) ───────────────────
   console.log("\n📡 Loading ERCOT zone load profiles (shape risk computation)...");
+  // TIMEZONE: ercot_load_by_zone comes from EIA-930 and stores UTC in `hour`
+  // (proven 2026-08-03: July load peaks at hour 22 = 17:00 CDT). GEN_PROFILES
+  // below is LOCAL, hour-beginning, index 0 = HE1. Reading `hour` directly
+  // correlated a local generation shape against a UTC load shape — five hours
+  // apart — which drove solar's Pearson negative (its midday peak landed on the
+  // 07:00 CDT load trough) and wind's positive (its overnight peak landed on the
+  // 19:00 CDT load peak). With score = 50 + corr*45 that is roughly a 40-point
+  // swing in grid_stability_score, biasing ERCOT rankings toward wind and
+  // against solar. Convert to Central before indexing.
   const zoneLoadRaw = await db.execute<{ zone: string; hour: number; avg_load: string }>(sql`
-    SELECT zone, hour, AVG(load_mw)::float AS avg_load
+    SELECT zone,
+           EXTRACT(hour FROM (make_timestamp(year, month, day, hour, 0, 0)
+             AT TIME ZONE 'UTC') AT TIME ZONE 'America/Chicago')::int AS hour,
+           AVG(load_mw)::float AS avg_load
     FROM ercot_load_by_zone
-    GROUP BY zone, hour ORDER BY zone, hour
+    GROUP BY zone, 2 ORDER BY zone, 2
   `);
   const ercotZoneLoadProfiles = new Map<string, number[]>();
   for (const r of zoneLoadRaw.rows) {

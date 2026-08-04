@@ -320,6 +320,45 @@ unified with `iso`/`zone` columns rather than 4 per-market tables, so
 cross-market queries are a filter not a UNION); `aeso_pool_price` →
 `aeso_hourly_pool_price`.
 
+## TIMEZONE — hourly tables do NOT share one convention (2026-08-03)
+
+`(year, month, day, hour)` means different things in different tables. Joining
+two hourly tables on those columns without checking is a silent 5-7 hour
+misalignment that produces plausible-looking, wrong capture prices.
+
+- **EIA-930 tables are UTC.** Every `*_hourly_gen_output_by_fuel_agg` and
+  `*_hourly_zonal_load`, plus the superseded `ercot_hourly_gen_output` /
+  `ercot_load_by_zone`. Proven, not assumed: ERCOT solar peaks at hour 19
+  (= 14:00 CDT) and July load at hour 22 (= 17:00 CDT). Local-time storage
+  would put those at 13 and 17.
+- **ISO price tables are market-local** (ERCOT Central, CAISO Pacific, PJM
+  Eastern, AESO Mountain) — this is the expected convention but MUST be
+  verified per table, not assumed.
+- **`ercot_hourly_dispatch` is unambiguous** — `hour` is `timestamptz`.
+
+Authoritative record is the `iso_table_metadata` registry
+(`infra/2026-08-03-rename-price-tables-and-timezone.sql`), mirrored into
+`COMMENT ON TABLE` so `\d+` shows it. **Query the registry before writing any
+cross-table hourly join.** It is a registry rather than a per-row column
+because the value is constant per table and a TEXT column would store the same
+string 32.6M times in `ercot_nodal_da_rt_hourly` alone.
+
+Converting UTC → local in a query:
+
+```sql
+-- EIA-930 (UTC) joined to an ERCOT local-time price table
+SELECT (make_timestamp(g.year, g.month, g.day, g.hour, 0, 0) AT TIME ZONE 'UTC')
+         AT TIME ZONE 'America/Chicago' AS local_ts, ...
+```
+
+DST caveat: local-time tables have 23- and 25-hour days twice a year, so a
+local-time `hour` can be duplicated or missing. UTC tables always have exactly
+24. Any aggregation that assumes 24 hours/day is wrong on those two days.
+
+Open-Meteo returns LOCAL time by default — `iso_hourly_temps` must be seeded
+with an explicit timezone and a `source` column before the load/temperature
+regression in `compute-load-forecast.py` can be trusted (task #24).
+
 ## Real vs synthetic data — CHECK BEFORE TRUSTING ANY TABLE
 
 Several tables hold calibrated SYNTHETIC data with nothing in the table name or
