@@ -1,5 +1,24 @@
 #!/usr/bin/env python3
 """
+###########################  DEPRECATED — DO NOT RUN  ########################
+# SUPERSEDED 2026-08-03 by scripts/src/seed-iso-temps.py.
+#
+# Three faults, all of which this file will reintroduce if run:
+#   1. HOST-DEPENDENT TIMEZONE. It requests local time from Open-Meteo with
+#      timeformat=unixtime, then calls datetime.fromtimestamp(ts) with no tz
+#      argument — which resolves against the machine's own timezone. The same
+#      inputs produce UTC on the Azure VM and Central time on a Texas laptop.
+#      The replacement passes timezone=UTC explicitly and parses ISO strings.
+#   2. WRONG CAISO ZONES. Seeds NP15/SP15/ZP26, which are PRICE hubs. CAISO
+#      publishes load at DLAPs (PGAE/SCE/SDGE/VEA), so these rows have no load
+#      series to join to — defeating the table's only purpose.
+#   3. NO PROVENANCE. No source column, while two synthetic seeders write to
+#      the same table, making real and modelled rows indistinguishable.
+#
+# Also deprecated for the same reasons: seed-temperatures-fast.py and
+# seed-temperatures-completion.py.
+##############################################################################
+
 Seed iso_hourly_temps table from Open-Meteo archive API.
 Covers Jan 2024 – May 2026 for 8 ERCOT zones and 3 CAISO zones.
 
