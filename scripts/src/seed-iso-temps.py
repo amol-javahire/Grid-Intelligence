@@ -87,6 +87,13 @@ ZONES: dict[tuple[str, str], tuple[str, float, float, str]] = {
     ("ERCOT", "COAS"): ("Coast (Houston)",              29.76,  -95.37, "America/Chicago"),
     ("ERCOT", "NCEN"): ("North Central (DFW)",          32.77,  -96.80, "America/Chicago"),
     ("ERCOT", "SCEN"): ("South Central (San Antonio)",  29.42,  -98.49, "America/Chicago"),
+    # FWES correlates only r=0.15 with load, against 0.81-0.92 for every other
+    # ERCOT zone. That is CORRECT, not a bad centroid: Far West is the Permian
+    # Basin, and its load is oilfield electrification — pumping, gas
+    # compression, drilling — which runs flat around the clock and barely
+    # responds to air temperature. Do not "improve" this coordinate; moving it
+    # would be fitting noise. It also means FWES load growth tracks drilling
+    # activity rather than weather, which any FWES forecast must account for.
     ("ERCOT", "FWES"): ("Far West (Midland-Odessa)",    31.99, -102.08, "America/Chicago"),
     ("ERCOT", "SOUT"): ("Southern (Corpus Christi)",    27.80,  -97.40, "America/Chicago"),
     ("ERCOT", "EAST"): ("East (Tyler-Lufkin)",          31.34,  -94.73, "America/Chicago"),

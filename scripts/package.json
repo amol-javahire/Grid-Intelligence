@@ -41,6 +41,7 @@
     "seed-ercot-real-data": "cd ../artifacts/pypsa-engine && .venv/bin/python3 ../../scripts/src/seed-ercot-real-data.py",
     "seed-eia930-markets": "cd ../artifacts/pypsa-engine && .venv/bin/python3 ../../scripts/src/seed-eia930-markets.py",
     "seed-iso-temps": "cd ../artifacts/pypsa-engine && .venv/bin/python3 ../../scripts/src/seed-iso-temps.py",
+    "test-temp-centroids": "cd ../artifacts/pypsa-engine && .venv/bin/python3 ../../scripts/src/test-temp-centroids.py",
     "seed-ercot-queue-real": "cd ../artifacts/pypsa-engine && .venv/bin/python3 ../../scripts/src/seed-ercot-queue-real.py",
     "seed-ercot-dispatch": "cd ../artifacts/pypsa-engine && .venv/bin/python3 ../../scripts/src/seed-ercot-dispatch.py"
   },
