@@ -107,11 +107,27 @@ ZONES: dict[tuple[str, str], tuple[str, float, float, str]] = {
     # and does not publish load on the hubs. The old seeder used the hubs, so
     # its output had no load table to join to.
     ("CAISO", "SCE"):  ("SCE (Inland Empire)",          33.95, -117.40, "America/Los_Angeles"),
-    # PG&E spans the Bay Area and the Central Valley. Sacramento is the standard
-    # load-forecasting proxy: PG&E's peak is driven by inland heat, not the
-    # coast. This is the weakest single-centroid choice in the set and the first
-    # candidate for load-weighting if the regression underperforms.
-    ("CAISO", "PGAE"): ("PG&E (Sacramento)",            38.58, -121.49, "America/Los_Angeles"),
+    # PG&E spans the mild Bay Area and the hot Central Valley. Stockton sits
+    # between the two and picks up both load drivers.
+    #
+    # This was originally Sacramento, which was simply WRONG: Sacramento is
+    # served by SMUD, a municipal utility in the BANC balancing authority, and
+    # is not part of PG&E's DLAP at all. The centroid sat in territory the zone
+    # does not serve. Corrected 2026-08-03.
+    #
+    # Chosen on territorial correctness, not on r — the measured difference is
+    # small (May-Sep 2025 daily peak-vs-Tmax: Sacramento 0.825, Stockton 0.857).
+    #
+    # A 3-point blend (San Jose + Fresno + Stockton) scored HIGHEST in both test
+    # windows — 0.870 on July alone and 0.885 on May-Sep — but the gain over the
+    # incumbent (+0.068 and +0.060) never cleared the Fisher-z noise floor
+    # (0.192 at n=30, 0.082 at n=152). Consistent across two windows and
+    # therefore suggestive, but formally under-powered, so method stays
+    # 'single_centroid'. To settle it, extend test-temp-centroids.py to pool
+    # 2024+2025 (n~300, floor ~0.058) and re-run; if the blend still leads by
+    # ~0.06 it clears, and PG&E becomes the first zone to justify
+    # method='load_weighted' on evidence.
+    ("CAISO", "PGAE"): ("PG&E (Stockton)",              37.96, -121.29, "America/Los_Angeles"),
     ("CAISO", "SDGE"): ("SDG&E (San Diego)",            32.72, -117.16, "America/Los_Angeles"),
     ("CAISO", "VEA"):  ("Valley Electric (Pahrump NV)", 36.21, -115.98, "America/Los_Angeles"),
 

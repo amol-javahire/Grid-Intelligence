@@ -81,10 +81,10 @@ CANDIDATES: dict[tuple[str, str], list[tuple[str, list[tuple[float, float]]]]] =
         ("blend: El Cajon + coast",    [(32.79, -116.96), (32.72, -117.16)]),
     ],
     ("CAISO", "PGAE"): [
-        ("CURRENT Sacramento (SMUD!)", [(38.58, -121.49)]),
+        ("CURRENT Stockton",           [(37.96, -121.29)]),
+        ("Sacramento (SMUD - wrong)",  [(38.58, -121.49)]),
         ("San Jose",                   [(37.34, -121.89)]),
         ("Fresno",                     [(36.74, -119.79)]),
-        ("Stockton",                   [(37.96, -121.29)]),
         ("Concord / East Bay",         [(37.98, -122.03)]),
         ("Bakersfield",                [(35.37, -119.02)]),
         ("blend: San Jose + Fresno",   [(37.34, -121.89), (36.74, -119.79)]),
