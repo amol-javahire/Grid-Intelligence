@@ -1,14 +1,32 @@
 -- ============================================================================
+-- ############################  DO NOT RUN  ##################################
+--
+-- SUPERSEDED 2026-08-03. ercot_hourly_gen_output already holds REAL EIA-930
+-- fuel-type data (seeded by scripts/src/seed-ercot-real-data.py). The premise
+-- below — that the table was synthetic — was WRONG: it was based on reading a
+-- deprecated seeder's header instead of querying the table. Verified real:
+-- gas 21.9 GW, wind 13.7 GW, solar 8.1 GW, nuclear 4.7 GW, hydro 54 MW.
+--
+-- Running this script DESTROYS that data and replaces it with a SCED
+-- aggregation that EXCLUDES behind-the-meter distributed solar — a strict
+-- regression for a generation-mix view. It did exactly that once already:
+-- the DELETE committed, the run was interrupted before the INSERT, and every
+-- row from 2024-01 to 2026-05 was lost. Recovery was a full EIA-930 re-seed.
+--
+-- Two faults, both fixed below but recorded because they generalise:
+--   1. DELETE and INSERT ran as separate autocommitting statements. They are
+--      now wrapped in BEGIN/COMMIT so an interrupted run rolls back instead of
+--      leaving the table empty.
+--   2. The script trusted a seeder comment over the actual table contents.
+--
+-- Only useful for a DISPATCH-ONLY view, and only into a separate table.
+-- If you genuinely want that, change the target table name first.
+-- ############################################################################
+--
 -- Rebuild ercot_hourly_gen_output from REAL SCED data.
 --
--- WHY: ercot_hourly_gen_output (formerly ercot_fuel_mix) was seeded by
--- scripts/src/seed-ercot-load-fuelmix.ts with CALIBRATED SYNTHETIC profiles —
--- its own header says "Replace this seed with ERCOT CDR ... when doclookupIds
--- are available". Meanwhile ercot_hourly_dispatch now holds real ERCOT 60-day
--- SCED disclosure data (per-resource, per-hour, ~4.7GB) with resource_type
--- already normalised to wind/solar/gas/coal/nuclear/hydro/storage/other.
--- Aggregating SCED by resource_type gives a genuinely real gen stack, so the
--- synthetic table no longer needs to exist for the covered period.
+-- Aggregates ercot_hourly_dispatch (real ERCOT 60-day SCED disclosure,
+-- per-resource, per-hour, ~4.7GB) by resource_type.
 --
 -- IMPORTANT CAVEAT — SCED is not the same population as ERCOT's published
 -- fuel mix. SCED covers resources that participate in Security Constrained
@@ -98,7 +116,13 @@ SELECT COUNT(*) AS staged_rows,
        MAX(year * 100 + month) AS last_ym
 FROM sced_gen_stack;
 
--- Drop synthetic rows only for (year, month) pairs SCED actually covers
+-- DELETE + INSERT MUST be atomic. Run separately, an interruption between
+-- them leaves the table empty — which is exactly what happened on 2026-08-03,
+-- destroying 2024-01 through 2026-05. BEGIN/COMMIT makes an interrupted run a
+-- no-op instead of data loss.
+BEGIN;
+
+-- Drop existing rows only for (year, month) pairs SCED actually covers
 DELETE FROM ercot_hourly_gen_output g
 WHERE EXISTS (
   SELECT 1 FROM sced_gen_stack s
@@ -111,6 +135,18 @@ FROM sced_gen_stack
 ON CONFLICT (year, month, day, hour, fuel_type) DO UPDATE SET
   gen_mw = EXCLUDED.gen_mw,
   source = EXCLUDED.source;
+
+-- Refuse to commit an empty table — a guard against the exact failure above.
+DO $$
+DECLARE n bigint;
+BEGIN
+  SELECT COUNT(*) INTO n FROM ercot_hourly_gen_output;
+  IF n = 0 THEN
+    RAISE EXCEPTION 'ercot_hourly_gen_output would be left EMPTY — aborting';
+  END IF;
+END $$;
+
+COMMIT;
 
 -- ── Step 4: verify ──────────────────────────────────────────────────────────
 

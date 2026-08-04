@@ -60,18 +60,69 @@ from collections import defaultdict
 from typing import Optional
 
 try:
-    import pdfplumber
+    import openpyxl
 except ImportError:
-    print("pdfplumber not installed. Run:\n"
-          "  artifacts/pypsa-engine/.venv/bin/pip install pdfplumber")
+    print("openpyxl not installed. Run:\n"
+          "  artifacts/pypsa-engine/.venv/bin/pip install openpyxl")
     sys.exit(1)
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 log = logging.getLogger("aeso-capability")
 
 PDF = os.environ.get("AESO_CAPABILITY_PDF", "Transmission-Capability-Map-Report-Sept-2025.pdf")
+WORKBOOK = os.environ.get(
+    "AESO_CAPABILITY_XLSX", "Transmission-Capability-Results-Sept-2025.xlsx"
+)
 SOURCE_DOC = "AESO Transmission Capability Map Report, 2025 Assessment (Sept 26 2025)"
 AS_OF = "2025-09-26"
+REGION_SOURCE_DOC = "AESO ISO Tariff Section 7, effective 2026-01-01"
+REGION_AS_OF = "2026-01-01"
+
+PLANNING_AREAS: dict[int, tuple[str, str]] = {
+    17: ("Rainbow Lake", "Northwest"), 18: ("High Level", "Northwest"),
+    19: ("Peace River", "Northwest"), 20: ("Grande Prairie", "Northwest"),
+    21: ("High Prairie", "Northwest"), 22: ("Grande Cache", "Northwest"),
+    23: ("Valleyview", "Northwest"), 24: ("Fox Creek", "Northwest"),
+    26: ("Swan Hills", "Northwest"), 25: ("Fort McMurray", "Northeast"),
+    27: ("Athabasca/Lac La Biche", "Northeast"), 33: ("Fort Saskatchewan", "Northeast"),
+    31: ("Wetaskiwin", "Edmonton"), 40: ("Lake Wabamun", "Edmonton"),
+    60: ("Edmonton", "Edmonton"), 13: ("Lloydminster", "Central"),
+    28: ("Cold Lake", "Central"), 29: ("Hinton/Edson", "Central"),
+    30: ("Drayton Valley", "Central"), 32: ("Wainwright", "Central"),
+    34: ("Abraham Lake", "Central"), 35: ("Red Deer", "Central"),
+    36: ("Alliance/Battle River", "Central"), 37: ("Provost", "Central"),
+    38: ("Caroline", "Central"), 39: ("Didsbury", "Central"),
+    42: ("Hanna", "Central"), 56: ("Vegreville", "Central"),
+    6: ("Calgary", "Calgary"), 57: ("Airdrie", "Calgary"),
+    4: ("Medicine Hat", "South"), 43: ("Sheerness", "South"),
+    44: ("Seebe", "South"), 45: ("Strathmore/Blackie", "South"),
+    46: ("High River", "South"), 47: ("Brooks", "South"),
+    48: ("Empress", "South"), 49: ("Stavely", "South"),
+    52: ("Vauxhall", "South"), 53: ("Fort Macleod", "South"),
+    54: ("Lethbridge", "South"), 55: ("Glenwood", "South"),
+}
+
+ATTACHMENT_C_ASSETS = [
+    ("VBN1", "Benalto 1", 5, 35, "Red Deer", "Central"),
+    ("ACD1", "Big Sky Solar", 140, 48, "Empress", "South"),
+    ("VBR1", "Briker 1", 5, 13, "Lloydminster", "Central"),
+    ("BPW1", "Buffalo Plains", 466, 49, "Stavely", "South"),
+    ("FRM1", "Forty Mile Bow Island", 266, 4, "Medicine Hat", "South"),
+    ("FMG1", "Forty Mile Granlea", 20, 4, "Medicine Hat", "South"),
+    ("FCS1", "Fox Coulee Solar", 80, 42, "Hanna", "Central"),
+    ("GNR1", "Genesee Repower 1", 66, 40, "Wabamun", "Edmonton"),
+    ("GNR2", "Genesee Repower 2", 66, 40, "Wabamun", "Edmonton"),
+    ("HAL2", "Halkirk 2", 122, 36, "Alliance/Battle River", "Central"),
+    ("KH3", "Keephills", 3, 40, "Wabamun", "Edmonton"),
+    ("VKW1", "Kenilworth 1", 5, 13, "Lloydminster", "Central"),
+    ("CLD1", "Lethbridge Solar", 9, 54, "Lethbridge", "South"),
+    ("VNT1", "Netook 1", 5, 39, "Didsbury", "Central"),
+    ("VNV1", "Northern Valley 1", 5, 13, "Lloydminster", "Central"),
+    ("SCR1", "Suncor Base Plant", 856, 25, "Fort McMurray", "Northeast"),
+    ("WPT1", "Wapiti Power Plant", 30, 20, "Grande Prairie", "Northwest"),
+    ("WIR1", "Wild Rose", 192, 4, "Medicine Hat", "South"),
+    ("WIN1", "Winnifred Wind", 136, 4, "Medicine Hat", "South"),
+]
 
 # Column left-edges read off the rendered header row (see docstring).
 COLS_A = [("name", 60), ("facility_code", 140), ("tfo", 205),
@@ -190,51 +241,68 @@ def rec_c(p):  # asset: needs an (ASSET_ID) and a region word
     return bool(re.search(r"\([A-Z0-9]{3,8}\)", " ".join(p["asset"]))) and bool(p["region"])
 
 
+def split_area(value) -> tuple[Optional[int], str]:
+    text = str(value or "").strip()
+    match = re.match(r"(\d{1,2})\s*-\s*(.*)", text)
+    return (int(match.group(1)), match.group(2).strip()) if match else (None, text)
+
+
 def extract():
-    if not os.path.exists(PDF):
-        log.error("PDF not found: %s (set AESO_CAPABILITY_PDF)", PDF)
+    if not os.path.exists(WORKBOOK):
+        log.error("Workbook not found: %s (set AESO_CAPABILITY_XLSX)", WORKBOOK)
         sys.exit(1)
 
-    with pdfplumber.open(PDF) as pdf:
-        raw_a = parse_attachment(pdf, 9, 18, COLS_A, rec_a)
-        raw_b = parse_attachment(pdf, 19, 42, COLS_B, rec_b)
-        raw_c = parse_attachment(pdf, 43, len(pdf.pages), COLS_C, rec_c)
+    workbook = openpyxl.load_workbook(WORKBOOK, read_only=True, data_only=True)
+    sub_sheet = workbook["Substation Capabilities Table"]
+    line_sheet = workbook["Line Capabilities Table"]
 
-    subs = [{
-        "facility_name": " ".join(r["name"]).strip(),
-        "facility_code": "".join(r["facility_code"]).strip(),
-        "tfo": " ".join(r["tfo"]).strip(),
-        "planning_area_code": area_code(r["planning_area"]),
-        "planning_area_name": area_name(r["planning_area"]),
-        "bus_number": int(num(r["bus_number"])),
-        "voltage_kv": int(num(r["voltage_kv"])),
-        "capability_mw": num(r["capability_mw"]),
-    } for r in raw_a]
+    subs = []
+    for row in sub_sheet.iter_rows(min_row=3, values_only=True):
+        facility_name, facility_code, tfo, area = row[:4]
+        area_id, area_label = split_area(area)
+        for start in (4, 7, 10, 13):
+            bus, voltage, capability = row[start:start + 3]
+            if not isinstance(bus, (int, float)) or not isinstance(capability, (int, float)):
+                continue
+            subs.append({
+                "facility_name": str(facility_name or "").strip(),
+                "facility_code": str(facility_code or "").strip(),
+                "tfo": str(tfo or "").strip(),
+                "planning_area_code": area_id,
+                "planning_area_name": area_label,
+                "bus_number": int(bus),
+                "voltage_kv": int(voltage),
+                "capability_mw": float(capability),
+            })
 
-    lines = [{
-        "line_name": " ".join(r["line_name"]).strip(),
-        "voltage_kv": int(num(r["voltage_kv"])),
-        "substation_name": " ".join(r["substation_name"]).strip(),
-        "facility_code": "".join(r["facility_code"]).strip(),
-        "planning_area_code": area_code(r["planning_area"]),
-        "planning_area_name": area_name(r["planning_area"]),
-        "tfo": " ".join(r["tfo"]).strip(),
-        "capability_mw": num(r["capability_mw"]),
-    } for r in raw_b]
-
-    assets = []
-    for r in raw_c:
-        txt = " ".join(r["asset"])
-        m = re.search(r"\(([A-Z0-9]{3,8})\)", txt)
-        assets.append({
-            "asset_id": m.group(1) if m else None,
-            "asset_name": re.sub(r"\s*\([A-Z0-9]{3,8}\)", "", txt).strip(),
-            "capability_change_mw": num(r["capability_change_mw"]),
-            "planning_area_code": area_code(r["planning_area"]),
-            "planning_area_name": area_name(r["planning_area"]),
-            "region": " ".join(r["region"]).strip(),
+    lines = []
+    for row in line_sheet.iter_rows(min_row=2, values_only=True):
+        line_name, voltage, substation_name, facility_code, area, tfo, capability = row[:7]
+        if not line_name or not isinstance(capability, (int, float)):
+            continue
+        area_id, area_label = split_area(area)
+        lines.append({
+            "line_name": str(line_name).strip(),
+            "voltage_kv": int(voltage),
+            "substation_name": str(substation_name or "").strip(),
+            "facility_code": str(facility_code or "").strip(),
+            "planning_area_code": area_id,
+            "planning_area_name": area_label,
+            "tfo": str(tfo or "").strip(),
+            "capability_mw": float(capability),
         })
 
+    assets = [{
+        "asset_id": asset_id,
+        "asset_name": asset_name,
+        "capability_change_mw": float(change_mw),
+        "planning_area_code": area_id,
+        "planning_area_name": area_label,
+        "region": region,
+    } for asset_id, asset_name, change_mw, area_id, area_label, region
+      in ATTACHMENT_C_ASSETS]
+
+    workbook.close()
     return subs, lines, assets
 
 
@@ -259,20 +327,15 @@ def inspect(subs, lines, assets):
                  r["asset_id"], r["asset_name"][:26], r["capability_change_mw"],
                  r["planning_area_code"], r["planning_area_name"][:22], r["region"])
 
-    # The key derived artifact: planning area -> region.
-    a2r = {}
-    for r in assets:
-        if r["planning_area_code"] and r["region"]:
-            a2r[r["planning_area_code"]] = r["region"]
-    log.info("\n=== Derived: planning area -> region (%d, from Attachment C) ===", len(a2r))
-    for k in sorted(a2r):
-        log.info("    %-4s -> %s", k, a2r[k])
+    log.info("\n=== Planning area -> region (%d, ISO Tariff Section 7) ===", len(PLANNING_AREAS))
+    for k, (name, region) in sorted(PLANNING_AREAS.items()):
+        log.info("    %-4s %-26s -> %s", k, name, region)
 
     areas = sorted({r["planning_area_code"] for r in subs if r["planning_area_code"]})
     log.info("\n=== Planning areas seen in Attachment A: %d ===", len(areas))
     log.info("    %s", ", ".join(str(a) for a in areas))
-    log.info("    NOTE: areas here WITHOUT a region above need mapping from")
-    log.info("    another source before the 9-bus model can place them.")
+    unmapped_areas = sorted(set(areas) - set(PLANNING_AREAS))
+    log.info("    unmapped in current tariff: %s", unmapped_areas or "none")
 
     bad = [r for r in subs if r["capability_mw"] is None]
     log.info("\n=== Quality ===")
@@ -283,7 +346,17 @@ def inspect(subs, lines, assets):
              min((r["capability_mw"] for r in subs if r["capability_mw"] is not None), default=None),
              max((r["capability_mw"] for r in subs if r["capability_mw"] is not None), default=None))
     log.info("  distinct bus numbers:           %d", len({r["bus_number"] for r in subs}))
-    log.info("\nSPOT-CHECK these against the PDF before running --write.")
+    capability_total = int(sum(r["capability_change_mw"] for r in assets))
+    log.info("  Attachment C capability total:  %s MW", capability_total)
+
+    expected = (239, 491, 19, 2477)
+    actual = (len(subs), len(lines), len(assets), capability_total)
+    if actual != expected or unmapped_areas:
+        raise ValueError(
+            "source verification failed: "
+            f"expected {expected} + no unmapped areas, got {actual}, {unmapped_areas}"
+        )
+    log.info("  VERIFIED expected counts and Attachment C total.")
 
 
 def write(subs, lines, assets):
@@ -319,6 +392,16 @@ def write(subs, lines, assets):
             planning_area_code int, planning_area_name text, region text,
             source_document text, as_of_date date,
             UNIQUE (asset_id, as_of_date));
+
+        CREATE TABLE IF NOT EXISTS aeso_planning_areas (
+            id serial PRIMARY KEY,
+            planning_area_code int NOT NULL,
+            planning_area_name text NOT NULL,
+            region text NOT NULL,
+            source_document text NOT NULL,
+            as_of_date date NOT NULL,
+            UNIQUE (planning_area_code, as_of_date));
+        CREATE INDEX IF NOT EXISTS aeso_planning_area_region_idx ON aeso_planning_areas (region);
         """)
         psycopg2.extras.execute_batch(cur, """
             INSERT INTO aeso_substation_capability
@@ -351,6 +434,19 @@ def write(subs, lines, assets):
             ON CONFLICT (asset_id, as_of_date) DO UPDATE SET
               region = EXCLUDED.region
         """, [{**r, "src": SOURCE_DOC, "asof": AS_OF} for r in assets if r["asset_id"]])
+
+        psycopg2.extras.execute_batch(cur, """
+            INSERT INTO aeso_planning_areas
+              (planning_area_code, planning_area_name, region, source_document, as_of_date)
+            VALUES (%(planning_area_code)s, %(planning_area_name)s, %(region)s, %(src)s, %(asof)s)
+            ON CONFLICT (planning_area_code, as_of_date) DO UPDATE SET
+              planning_area_name = EXCLUDED.planning_area_name,
+              region = EXCLUDED.region,
+              source_document = EXCLUDED.source_document
+        """, [{
+            "planning_area_code": code, "planning_area_name": name,
+            "region": region, "src": REGION_SOURCE_DOC, "asof": REGION_AS_OF,
+        } for code, (name, region) in PLANNING_AREAS.items()])
     conn.commit()
     conn.close()
     log.info("Wrote %d substations, %d lines, %d assets.", len(subs), len(lines), len(assets))

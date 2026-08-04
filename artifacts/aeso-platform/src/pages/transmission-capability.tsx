@@ -2,7 +2,7 @@
  * Transmission Capability — AESO's published connection headroom.
  *
  * Source: Transmission-Capability-Results-Sept-2025.xlsx (AESO 2025 Assessment,
- * 26 Sep 2025). 237 buses across 201 substations, 328 transmission lines.
+ * 26 Sep 2025). 239 bus records across 202 substations and 328 transmission lines.
  *
  * Capability MW = additional generation connectable at that bus before N-0
  * (category A) thermal congestion, at the 0.5 percentile of the historical
@@ -16,9 +16,13 @@
  *   STATUS — AESO states these are indicative, not guaranteed in the
  *            Connection Process.
  */
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { CircleMarker, GeoJSON, MapContainer, Popup, TileLayer } from "react-leaflet";
+import "leaflet/dist/leaflet.css";
+import L from "leaflet";
 import { ExternalLink, AlertTriangle, Map as MapIcon, Table2, Zap } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
 
 const AESO_LINKS = [
   { label: "Transmission Capability Map (interactive)", href: "https://www.aeso.ca/grid/connecting-to-the-grid/transmission-capability-map/" },
@@ -27,9 +31,6 @@ const AESO_LINKS = [
   { label: "AESO Planning Regions map (PDF)", href: "https://www.aeso.ca/assets/Uploads/Planning-Regions.pdf" },
   { label: "Connection Project Reporting", href: "https://www.aeso.ca/grid/connecting-to-the-grid/" },
 ];
-
-const ARCGIS_EMBED =
-  "https://experience.arcgis.com/experience/f9bbea2a88ce4de493f0d077cf927003/page/Page?views=Feature-Info";
 
 type Area = {
   planning_area_code: number; planning_area_name: string;
@@ -45,6 +46,316 @@ type Line = {
   line_name: string; voltage_kv: number; binding_capability_mw: number;
   max_endpoint_mw: number; endpoints: string; planning_area_name: string; tfo: string;
 };
+
+type MapFeature<P> = { type: "Feature"; geometry: { type: string; coordinates: unknown } | null; properties: P };
+type FeatureCollection<P> = { type: "FeatureCollection"; features: MapFeature<P>[] };
+type RegionMapProps = { areaCode: number | null; areaName: string | null; region: string | null };
+type LineMapProps = {
+  lineName: string; voltageKv: number | null; fromSubstation: string | null;
+  toSubstation: string | null; precision: string | null;
+  capability: { minCapabilityMw: number; maxCapabilityMw: number } | null;
+};
+type SubstationMapProps = {
+  name: string | null; facilityCode: string; displayName: string | null;
+  voltage: string | null; landLocation: string | null; planningArea: string | null;
+  region: string | null;
+  capabilities: Array<{ busNumber: number; voltageKv: number; capabilityMw: number }>;
+};
+type GeneratorMapProps = {
+  assetId: string | null; assetName: string | null; assetType: string | null;
+  maximumCapabilityMw: number | null; planningArea: string | null; region: string | null;
+};
+type ProjectMapProps = {
+  projectNumber: number | null; projectName: string | null; status: string | null;
+  planningArea: string | null; fuelType: string | null; stage: number | null;
+  supplyMw: number | null; demandMw: number | null;
+};
+type MapData = {
+  retrievedAt: string; capabilityAsOf: string | null; capabilityDataAvailable: boolean;
+  counts: Record<string, number>;
+  sources: { geometry: string; capability: string; note: string };
+  layers: {
+    planningAreas: FeatureCollection<RegionMapProps>;
+    lines: FeatureCollection<LineMapProps>;
+    substations: FeatureCollection<SubstationMapProps>;
+    generators: FeatureCollection<GeneratorMapProps>;
+    projects: FeatureCollection<ProjectMapProps>;
+  };
+};
+
+const REGION_COLOURS: Record<string, string> = {
+  Northwest: "#22d3ee", Northeast: "#a78bfa", Edmonton: "#60a5fa",
+  Central: "#34d399", Calgary: "#fbbf24", South: "#fb7185",
+};
+const GENERATOR_COLOURS: Record<string, string> = {
+  Wind: "#38bdf8", Solar: "#fbbf24", Hydro: "#22d3ee",
+  "Energy Storage": "#e879f9", "Combined Cycle": "#34d399",
+  "Simple Cycle": "#fb923c", Cogeneration: "#a78bfa",
+  "Gas Fired Steam": "#f87171", "Biomass and Other": "#84cc16",
+};
+
+function mapPoint(feature: MapFeature<unknown>): [number, number] | null {
+  if (!feature.geometry || feature.geometry.type !== "Point") return null;
+  const [lng, lat] = feature.geometry.coordinates as [number, number];
+  return Number.isFinite(lat) && Number.isFinite(lng) ? [lat, lng] : null;
+}
+
+function fmtMw(value: number | null | undefined): string {
+  return value == null ? "?" : `${value.toLocaleString(undefined, { maximumFractionDigits: 0 })} MW`;
+}
+
+function escapeHtml(value: unknown): string {
+  return String(value ?? "?")
+    .replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;").replaceAll("'", "&#039;");
+}
+
+function lineStyle(voltage: number | null | undefined) {
+  if ((voltage ?? 0) >= 500) return { color: "#f97316", weight: 3.2 };
+  if ((voltage ?? 0) >= 240) return { color: "#a78bfa", weight: 2.4 };
+  if ((voltage ?? 0) >= 138) return { color: "#38bdf8", weight: 1.8 };
+  if ((voltage ?? 0) >= 69) return { color: "#4ade80", weight: 1.2 };
+  return { color: "#64748b", weight: 0.8 };
+}
+
+function LayerToggle({ checked, onChange, colour, label, count }: {
+  checked: boolean; onChange: (checked: boolean) => void;
+  colour: string; label: string; count: number;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-3 py-1.5">
+      <div className="flex min-w-0 items-center gap-2 text-xs">
+        <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: colour }} />
+        <span className="truncate">{label}</span>
+        <span className="text-muted-foreground">{count.toLocaleString()}</span>
+      </div>
+      <Switch checked={checked} onCheckedChange={onChange} />
+    </div>
+  );
+}
+
+function MapPopupRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex justify-between gap-4 text-xs">
+      <span className="text-muted-foreground">{label}</span>
+      <span className="text-right font-medium">{value}</span>
+    </div>
+  );
+}
+
+function NativeMap() {
+  const [showRegions, setShowRegions] = useState(true);
+  const [showLines, setShowLines] = useState(true);
+  const [showSubstations, setShowSubstations] = useState(true);
+  const [showGenerators, setShowGenerators] = useState(true);
+  const [showProjects, setShowProjects] = useState(false);
+  const [minimumVoltage, setMinimumVoltage] = useState(138);
+
+  const map = useQuery<MapData>({
+    queryKey: ["aeso-native-map"],
+    queryFn: async () => {
+      const response = await fetch("/api/aeso/map");
+      if (!response.ok) throw new Error(`map source returned ${response.status}`);
+      return response.json();
+    },
+    staleTime: 10 * 60 * 1000,
+  });
+
+  const filteredLines = useMemo<FeatureCollection<LineMapProps> | null>(() => {
+    if (!map.data) return null;
+    return {
+      type: "FeatureCollection",
+      features: map.data.layers.lines.features.filter(
+        (feature) => (feature.properties.voltageKv ?? 0) >= minimumVoltage,
+      ),
+    };
+  }, [map.data, minimumVoltage]);
+
+  const regionStyle = useMemo(() => (feature?: any) => {
+    const colour = REGION_COLOURS[feature?.properties?.region] ?? "#64748b";
+    return { color: colour, fillColor: colour, fillOpacity: 0.1, weight: 1.4, opacity: 0.7 };
+  }, []);
+
+  const txStyle = useMemo(() => (feature?: any) => ({
+    ...lineStyle(feature?.properties?.voltageKv), opacity: 0.82,
+  }), []);
+
+  const bindRegion = useMemo(() => (feature: any, layer: L.Layer) => {
+    layer.bindTooltip(
+      `<strong>${escapeHtml(feature.properties.areaCode)} ? ${escapeHtml(feature.properties.areaName)}</strong><br/>${escapeHtml(feature.properties.region)} region`,
+      { sticky: true },
+    );
+  }, []);
+
+  const bindLine = useMemo(() => (feature: any, layer: L.Layer) => {
+    const p = feature.properties as LineMapProps;
+    const capability = p.capability
+      ? p.capability.minCapabilityMw === p.capability.maxCapabilityMw
+        ? fmtMw(p.capability.minCapabilityMw)
+        : `${fmtMw(p.capability.minCapabilityMw)}?${fmtMw(p.capability.maxCapabilityMw)}`
+      : "Not assessed in September 2025";
+    layer.bindPopup(
+      `<strong>${escapeHtml(p.lineName)}</strong><br/>${escapeHtml(p.voltageKv)} kV ? ${escapeHtml(p.fromSubstation)} ? ${escapeHtml(p.toSubstation)}<hr style="margin:8px 0;border-color:#475569"/><small>Additional connection capability</small><br/><strong>${escapeHtml(capability)}</strong><br/><small>GIS precision: ${escapeHtml(p.precision)}</small>`,
+    );
+  }, []);
+
+  if (map.isLoading) {
+    return <div className="h-[70vh] rounded-lg border border-border bg-card flex items-center justify-center text-sm text-muted-foreground">Loading 2,500+ AESO map features?</div>;
+  }
+  if (map.error || !map.data) {
+    return (
+      <div className="h-64 rounded-lg border border-red-500/30 bg-red-500/5 flex items-center justify-center p-6 text-sm text-red-300">
+        AESO ArcGIS services are unavailable. No substitute geometry was displayed.
+      </div>
+    );
+  }
+
+  const data = map.data;
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap gap-2">
+        {Object.entries(REGION_COLOURS).map(([region, colour]) => (
+          <div key={region} className="flex items-center gap-2 rounded-full border border-border bg-card px-3 py-1 text-xs">
+            <span className="h-2 w-2 rounded-full" style={{ backgroundColor: colour }} />
+            {region}
+          </div>
+        ))}
+      </div>
+
+      <div className="relative h-[70vh] min-h-[620px] overflow-hidden rounded-lg border border-border bg-card">
+        <MapContainer center={[54.1, -114.2]} zoom={5} minZoom={4} maxZoom={14} preferCanvas
+          style={{ height: "100%", width: "100%", zIndex: 0 }}>
+          <TileLayer
+            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; CARTO'
+            url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
+          />
+
+          {showRegions && (
+            <GeoJSON key="regions" data={data.layers.planningAreas as any}
+              style={regionStyle} onEachFeature={bindRegion} />
+          )}
+          {showLines && filteredLines && (
+            <GeoJSON key={`lines-${minimumVoltage}`} data={filteredLines as any}
+              style={txStyle} onEachFeature={bindLine} />
+          )}
+
+          {showSubstations && data.layers.substations.features.map((feature, index) => {
+            const center = mapPoint(feature);
+            if (!center) return null;
+            const p = feature.properties;
+            const maxCapability = p.capabilities.length
+              ? Math.max(...p.capabilities.map((item) => item.capabilityMw)) : null;
+            return (
+              <CircleMarker key={`sub-${p.facilityCode}-${index}`} center={center}
+                radius={maxCapability == null ? 3 : Math.min(10, 3 + Math.sqrt(maxCapability) / 3)}
+                pathOptions={{ color: "#f8fafc", fillColor: "#0f172a", fillOpacity: 0.9, weight: 1 }}>
+                <Popup>
+                  <div className="min-w-[220px] space-y-2 text-sm">
+                    <div><div className="font-semibold">{p.displayName ?? p.name}</div>
+                      <div className="text-xs text-muted-foreground">{p.planningArea} ? {p.region}</div></div>
+                    <MapPopupRow label="Voltage" value={`${p.voltage ?? "?"} kV`} />
+                    <MapPopupRow label="Land location" value={p.landLocation ?? "?"} />
+                    <div className="border-t pt-2 text-xs">
+                      <div className="mb-1 text-muted-foreground">Additional connection capability</div>
+                      {p.capabilities.length ? p.capabilities.map((item) => (
+                        <div key={`${item.busNumber}-${item.voltageKv}`} className="flex justify-between gap-4">
+                          <span>Bus {item.busNumber} ? {item.voltageKv} kV</span>
+                          <strong>{fmtMw(item.capabilityMw)}</strong>
+                        </div>
+                      )) : <span>Not assessed in September 2025</span>}
+                    </div>
+                  </div>
+                </Popup>
+              </CircleMarker>
+            );
+          })}
+
+          {showGenerators && data.layers.generators.features.map((feature, index) => {
+            const center = mapPoint(feature);
+            if (!center) return null;
+            const p = feature.properties;
+            const colour = GENERATOR_COLOURS[p.assetType ?? ""] ?? "#94a3b8";
+            return (
+              <CircleMarker key={`gen-${p.assetId ?? index}`} center={center}
+                radius={Math.min(11, 4 + Math.sqrt(p.maximumCapabilityMw ?? 0) / 6)}
+                pathOptions={{ color: "#f8fafc", fillColor: colour, fillOpacity: 0.9, weight: 1 }}>
+                <Popup>
+                  <div className="min-w-[205px] space-y-2 text-sm">
+                    <div><div className="font-semibold">{p.assetName ?? p.assetId}</div>
+                      <div className="text-xs text-muted-foreground">{p.assetId} ? {p.assetType}</div></div>
+                    <MapPopupRow label="Maximum capability" value={fmtMw(p.maximumCapabilityMw)} />
+                    <MapPopupRow label="Location" value={`${p.planningArea ?? "?"} ? ${p.region ?? "?"}`} />
+                  </div>
+                </Popup>
+              </CircleMarker>
+            );
+          })}
+
+          {showProjects && data.layers.projects.features.map((feature, index) => {
+            const center = mapPoint(feature);
+            if (!center) return null;
+            const p = feature.properties;
+            const isSupply = (p.supplyMw ?? 0) > 0;
+            const colour = isSupply ? "#fbbf24" : "#60a5fa";
+            return (
+              <CircleMarker key={`project-${p.projectNumber ?? index}`} center={center} radius={5}
+                pathOptions={{ color: colour, fillColor: colour, fillOpacity: 0.75, weight: 2 }}>
+                <Popup>
+                  <div className="min-w-[220px] space-y-2 text-sm">
+                    <div><div className="font-semibold">{p.projectName}</div>
+                      <div className="text-xs text-muted-foreground">P{p.projectNumber} ? Stage {p.stage ?? "?"}</div></div>
+                    <MapPopupRow label="Supply" value={fmtMw(p.supplyMw)} />
+                    <MapPopupRow label="Demand" value={fmtMw(p.demandMw)} />
+                    <MapPopupRow label="Type" value={p.fuelType ?? "?"} />
+                    <MapPopupRow label="Status" value={p.status ?? "?"} />
+                    <MapPopupRow label="Planning area" value={p.planningArea ?? "?"} />
+                  </div>
+                </Popup>
+              </CircleMarker>
+            );
+          })}
+        </MapContainer>
+
+        <div className="absolute right-4 top-4 z-[500] w-72 rounded-lg border border-border bg-card/95 p-4 shadow-xl backdrop-blur">
+          <div className="mb-2 text-sm font-medium">Map layers</div>
+          <LayerToggle checked={showRegions} onChange={setShowRegions} colour="#34d399" label="Six planning regions" count={data.counts.planningAreas} />
+          <LayerToggle checked={showLines} onChange={setShowLines} colour="#a78bfa" label="Transmission lines" count={filteredLines?.features.length ?? 0} />
+          <LayerToggle checked={showSubstations} onChange={setShowSubstations} colour="#f8fafc" label="Substations" count={data.counts.substations} />
+          <LayerToggle checked={showGenerators} onChange={setShowGenerators} colour="#38bdf8" label="Existing generators" count={data.counts.generators} />
+          <LayerToggle checked={showProjects} onChange={setShowProjects} colour="#fbbf24" label="Connection projects" count={data.counts.projects} />
+          <div className="mt-3 border-t border-border pt-3">
+            <div className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Minimum line voltage</div>
+            <div className="grid grid-cols-4 gap-1">
+              {[69, 138, 240, 500].map((value) => (
+                <button key={value} type="button" onClick={() => setMinimumVoltage(value)}
+                  className={`rounded border px-1.5 py-1 text-[10px] ${minimumVoltage === value
+                    ? "border-primary bg-primary/20 text-primary"
+                    : "border-border text-muted-foreground hover:bg-accent"}`}>
+                  {value}+
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+        <span>{data.capabilityDataAvailable
+          ? `Capability values loaded ? ${data.capabilityAsOf}`
+          : "Live geometry loaded ? capability tables not yet seeded"}</span>
+        <a href={data.sources.geometry} target="_blank" rel="noopener noreferrer"
+          className="flex items-center gap-1 hover:text-foreground">
+          Open official AESO map <ExternalLink className="h-3 w-3" />
+        </a>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        Exact AESO ArcGIS geometry: {data.counts.lines.toLocaleString()} lines, {data.counts.substations.toLocaleString()} substations,
+        {" "}{data.counts.generators.toLocaleString()} generators and {data.counts.projects.toLocaleString()} connection projects.
+        Project locations are approximate and subject to change.
+      </p>
+    </div>
+  );
+}
 
 function mwColour(mw: number): string {
   if (mw === 0) return "text-red-400";
@@ -132,7 +443,7 @@ export default function TransmissionCapability() {
           ["areas", "By planning area", Zap],
           ["substations", "Substations", Table2],
           ["lines", "Lines", Table2],
-          ["map", "AESO map", MapIcon],
+          ["map", "Network map", MapIcon],
         ] as const).map(([id, label, Icon]) => (
           <button
             key={id}
@@ -312,25 +623,7 @@ export default function TransmissionCapability() {
         </div>
       )}
 
-      {tab === "map" && (
-        <div className="space-y-3">
-          <div className="rounded-lg border border-border overflow-hidden bg-card">
-            <iframe
-              src={ARCGIS_EMBED}
-              title="AESO Transmission Capability Map"
-              className="w-full"
-              style={{ height: "70vh", border: 0 }}
-              loading="lazy"
-            />
-          </div>
-          <p className="text-xs text-muted-foreground">
-            AESO&apos;s own ArcGIS viewer, embedded live — always current, no sync needed. A native
-            map with our own substation, line, generator and queue-project layers needs facility
-            coordinates, which AESO publishes as GIS boundary data rather than in the capability
-            workbook.
-          </p>
-        </div>
-      )}
+      {tab === "map" && <NativeMap />}
 
       {/* Source links */}
       <div className="rounded-lg border border-border bg-card p-4">

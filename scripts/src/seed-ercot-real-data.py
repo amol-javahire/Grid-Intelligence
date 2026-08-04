@@ -18,6 +18,7 @@ Run:
 
 import os
 import sys
+import datetime
 import time
 import psycopg2
 import psycopg2.extras
@@ -33,7 +34,27 @@ if not DB_URL:
     sys.exit("DATABASE_URL not set")
 
 START_YEAR, START_MONTH = 2024, 1
-END_YEAR,   END_MONTH   = 2026, 6
+
+# END tracks the CURRENT month — do not hardcode it.
+#
+# EIA-930 is hourly operating data published with roughly a 1-2 day lag, NOT a
+# 60-day lag like ERCOT's SCED disclosure. A hardcoded "2026, 6" silently froze
+# these tables five weeks behind while looking like a source limitation
+# (caught 2026-08-03). Requesting a partially-complete current month is fine:
+# EIA returns what exists and the insert is ON CONFLICT DO NOTHING, so re-runs
+# fill the gap as days publish.
+#
+# Override for a targeted backfill:  SEED_START=2026-06 SEED_END=2026-08
+def _ym(env_name: str, default: tuple[int, int]) -> tuple[int, int]:
+    raw = os.environ.get(env_name)
+    if not raw:
+        return default
+    y, m = raw.split("-")
+    return int(y), int(m)
+
+_today = datetime.date.today()
+START_YEAR, START_MONTH = _ym("SEED_START", (START_YEAR, START_MONTH))
+END_YEAR,   END_MONTH   = _ym("SEED_END",   (_today.year, _today.month))
 
 FUEL_MAP = {
     "COL": "coal",

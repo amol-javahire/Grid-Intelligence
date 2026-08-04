@@ -153,7 +153,9 @@ VALUES
    'HOUR-BEGINNING as a NAIVE timestamp — carries no zone despite looking precise. Proven one hour behind the hub table: identical DA values 91/87/67/49 appear at hours 20/19/21/18 here vs 21/20/22/19 in the hub table.'),
   ('caiso_nodal_da_rt_hourly','CAISO','America/Los_Angeles','HB_0_23','naive_timestamp',TRUE,
    'CAISO OASIS',TRUE,'v_caiso_nodal_price_utc',
-   'VERIFY: same shape as ERCOT nodal, convention assumed identical but not yet measured against caiso_hub_da_rt_hourly.'),
+   'VERIFIED 2026-08-03: hour-beginning Pacific, one hour behind caiso_hub_da_rt_hourly. Identical DA values 54/53/49/47 appear at hours 19/20/21/18 here vs 20/21/22/19 in the hub table. '
+   'NODE NAMING TRAP: stores full OASIS identifiers (TH_SP15_GEN-APND) while the hub table stores plain SP15 — joining the two on node name returns ZERO rows. '
+   'Worse, ILIKE ''%SP15%'' also matches TH_SP15_GEN_ONPEAK-APND and TH_SP15_GEN_OFFPEAK-APND, which are SEPARATE products; a LIKE match triple-counts. Match exactly.'),
 
   -- Already unambiguous.
   ('ercot_hourly_dispatch','ERCOT','UTC','TIMESTAMPTZ','timestamptz',FALSE,

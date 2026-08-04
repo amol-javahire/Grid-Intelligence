@@ -1411,8 +1411,6 @@ router.get("/aeso/transmission-capability/lines", async (req, res) => {
              MIN(capability_mw)::float8                 AS binding_capability_mw,
              MAX(capability_mw)::float8                 AS max_endpoint_mw,
              STRING_AGG(DISTINCT substation_name, ' ↔ ' ORDER BY substation_name) AS endpoints,
-             MIN(endpoint_a)                            AS endpoint_a,
-             MIN(endpoint_b)                            AS endpoint_b,
              MIN(planning_area_code)::int               AS planning_area_code,
              MIN(planning_area_name)                    AS planning_area_name,
              MIN(tfo)                                   AS tfo,

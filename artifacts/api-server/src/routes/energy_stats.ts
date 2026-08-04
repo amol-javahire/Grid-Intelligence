@@ -879,8 +879,9 @@ router.get("/ercot/hourly-profile", async (_req, res) => {
     }>(sql`
       -- Both source tables are EIA-930 UTC, so this join is internally correct.
       -- Convert to Central HERE rather than with a fixed offset in JS: the old
-      -- `hour - 6` was CST year-round and so ran an hour late through DST,
+      -- "hour - 6" was CST year-round and so ran an hour late through DST,
       -- which is most of the cooling season and therefore most of what matters.
+      -- (No backticks in this comment: it lives inside a sql template literal.)
       SELECT EXTRACT(hour FROM (make_timestamp(z.year, z.month, z.day, z.hour, 0, 0)
                AT TIME ZONE 'UTC') AT TIME ZONE 'America/Chicago')::int AS hour,
         ROUND(AVG(z.total_load))::int  AS system_load_mw,
