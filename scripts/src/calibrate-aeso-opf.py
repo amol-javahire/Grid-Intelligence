@@ -72,51 +72,82 @@ def parse_args():
     return p.parse_args()
 
 
+def _query(conn, sql: str, params: tuple) -> list[tuple]:
+    with conn.cursor() as cur:
+        cur.execute(sql, params)
+        return cur.fetchall()
+
+
 def load_observed(args) -> pl.DataFrame:
     """
-    Observed hourly load, pool price and wind output.
+    Observed hourly load, pool price and wind/solar output, joined on
+    (date, hour_ending).
 
-    TIMEZONE: aeso_hourly_pool_price is date + hour_ending 1..24 in Mountain
-    time; aeso_hourly_gen_output is the AESO API's own hourly series, also
-    Mountain. Both local, so they join directly — but this is asserted from
-    iso_table_metadata, not assumed. Do NOT join either to an EIA-930 table
-    without converting; those are UTC.
+    aeso_hourly_gen_output is WIDE — one column per fuel (gas_mw, wind_mw,
+    solar_mw, ...) — not the long fuel_type/gen_mw shape the EIA-930 tables use.
+    Two AESO tables, two different layouts; check before writing the join.
+
+    TIMEZONE: both tables are date + hour_ending 1..24 in MOUNTAIN time, so they
+    join directly. Do NOT join either to an EIA-930 table on these columns —
+    those are UTC hour-beginning. See iso_table_metadata.
+
+    Uses psycopg2 directly rather than pl.read_database: the latter's
+    execute_options parameter passing silently returned zero rows here rather
+    than erroring, which is the worst possible failure mode for a calibration
+    script — it would have reported "no data" for a query that was actually fine.
     """
     end = args.end or date.today().isoformat()
     conn = psycopg2.connect(DB_URL)
 
-    price = pl.read_database(
-        """
-        SELECT date, hour_ending, pool_price::float8 AS pool_price,
-               ail_mw::float8 AS ail_mw
+    price_rows = _query(conn, """
+        SELECT date::text, hour_ending, pool_price::float8, ail_mw::float8
         FROM aeso_hourly_pool_price
-        WHERE date >= %(s)s AND date <= %(e)s
+        WHERE date >= %s AND date <= %s
           AND pool_price IS NOT NULL AND ail_mw IS NOT NULL AND ail_mw > 0
-        """,
-        connection=conn, execute_options={"parameters": {"s": args.start, "e": end}},
-    )
+        ORDER BY date, hour_ending
+    """, (args.start, end))
+    price = pl.DataFrame(
+        {"date": [r[0] for r in price_rows],
+         "hour_ending": [int(r[1]) for r in price_rows],
+         "pool_price": [float(r[2]) for r in price_rows],
+         "ail_mw": [float(r[3]) for r in price_rows]},
+    ) if price_rows else pl.DataFrame(
+        schema={"date": pl.Utf8, "hour_ending": pl.Int64,
+                "pool_price": pl.Float64, "ail_mw": pl.Float64})
+    print(f"  pool price rows: {price.height:,}")
 
     try:
-        wind = pl.read_database(
-            """
-            SELECT date, hour_ending,
-                   SUM(gen_mw) FILTER (WHERE fuel_type = 'wind')::float8  AS wind_mw,
-                   SUM(gen_mw) FILTER (WHERE fuel_type = 'solar')::float8 AS solar_mw
+        gen_rows = _query(conn, """
+            SELECT date::text, hour_ending,
+                   COALESCE(wind_mw, 0)::float8, COALESCE(solar_mw, 0)::float8
             FROM aeso_hourly_gen_output
-            WHERE date >= %(s)s AND date <= %(e)s
-            GROUP BY date, hour_ending
-            """,
-            connection=conn, execute_options={"parameters": {"s": args.start, "e": end}},
-        )
+            WHERE date >= %s AND date <= %s
+            ORDER BY date, hour_ending
+        """, (args.start, end))
+        gen = pl.DataFrame(
+            {"date": [r[0] for r in gen_rows],
+             "hour_ending": [int(r[1]) for r in gen_rows],
+             "wind_mw": [float(r[2]) for r in gen_rows],
+             "solar_mw": [float(r[3]) for r in gen_rows]},
+        ) if gen_rows else pl.DataFrame(
+            schema={"date": pl.Utf8, "hour_ending": pl.Int64,
+                    "wind_mw": pl.Float64, "solar_mw": pl.Float64})
+        print(f"  generation rows: {gen.height:,}")
     except Exception as exc:                                     # noqa: BLE001
-        print(f"  ⚠  wind/solar unavailable ({exc}) — falling back to a fixed "
-              f"capacity factor, which weakens the test materially")
-        wind = pl.DataFrame({"date": [], "hour_ending": [], "wind_mw": [], "solar_mw": []})
+        print(f"  ⚠  wind/solar unavailable ({exc})\n"
+              f"     Falling back to FIXED capacity factors, which weakens the "
+              f"test materially — a wrong wind assumption produces a price error "
+              f"that looks like a model defect. Fix the source before trusting "
+              f"any bias figure below.")
+        gen = pl.DataFrame(schema={"date": pl.Utf8, "hour_ending": pl.Int64,
+                                   "wind_mw": pl.Float64, "solar_mw": pl.Float64})
 
     conn.close()
 
-    df = price.join(wind, on=["date", "hour_ending"], how="left") if wind.height else price
-    return df.drop_nulls(subset=["pool_price", "ail_mw"])
+    df = price.join(gen, on=["date", "hour_ending"], how="left") if gen.height else price
+    matched = df["wind_mw"].drop_nulls().len() if "wind_mw" in df.columns else 0
+    print(f"  hours with observed wind: {matched:,} / {df.height:,}")
+    return df
 
 
 def stratified_sample(df: pl.DataFrame, n: int) -> pl.DataFrame:
@@ -128,12 +159,14 @@ def stratified_sample(df: pl.DataFrame, n: int) -> pl.DataFrame:
     tails — and those are exactly where an islanded model (no imports) should
     break. Stratifying guarantees they are represented.
     """
-    df = df.with_columns(
-        pl.col("ail_mw").qcut(10, labels=[str(i) for i in range(10)]).alias("load_bin")
-    )
-    per_bin = max(1, n // 10)
-    return (df.group_by("load_bin", maintain_order=True)
-              .map_groups(lambda g: g.sample(min(per_bin, g.height), shuffle=True, seed=42)))
+    if df.height <= n:
+        return df
+    # Sort by load, then take every k-th row. Guarantees even coverage of the
+    # whole load range including both tails, with no dependence on polars'
+    # group_by/map_groups API (which has shifted between versions).
+    k = df.height / n
+    idx = [int(i * k) for i in range(n)]
+    return df.sort("ail_mw")[idx]
 
 
 def main() -> None:
