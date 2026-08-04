@@ -109,6 +109,13 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--zone", default=None, help="test one zone only, e.g. SDGE")
     p.add_argument("--year", type=int, default=DEFAULT_YEAR)
     p.add_argument("--month", type=int, default=DEFAULT_MONTH)
+    # A single month is 30 daily observations. Differences of a few hundredths
+    # of an r are noise at that sample size, and a candidate that wins one month
+    # can lose another — Fresno topped July on pooled hourly and came LAST but
+    # one on July daily. Use a season before committing to a coordinate.
+    p.add_argument("--months", default=None,
+                   help="month range, e.g. 5-9 for the cooling season. "
+                        "Overrides --month. Strongly preferred for any switch.")
     p.add_argument("--daily", action="store_true",
                    help="correlate DAILY peak load vs DAILY max temp instead of "
                         "pooled hourly. Authoritative for CAISO, where pooled "
@@ -139,19 +146,27 @@ def to_daily(hourly: dict[tuple, float], tz: str, agg: str) -> dict:
     return {k: fn(v) for k, v in buckets.items() if len(v) >= 20}
 
 
-def month_bounds(year: int, month: int) -> tuple[str, str]:
+def month_range(args: argparse.Namespace) -> tuple[int, int]:
+    if args.months:
+        lo, hi = (int(x) for x in args.months.split("-"))
+        return lo, hi
+    return args.month, args.month
+
+
+def month_bounds(year: int, m_lo: int, m_hi: int) -> tuple[str, str]:
     import calendar
-    last = calendar.monthrange(year, month)[1]
-    return f"{year}-{month:02d}-01", f"{year}-{month:02d}-{last:02d}"
+    last = calendar.monthrange(year, m_hi)[1]
+    return f"{year}-{m_lo:02d}-01", f"{year}-{m_hi:02d}-{last:02d}"
 
 
-def fetch_temps(points: list[tuple[float, float]], year: int, month: int) -> dict[tuple, float]:
+def fetch_temps(points: list[tuple[float, float]], year: int,
+                m_lo: int, m_hi: int) -> dict[tuple, float]:
     """
     Mean temperature across `points` keyed by (y, m, d, h) in UTC.
     Averaging coordinates is a crude stand-in for load weighting — good enough
     to tell whether weighting would help at all before building the real thing.
     """
-    start, end = month_bounds(year, month)
+    start, end = month_bounds(year, m_lo, m_hi)
     series: list[dict[tuple, float]] = []
     for lat, lon in points:
         r = requests.get(ARCHIVE_URL, timeout=120, params={
@@ -179,13 +194,13 @@ def fetch_temps(points: list[tuple[float, float]], year: int, month: int) -> dic
     return {k: statistics.fmean(s[k] for s in series) for k in keys}
 
 
-def fetch_load(iso: str, zone: str, year: int, month: int) -> dict[tuple, float]:
+def fetch_load(iso: str, zone: str, year: int, m_lo: int, m_hi: int) -> dict[tuple, float]:
     conn = psycopg2.connect(DB_URL)
     cur = conn.cursor()
     cur.execute(
         f"SELECT year, month, day, hour, load_mw FROM {LOAD_TABLE[iso]} "
-        "WHERE zone = %s AND year = %s AND month = %s",
-        (zone, year, month),
+        "WHERE zone = %s AND year = %s AND month BETWEEN %s AND %s",
+        (zone, year, m_lo, m_hi),
     )
     rows = {(y, m, d, h): float(v) for y, m, d, h, v in cur.fetchall() if v is not None}
     cur.close()
@@ -212,18 +227,24 @@ def main() -> None:
         sys.exit(f"No candidates for --zone {args.zone}. "
                  f"Known: {sorted(z for _, z in CANDIDATES)}")
 
+    m_lo, m_hi = month_range(args)
     mode = "DAILY peak load vs max temp" if args.daily else "POOLED HOURLY"
-    print(f"Candidate weather points — {mode} — {args.year}-{args.month:02d}")
+    window = f"{args.year}-{m_lo:02d}" if m_lo == m_hi else f"{args.year}-{m_lo:02d}..{m_hi:02d}"
+    print(f"Candidate weather points — {mode} — {window}")
     if not args.daily:
         print("NOTE: pooled hourly is only valid where load and temperature "
               "peaks are in phase.\n      CAISO's are not — confirm any switch "
               "with --daily before re-seeding.")
+    if args.daily and m_lo == m_hi:
+        print("NOTE: one month is ~30 daily points. Gaps under ~0.10 are noise "
+              "at that size.\n      Use --months 5-9 before committing to a "
+              "coordinate.")
     print()
 
     for (iso, zone), options in targets.items():
-        load = fetch_load(iso, zone, args.year, args.month)
+        load = fetch_load(iso, zone, args.year, m_lo, m_hi)
         if not load:
-            print(f"{iso}/{zone}: no load rows for that month — skipping\n")
+            print(f"{iso}/{zone}: no load rows in that window — skipping\n")
             continue
 
         tz = MARKET_TZ[iso]
@@ -234,7 +255,7 @@ def main() -> None:
               f"{'─' * max(0, 40 - len(zone))}")
         results = []
         for label, points in options:
-            temps = fetch_temps(points, args.year, args.month)
+            temps = fetch_temps(points, args.year, m_lo, m_hi)
             temp_series = to_daily(temps, tz, "max") if args.daily else temps
             keys = sorted(set(temp_series) & set(load_series))
             r = pearson([temp_series[k] for k in keys], [load_series[k] for k in keys])
@@ -249,13 +270,19 @@ def main() -> None:
             print(f"   r={r:+.3f}{arrow:>10}  {label:<30} [{coords}] n={n}{mark}")
 
         best = max(results, key=lambda x: x[0])
+        n = results[0][3]
         if best[1].startswith("CURRENT"):
-            print(f"   → keep current point\n")
+            print("   → keep current point\n")
         else:
             gain = best[0] - baseline
             kind = "blend" if len(best[2]) > 1 else "single point"
-            print(f"   → switch to {best[1]} ({kind}), r {baseline:+.3f} → "
-                  f"{best[0]:+.3f} ({gain:+.3f})\n")
+            # Fisher z standard error, ~1/sqrt(n-3). A gain smaller than this
+            # is not distinguishable from sampling noise, and switching on it
+            # is overfitting to one window.
+            se = (1.0 / max(n - 3, 1)) ** 0.5
+            verdict = "SWITCH" if gain > se else "NOT SIGNIFICANT — keep current"
+            print(f"   → {verdict}: {best[1]} ({kind}), r {baseline:+.3f} → "
+                  f"{best[0]:+.3f} ({gain:+.3f}, noise floor ~{se:.3f}, n={n})\n")
 
 
 if __name__ == "__main__":
