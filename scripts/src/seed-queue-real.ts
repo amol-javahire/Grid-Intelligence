@@ -332,12 +332,10 @@ async function fetchEIAGenerators(
   market: string,
   centroids: CentroidMap,
 ): Promise<Array<typeof queueProjectsTable.$inferInsert>> {
-  const PJM_NODES = [
-    "WESTERN HUB","EASTERN HUB","AEP-DAYTON HUB","NI HUB","PSEG",
-    "PPL","DOM","BGE","JCPL","PENELEC","APS",
-  ];
-  const ERCOT_NODES = ["LZ_HOUSTON","LZ_WEST","LZ_NORTH","LZ_SOUTH","LZ_AEN","LZ_CPS","LZ_LCRA"];
-  const nodes = market === "ERCOT" ? ERCOT_NODES : PJM_NODES;
+  // PJM_NODES / ERCOT_NODES removed with the random-node fabrication below.
+  // They existed only to be sampled at random. If a real node assignment is
+  // ever needed here it must come from the queue record's own point of
+  // interconnection, not from a list picked arbitrarily.
 
   const stateParam = states.map((s) => `facets[stateid][]=${s}`).join("&");
   const statusParam = ["P", "L", "T", "U", "V"].map((s) => `facets[status][]=${s}`).join("&");
@@ -394,10 +392,26 @@ async function fetchEIAGenerators(
 
     const fuelType = mapEIAFuel(String(row.technology ?? ""));
     const state = String(row.stateid ?? "").trim();
-    const sc = STATE_CENTERS[state];
-    const lat = sc ? sc[0] + (Math.random() - 0.5) * sc[2] : null;
-    const lon = sc ? sc[1] + (Math.random() - 0.5) * sc[3] : null;
 
+    // FABRICATION REMOVED 2026-08-04.
+    //
+    // This block previously wrote:
+    //   lat = stateCentre + (Math.random() - 0.5) * spread
+    //   interconnectionNode = nodes[Math.floor(Math.random() * nodes.length)]
+    //
+    // i.e. coordinates from a random number generator stored to five decimal
+    // places, and a RANDOMLY CHOSEN settlement point. The interconnection node
+    // drives Basis Risk, Congestion and Curtailment scoring, so a random value
+    // there produces confident-looking scores with no relationship to the
+    // project. On the map the pins looked like real project sites.
+    //
+    // Verified 2026-08-04 that this path had never actually run — zero rows in
+    // queue_projects carry a '-EIA-' queue_id, so no fabricated data reached
+    // the database. It is removed rather than left dormant because a single
+    // upstream queue-fetch failure would have silently populated it.
+    //
+    // NULL is the correct answer for "we do not know where this is". Downstream
+    // code must handle absent coordinates; it must not be handed invented ones.
     projects.push({
       projectName: name,
       market,
@@ -405,11 +419,11 @@ async function fetchEIAGenerators(
       fuelType,
       capacityMw: String(mw.toFixed(2)),
       status: "active",
-      latitude:  lat !== null ? String(lat.toFixed(5)) : null,
-      longitude: lon !== null ? String(lon.toFixed(5)) : null,
+      latitude:  null,
+      longitude: null,
       county:    null,
       state:     state || null,
-      interconnectionNode: nodes[Math.floor(Math.random() * nodes.length)],
+      interconnectionNode: null,
       requestDate: null,
       studyGroupPhase: null,
       withdrawalDate: null,

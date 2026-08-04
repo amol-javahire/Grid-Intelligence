@@ -1,4 +1,26 @@
 /**
+ * ##########################  DEPRECATED — DO NOT RUN  ######################
+ *
+ * SUPERSEDED 2026-08-04 by infra/2026-08-04-build-caiso-node-stats.sql, which
+ * aggregates caiso_node_stats from REAL CAISO OASIS prices in
+ * caiso_nodal_da_rt_hourly — 2,032 resource nodes, Jan 2025 onward.
+ *
+ * This file writes SYNTHETIC data to that same table: hardcoded per-zone base
+ * prices with Math.random() noise applied (see ZONE_BASE below and the noise
+ * terms around lines 228-244). Nothing in the table name, the schema, or the
+ * original header ("Generates real-pattern settlement points") indicated that.
+ * The header's phrase "real-pattern" meant "shaped to look plausible", not
+ * "derived from real data" — which is exactly how synthetic rows have twice
+ * been mistaken for real ones in this project.
+ *
+ * RUNNING THIS DESTROYS THE REAL AGGREGATION. It would replace measured basis
+ * and negative-price percentages — the spread that makes CAISO candidates
+ * rankable at all — with numbers generated from a random number generator.
+ *
+ * Before this was fixed, caiso_node_stats held 3 nodes and all 2,311 CAISO
+ * candidates were scored off hub averages. Do not undo that.
+ * ###########################################################################
+ *
  * Seed CAISO resource nodes into caiso_node_stats
  * Generates real-pattern settlement points with 2022-2025 monthly data
  */

@@ -40,7 +40,10 @@ WITH external_ba(code) AS (
   VALUES ('WALC'),('WACM'),('TEPC'),('AZPS'),('PACE'),('PACW'),('IPCO'),
          ('BPAT'),('PSEI'),('TPWR'),('SRP'),('NWMT'),('NEVP'),('LDWP'),
          ('BANC'),('IID'),('PNM'),('PSCO'),('CHPD'),('DOPD'),('GCPD'),
-         ('SCL'),('TIDC'),('AVRN'),('PGE'),('MIDC'),('SUMMIT'),('CISO')
+         ('SCL'),('TIDC'),('AVRN'),('PGE'),('MIDC'),('SUMMIT'),('CISO'),
+         -- second pass 2026-08-04
+         ('AVA'),('BCHA'),('BHBA'),('DC'),('WAUW'),('GRIF'),('EPE'),
+         ('APS'),('SCE'),('SDGE'),('TH'),('OASIS')
 )
 UPDATE caiso_node_stats s
 SET node_type = 'intertie'
@@ -50,8 +53,27 @@ WHERE s.node_type = 'other'
 UPDATE caiso_node_stats
 SET node_type = 'aggregation'
 WHERE node_type = 'other'
-  AND (node LIKE 'CLAP\_%' OR node LIKE 'DLAP\_%'
-    OR node LIKE 'ELAP\_%' OR node LIKE 'DGAP\_%');
+  AND (node LIKE 'CLAP\_%' OR node LIKE 'DLAP\_%' OR node LIKE 'ELAP\_%'
+    OR node LIKE 'DGAP\_%' OR node LIKE 'CGAP\_%' OR node LIKE 'TGAP\_%');
+
+-- CATCH-ALL, deliberately conservative.
+--
+-- Enumerating balancing-authority codes one round at a time is a losing game —
+-- two passes turned up AVA, BCHA, BHBA, CGAP_ and DC_ that the first missed.
+-- So invert the test: a genuine CAISO INTERNAL resource node carries a voltage
+-- segment, e.g. VOLTA2_7_N002, BALCH1_7_B2, ALAMIT_2_PL1X3. That pattern is
+-- what identified all 2,032 resource nodes.
+--
+-- Anything left that has NO voltage segment and ends in -APND is an aggregate
+-- pricing node of some kind — intertie, border point, or aggregation. Which
+-- kind matters for documentation, but NOT for the scorer, which only asks
+-- "is this siteable?". So label it honestly as external_or_aggregate rather
+-- than guessing at a specific subtype we have not verified.
+UPDATE caiso_node_stats
+SET node_type = 'external_or_aggregate'
+WHERE node_type = 'other'
+  AND node LIKE '%-APND'
+  AND node !~ '_[0-9]_';
 
 COMMIT;
 
