@@ -7,20 +7,28 @@ temperatures from Open-Meteo (UTC), joins them to that zone's real hourly load,
 and reports Pearson r. Best r wins.
 
 WHY THIS EXISTS
-  The first pass at CAISO centroids produced SDGE r = -0.455 and PGAE r = 0.221,
-  against 0.65-0.92 for every ERCOT and PJM zone. Two distinct mistakes:
+  The first pass at CAISO centroids produced SDGE r = -0.455 and PGAE r = 0.221
+  on POOLED HOURLY data, against 0.65-0.92 for every ERCOT and PJM zone.
 
-    SDGE — the point was downtown San Diego, on the ocean side of the marine
-    layer. On the hottest inland days the coastal sea breeze strengthens and
-    the coast gets COOLER, so coastal temperature runs anti-correlated with the
-    inland heat that actually drives SDG&E's air-conditioning load.
+  Running this harness showed SDGE was a false alarm: all seven San Diego
+  candidates returned -0.45 to -0.50, and moving inland made it WORSE. Seven
+  coordinates giving one answer means location is not the variable. On the
+  DAILY formulation the same data scores +0.847 (peak vs Tmax) and +0.913
+  (avg vs CDD) — the strongest in CAISO. The pooled-hourly negative is
+  Simpson's paradox: within any fixed hour-window temp and load correlate
+  positively (+0.52 evening, +0.28 midday), but SDGE's load peak lags its
+  temperature peak by hours, so pooling across the diurnal cycle lets
+  between-hour variance dominate and flip the sign.
 
-    PGAE — the point was Sacramento, which is served by SMUD, a municipal
-    utility that is not part of PG&E's DLAP at all. The centroid sat in
-    territory the zone does not serve.
+  PGAE was a real error and worth fixing: the point was Sacramento, served by
+  SMUD — a municipal utility outside PG&E's DLAP entirely — so the centroid sat
+  in territory the zone does not serve.
 
-  Both were avoidable by checking rather than reasoning from a map. Hence this
-  script: candidate coordinates are cheap, and r is an unambiguous referee.
+  LESSON, and the reason to keep this script: pooled hourly r is a valid
+  diagnostic only where load and temperature peaks are roughly in phase.
+  ERCOT and PJM are; CAISO is not. Always confirm a candidate on the daily
+  formulation (--daily) before re-seeding. A single number that disagrees with
+  six others is usually the test being wrong, not the world.
 
 BLENDS
   A candidate may carry several points. PG&E spans the mild Bay Area and the
@@ -101,7 +109,34 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--zone", default=None, help="test one zone only, e.g. SDGE")
     p.add_argument("--year", type=int, default=DEFAULT_YEAR)
     p.add_argument("--month", type=int, default=DEFAULT_MONTH)
+    p.add_argument("--daily", action="store_true",
+                   help="correlate DAILY peak load vs DAILY max temp instead of "
+                        "pooled hourly. Authoritative for CAISO, where pooled "
+                        "hourly r is distorted by the load/temperature phase lag.")
     return p.parse_args()
+
+
+MARKET_TZ = {"ERCOT": "America/Chicago", "CAISO": "America/Los_Angeles",
+             "PJM": "America/New_York"}
+
+
+def to_daily(hourly: dict[tuple, float], tz: str, agg: str) -> dict:
+    """
+    Collapse UTC-keyed hourly values onto LOCAL calendar days.
+
+    Uses zoneinfo rather than a fixed offset so DST transitions land on the
+    right local date — the same reason the degree-day rollup is done in SQL
+    with AT TIME ZONE rather than by subtracting a constant.
+    """
+    import datetime as _dt
+    from zoneinfo import ZoneInfo
+    zone = ZoneInfo(tz)
+    buckets: dict[_dt.date, list[float]] = {}
+    for (y, m, d, h), v in hourly.items():
+        local = _dt.datetime(y, m, d, h, tzinfo=_dt.timezone.utc).astimezone(zone)
+        buckets.setdefault(local.date(), []).append(v)
+    fn = max if agg == "max" else statistics.fmean
+    return {k: fn(v) for k, v in buckets.items() if len(v) >= 20}
 
 
 def month_bounds(year: int, month: int) -> tuple[str, str]:
@@ -177,8 +212,13 @@ def main() -> None:
         sys.exit(f"No candidates for --zone {args.zone}. "
                  f"Known: {sorted(z for _, z in CANDIDATES)}")
 
-    print(f"Candidate weather points vs real hourly load — "
-          f"{args.year}-{args.month:02d}\n")
+    mode = "DAILY peak load vs max temp" if args.daily else "POOLED HOURLY"
+    print(f"Candidate weather points — {mode} — {args.year}-{args.month:02d}")
+    if not args.daily:
+        print("NOTE: pooled hourly is only valid where load and temperature "
+              "peaks are in phase.\n      CAISO's are not — confirm any switch "
+              "with --daily before re-seeding.")
+    print()
 
     for (iso, zone), options in targets.items():
         load = fetch_load(iso, zone, args.year, args.month)
@@ -186,13 +226,18 @@ def main() -> None:
             print(f"{iso}/{zone}: no load rows for that month — skipping\n")
             continue
 
-        print(f"── {iso} / {zone} ({len(load)} load hours) "
+        tz = MARKET_TZ[iso]
+        load_series = to_daily(load, tz, "max") if args.daily else load
+        unit = "days" if args.daily else "hours"
+
+        print(f"── {iso} / {zone} ({len(load_series)} load {unit}) "
               f"{'─' * max(0, 40 - len(zone))}")
         results = []
         for label, points in options:
             temps = fetch_temps(points, args.year, args.month)
-            keys = sorted(set(temps) & set(load))
-            r = pearson([temps[k] for k in keys], [load[k] for k in keys])
+            temp_series = to_daily(temps, tz, "max") if args.daily else temps
+            keys = sorted(set(temp_series) & set(load_series))
+            r = pearson([temp_series[k] for k in keys], [load_series[k] for k in keys])
             results.append((r, label, points, len(keys)))
 
         baseline = results[0][0]

@@ -53,9 +53,24 @@ SELECT 'PJM', t.zone FROM (SELECT DISTINCT zone FROM iso_hourly_temps WHERE iso=
 
 \echo ''
 \echo '=== 5. THE ACTUAL TEST — does temperature explain load? ==='
-\echo 'Pearson r between hourly temp and hourly load, July 2025, top zones.'
-\echo 'Summer-peaking systems should be STRONGLY POSITIVE (0.6-0.9).'
-\echo 'A near-zero r means the join is misaligned, not that weather does not matter.'
+\echo ''
+\echo 'READ THIS BEFORE REACTING TO A NEGATIVE NUMBER.'
+\echo 'Checks 5-7 pool ALL 24 hours, which is only valid where a market''s load'
+\echo 'and temperature peaks are roughly in phase. ERCOT and PJM are; CAISO is'
+\echo 'not. On 2026-08-03 this query returned SDGE r=-0.455 and triggered a hunt'
+\echo 'for a bad centroid that did not exist — seven different San Diego'
+\echo 'coordinates all returned -0.45 to -0.50.'
+\echo ''
+\echo 'It is Simpson''s paradox. Within any fixed hour-window temp and load'
+\echo 'correlate POSITIVELY everywhere (SDGE: +0.52 evening, +0.28 midday). But'
+\echo 'SDGE load peaks hours after its temperature peak, so pooling across the'
+\echo 'diurnal cycle lets between-hour variance dominate and flip the sign.'
+\echo ''
+\echo 'CHECK 5b IS AUTHORITATIVE. Judge the data on the DAILY formulation,'
+\echo 'which is what load forecasting actually uses and what the degree-day'
+\echo 'table was built for. Same SDGE data scores +0.85 / +0.91 there.'
+\echo ''
+\echo 'Pearson r, hourly, July 2025 — diagnostic only:'
 SELECT l.zone,
        ROUND(CORR(t.temp_c, l.load_mw)::numeric, 3) AS r,
        COUNT(*) AS hours
@@ -89,6 +104,48 @@ JOIN iso_hourly_temps t
  AND t.year = l.year AND t.month = l.month AND t.day = l.day AND t.hour = l.hour
 WHERE l.year = 2025 AND l.month = 7
 GROUP BY l.zone ORDER BY r_july DESC;
+
+\echo ''
+\echo '=== 5b. AUTHORITATIVE — daily peak load vs daily max temp ==='
+\echo 'Removes the diurnal phase lag that makes checks 5-7 unreliable for'
+\echo 'CAISO. This is the formulation load forecasting uses. Every zone in'
+\echo 'every market should be strongly positive in summer; anything below ~0.5'
+\echo 'here is a genuine problem worth investigating.'
+\echo ''
+\echo 'Known exception: ERCOT FWES. Far West is the Permian Basin and its load'
+\echo 'is oilfield electrification — pumping, compression, drilling — which runs'
+\echo 'flat and does not respond to air temperature. Weak r there is CORRECT.'
+WITH daily AS (
+  SELECT 'ERCOT' AS iso, zone,
+         ((make_timestamp(year,month,day,hour,0,0) AT TIME ZONE 'UTC')
+            AT TIME ZONE 'America/Chicago')::date AS ld,
+         MAX(load_mw) AS peak_mw, AVG(load_mw) AS avg_mw
+  FROM ercot_hourly_zonal_load WHERE year=2025 AND month BETWEEN 5 AND 9
+  GROUP BY 1,2,3
+  UNION ALL
+  SELECT 'CAISO', zone,
+         ((make_timestamp(year,month,day,hour,0,0) AT TIME ZONE 'UTC')
+            AT TIME ZONE 'America/Los_Angeles')::date,
+         MAX(load_mw), AVG(load_mw)
+  FROM caiso_hourly_zonal_load WHERE year=2025 AND month BETWEEN 5 AND 9
+  GROUP BY 1,2,3
+  UNION ALL
+  SELECT 'PJM', zone,
+         ((make_timestamp(year,month,day,hour,0,0) AT TIME ZONE 'UTC')
+            AT TIME ZONE 'America/New_York')::date,
+         MAX(load_mw), AVG(load_mw)
+  FROM pjm_hourly_zonal_load WHERE year=2025 AND month BETWEEN 5 AND 9
+  GROUP BY 1,2,3
+)
+SELECT d.iso, d.zone,
+       ROUND(CORR(t.temp_c_max, d.peak_mw)::numeric, 3) AS r_peak_vs_tmax,
+       ROUND(CORR(t.cdd_f,      d.avg_mw )::numeric, 3) AS r_avg_vs_cdd,
+       COUNT(*) AS days
+FROM daily d
+JOIN iso_daily_degree_days t
+  ON t.iso = d.iso AND t.zone = d.zone AND t.local_date = d.ld
+GROUP BY d.iso, d.zone
+ORDER BY d.iso, r_peak_vs_tmax DESC;
 
 \echo ''
 \echo '=== 8. Degree days: local rollup, DST days visible ==='
