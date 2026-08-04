@@ -277,14 +277,27 @@ DIFFERENT thing from gen-stack tables — one row per generator per hour, not
 aggregated by fuel type. Do not conflate the two when building CAISO's
 per-generator dispatch table.
 
-**Load tables** (min coverage Jan 2025):
+**Load tables** — all three US markets seeded from EIA-930 (2026-08-03),
+hourly, Jan 2024 → current month, via `scripts/src/seed-eia930-markets.py`.
 
-| Table | Status |
-|---|---|
-| `ercot_hourly_zonal_load` | exists as `ercot_load_by_zone`, **SYNTHETIC** — rename + real source both pending |
-| `aeso_hourly_load` | real, but duplicated across `aeso_supply_demand.ail_mw` and `aeso_hourly_pool_price.ail_mw` — consolidate |
-| `caiso_hourly_zonal_load` | not built |
-| `pjm_hourly_zonal_load` | not built |
+| Table | Zones | Rows | Notes |
+|---|---|---|---|
+| `ercot_hourly_zonal_load` | 8 | 180,804 | COAS EAST FWES NCEN NRTH SCEN SOUT WEST — the weather zones |
+| `caiso_hourly_zonal_load` | 4 | 90,226 | PGAE SCE SDGE VEA — the four DLAPs |
+| `pjm_hourly_zonal_load` | 20 | 451,260 | EIA's codes, NOT PJM's (see below) |
+| `aeso_hourly_load` | — | — | real but duplicated across `aeso_supply_demand.ail_mw` and `aeso_hourly_pool_price.ail_mw` — consolidate |
+
+ZONE-NAME TRAPS — both cause silent empty joins:
+- **CAISO**: load is at DLAPs (PGAE/SCE/SDGE/VEA); prices are at trading hubs
+  (NP15/SP15/ZP26). Different partitions BY MARKET DESIGN. CAISO does not
+  publish load by NP15/SP15/ZP26 and never will. Do not join on zone.
+- **PJM**: EIA abbreviates zone names differently from PJM's Data Miner.
+  EIA `AE BC CE JC ME PE PEP PL PN PS AP` = PJM `AECO BGE COMED JCPL METED
+  PECO PEPCO PPL PENELEC PSEG APS`. Stored as EIA returns them; translate
+  before joining to `pjm_node_stats`.
+
+The old `ercot_load_by_zone` is the SAME real EIA-930 data under the old name —
+superseded by `ercot_hourly_zonal_load`; repoint consumers then drop it.
 
 **Other renamed tables:** `hourly_temperatures` → `iso_hourly_temps` (kept
 unified with `iso`/`zone` columns rather than 4 per-market tables, so
@@ -298,7 +311,13 @@ schema indicating it. This has already caused one wrong conclusion (2026-08:
 `ercot_fuel_mix`/`ercot_load_by_zone` were reported as "live real data, Jan 2024+"
 on the basis of date coverage alone, without checking the seeder header).
 
-**Before describing any table as real, open its seeder and read the header.**
+**CHECK THE DATA, NOT THE SEEDER.** Reading a seeder header is NOT sufficient
+and has now produced wrong conclusions twice in one day (2026-08-03), both
+times because a table has MULTIPLE seeders and the deprecated synthetic one was
+read while the real one had actually populated the table. Query the table and
+match against a known fingerprint instead — e.g. ERCOT hydro is ~54 MW if real,
+~700 MW if synthetic; ERCOT load zones are `COAS/NCEN/...` if real (EIA-930),
+`LZ_*` if synthetic.
 
 | Table | Reality |
 |---|---|
@@ -306,12 +325,24 @@ on the basis of date coverage alone, without checking the seeder header).
 | `ercot_nodal_da_rt_hourly`, `caiso_nodal_da_rt_hourly` | REAL — ERCOT CDR / CAISO OASIS |
 | `ercot_hub_da_rt_hourly`, `caiso_hub_da_rt_hourly` | REAL |
 | `aeso_*` | REAL — `apimgw.aeso.ca` |
-| `ercot_hourly_gen_output` | MIXED — check the `source` column (`sced_real` vs `synthetic`) |
-| `ercot_load_by_zone` | SYNTHETIC — `seed-ercot-load-fuelmix.ts`, needs CDR NP6-346-CD |
+| `ercot_hourly_gen_output` | REAL — EIA-930 fuel-type hourly, Jan 2024+, via `scripts/src/seed-ercot-real-data.py`. Verified 2026-08-03: gas 21.9 GW, wind 13.7 GW, solar 8.1 GW, nuclear 4.7 GW, hydro **54 MW**. That hydro figure is the fingerprint — ERCOT has almost no hydro; the old synthetic model claimed ~700 MW. **Do NOT run `infra/rebuild-ercot-gen-output-from-sced.sql`** — SCED excludes behind-the-meter distributed solar, so it would REGRESS solar vs the EIA-930 figures already loaded. That script is only useful for a dispatch-only view, never for generation mix. |
+| `ercot_load_by_zone` | REAL — EIA-930 sub-BA hourly, Jan 2024+, via `scripts/src/seed-ercot-real-data.py`. Zones are EIA codes (COAS/EAST/FWES/NCEN/NRTH/SCEN/SOUT/WEST), NOT the old `LZ_*` names. **`seed-ercot-load-fuelmix.ts` is the DEPRECATED synthetic seeder — do not run it, it would overwrite real data with `LZ_*` rows.** ERCOT's own NP6-345-CD returns 404 on the public API even with a valid token; EIA-930 is the working source. |
 | `pjm_node_stats` | model-calibrated, not a real PJM API |
 | `iso_hourly_temps` | MIXED — real Open-Meteo seeder AND two synthetic fallback seeders exist; table has NO source column, so real vs synthetic is currently indistinguishable. Add one before relying on it. |
 
 New tables holding any modelled data MUST carry a `source` column from day one.
+
+### Destructive SQL must be transactional (learned the hard way 2026-08-03)
+
+`infra/rebuild-ercot-gen-output-from-sced.sql` ran `DELETE` then `INSERT` as
+separate autocommitting statements. The run was interrupted between them and
+every `ercot_hourly_gen_output` row from 2024-01 to 2026-05 was destroyed;
+recovery needed a full EIA-930 re-seed.
+
+Any script that deletes before inserting MUST wrap both in `BEGIN`/`COMMIT`,
+and should assert non-empty before committing. An interrupted run then rolls
+back to a no-op instead of emptying the table. That script is now marked
+DO NOT RUN — its premise (that the table was synthetic) was wrong.
 
 ### Rebuilding ERCOT gen output from SCED
 

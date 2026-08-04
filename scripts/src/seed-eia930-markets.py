@@ -44,12 +44,21 @@ ZONE GEOGRAPHY DIFFERS BY MARKET — READ BEFORE JOINING
         market design — do NOT join caiso_hourly_zonal_load to
         caiso_hub_da_rt_hourly on zone. Nothing is wrong; they are different
         geographies and always will be.
-  PJM   sub-BAs are transmission zones (AECO, AEP, ATSI, BGE, COMED, DAY,
-        DEOK, DPL, DUQ, EKPC, JCPL, METED, PECO, PENELEC, PEPCO, PPL, PSEG,
-        RECO) — the same set PJM's own Data Miner `hrl_load_metered` reports,
-        and a superset of the 8 hubs in pjm_node_stats. All are seeded; filter
-        in the UI. If PJM SETTLEMENT accuracy ever matters, prefer Data Miner
-        metered load — that is the number PJM bills against.
+  PJM   sub-BAs are the 20 transmission zones, but EIA LABELS THEM DIFFERENTLY
+        from PJM's own Data Miner. Verified 2026-08-03 — EIA returns:
+          AE AEP AP ATSI BC CE DAY DEOK DOM DPL DUQ EKPC JC ME PE PEP PL PN PS RECO
+        PJM's Data Miner `hrl_load_metered` calls the same zones:
+          AECO AEP APS ATSI BGE COMED DAY DEOK DOM DPL DUQ EKPC JCPL METED
+          PECO PEPCO PPL PENELEC PSEG RECO
+        Mapping (EIA → PJM): AE→AECO, AP→APS, BC→BGE, CE→COMED, JC→JCPL,
+          ME→METED, PE→PECO, PEP→PEPCO, PL→PPL, PN→PENELEC, PS→PSEG.
+          (AEP, ATSI, DAY, DEOK, DOM, DPL, DUQ, EKPC, RECO are identical.)
+        Zone codes here are stored AS EIA RETURNS THEM. Joining this table to
+        pjm_node_stats on zone name will silently match nothing — translate
+        first. Same trap as CAISO's TH_SP15_GEN-APND vs SP15.
+
+        If PJM SETTLEMENT accuracy ever matters, prefer Data Miner metered
+        load — that is the number PJM actually bills against.
 
 NO TRUNCATE BY DEFAULT
 Writes are ON CONFLICT DO NOTHING. An earlier script in this repo ran DELETE
