@@ -80,7 +80,13 @@ EIA860_ZIP = os.path.join(HERE, "../../attached_assets/eia8602024_1777780153233.
 # VERIFY THESE if a phase returns zero rows — USGS has changed paths before.
 # Both phases fail soft: a bad endpoint downgrades precision from 'exact' to
 # 'facility', it does not abort the run or fabricate anything.
-USPVDB_URL = "https://eersc.usgs.gov/api/uspvdb/v1/graphql"
+# USWTDB confirmed working 2026-08-04 (1,327 wind projects, 72,112 turbines).
+# USPVDB returned 404 on the GraphQL path — the REST shape below matches the
+# working USWTDB pattern and is tried first, with the GraphQL path as fallback.
+USPVDB_URLS = [
+    "https://eersc.usgs.gov/api/uspvdb/v1/facilities",
+    "https://eersc.usgs.gov/api/uspvdb/v1/graphql",
+]
 USWTDB_URL = "https://eersc.usgs.gov/api/uswtdb/v1/turbines"
 
 MARKETS = {
@@ -138,6 +144,27 @@ class NodeLoc:
 def norm(s: str) -> str:
     """Normalise a name for comparison: upper, alphanumeric only."""
     return re.sub(r"[^A-Z0-9]", "", (s or "").upper())
+
+
+def norm_node(s: str) -> str:
+    """
+    Normalise a SETTLEMENT POINT name for cross-source comparison.
+
+    CAISO's APND suffix ("Aggregate Pricing NoDe") is reported inconsistently:
+    EIA-860 lists some generators as BUCKCK_7_PL1X2-APND and others as
+    BALCH1_7_B2 with no suffix, while the price feed carries it. Plain norm()
+    keeps the letters, so BALCH17B2 and BALCH17B2APND fail to match — which
+    held phase 1 to 45 of a possible ~281 matches on the first run.
+
+    Strip the suffix from BOTH sides before comparing. Also drop a trailing
+    voltage-qualifier hyphen block where present.
+    """
+    n = norm(s)
+    for suffix in ("APND", "APN"):
+        if n.endswith(suffix):
+            n = n[: -len(suffix)]
+            break
+    return n
 
 
 def node_prefix(node: str) -> str:
@@ -234,20 +261,39 @@ def load_eia860(state: str):
 
 def fetch_uspvdb() -> dict[int, tuple[float, float]]:
     """EIA plant code → imagery-verified solar array centroid."""
-    q = {"query": "{ uspvdb { eia_id ylat xlong } }"}
-    try:
-        r = requests.post(USPVDB_URL, json=q, timeout=90)
-        r.raise_for_status()
-        rows = r.json().get("data", {}).get("uspvdb", []) or []
-    except Exception as exc:                                   # noqa: BLE001
-        print(f"  ⚠  USPVDB unavailable ({type(exc).__name__}: {exc}) — "
-              f"solar keeps EIA-860 'facility' precision")
+    rows: list = []
+    for url in USPVDB_URLS:
+        try:
+            if url.endswith("graphql"):
+                r = requests.post(url, timeout=90,
+                                  json={"query": "{ uspvdb { eia_id ylat xlong } }"})
+                r.raise_for_status()
+                rows = r.json().get("data", {}).get("uspvdb", []) or []
+            else:
+                r = requests.get(url, timeout=90,
+                                 params={"select": "eia_id,ylat,xlong"})
+                r.raise_for_status()
+                body = r.json()
+                rows = body if isinstance(body, list) else body.get("features", body.get("data", []))
+            if rows:
+                print(f"  USPVDB endpoint OK: {url}")
+                break
+        except Exception as exc:                               # noqa: BLE001
+            print(f"  · USPVDB {url} → {type(exc).__name__}")
+            continue
+
+    if not rows:
+        print(f"  ⚠  USPVDB unavailable on all known endpoints — solar keeps "
+              f"EIA-860 'facility' precision (reported plant point, not "
+              f"imagery-verified). Not a failure, just a weaker coordinate.")
         return {}
+
     out: dict[int, tuple[float, float]] = {}
     for rec in rows:
+        # REST may nest under 'properties' (GeoJSON) or be flat.
+        src = rec.get("properties", rec) if isinstance(rec, dict) else {}
         try:
-            eia = int(rec["eia_id"])
-            out[eia] = (float(rec["ylat"]), float(rec["xlong"]))
+            out[int(src["eia_id"])] = (float(src["ylat"]), float(src["xlong"]))
         except (TypeError, ValueError, KeyError):
             continue
     print(f"  USPVDB: {len(out):,} solar facilities with verified centroids")
@@ -318,10 +364,10 @@ def main() -> None:
     plants, gens = load_eia860(cfg["state"])
 
     # ── Phase 1: exact LMP node designation ─────────────────────────────────
-    by_lmp = {norm(g["lmp_node"]): g for g in gens if g["lmp_node"]}
+    by_lmp = {norm_node(g["lmp_node"]): g for g in gens if g["lmp_node"]}
     p1 = 0
     for name, nl in nodes.items():
-        g = by_lmp.get(norm(name))
+        g = by_lmp.get(norm_node(name))
         if not g:
             continue
         pl = plants.get(g["plant_code"])
@@ -334,6 +380,18 @@ def main() -> None:
         nl.technology = g["technology"]
         p1 += 1
     print(f"\n  Phase 1 — exact LMP match:        {p1:,} nodes")
+
+    # DIAGNOSTIC — print both name universes side by side when the match rate
+    # is poor. Guessing at a format mismatch from one side only is what held
+    # this to 45 matches on the first run; showing both makes the next fix
+    # obvious rather than speculative.
+    if p1 < len(by_lmp) * 0.5:
+        unmatched_db = [n for n, nl in nodes.items() if nl.precision == "unknown"][:10]
+        unmatched_eia = [g["lmp_node"] for k, g in by_lmp.items()
+                         if not any(norm_node(n) == k for n in nodes)][:10]
+        print(f"     ⚠ only {p1} of {len(by_lmp)} EIA LMP designations matched")
+        print(f"     DB node names (unmatched):  {unmatched_db}")
+        print(f"     EIA LMP names (unmatched):  {unmatched_eia}")
 
     # ── Phase 4 runs BEFORE the USGS upgrades so that fuzzy-matched nodes can
     #    also be upgraded to imagery-verified coordinates.
