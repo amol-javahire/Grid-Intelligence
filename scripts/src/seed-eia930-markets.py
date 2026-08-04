@@ -113,9 +113,26 @@ MARKETS = {"ERCOT": "ERCO", "CAISO": "CISO", "PJM": "PJM"}
 FUEL_MAP = {
     "COL": "coal", "NG": "natural_gas", "NUC": "nuclear", "OTH": "other",
     "SUN": "solar", "WAT": "hydro", "WND": "wind", "BAT": "storage",
-    # Present for CAISO/PJM but not ERCOT:
     "OIL": "oil", "GEO": "geothermal", "BIO": "biomass", "PS": "pumped_storage",
+    # UES = Unknown Energy Source. EIA uses it when a balancing authority
+    # reports generation it cannot attribute to a fuel. Observed in ERCOT
+    # 2026-08-03. Mapped to its own category, NOT folded into "other", so the
+    # unattributed volume stays visible rather than inflating a real bucket.
+    "UES": "unknown",
 }
+
+# Codes seen in the feed but absent from FUEL_MAP. Reported at end of run so an
+# EIA vocabulary change fails LOUDLY. The ERCOT SCED seeder had exactly this
+# gap and silently dumped 122,069 GWh into "other" for six months.
+_unmapped_fuels: dict[str, int] = {}
+
+
+def map_fuel(code: str) -> str:
+    mapped = FUEL_MAP.get(code)
+    if mapped is None:
+        _unmapped_fuels[code] = _unmapped_fuels.get(code, 0) + 1
+        return "other"
+    return mapped
 
 EIA_BASE = "https://api.eia.gov/v2/electricity/rto"
 SOURCE = "eia930"
@@ -255,7 +272,7 @@ def seed_market(market: str, ba: str, truncate: bool, only: str = "both") -> dic
                     if v is None:
                         continue
                     y, m, d, h = parse_period(r["period"])
-                    ft = FUEL_MAP.get(r.get("fueltype", ""), "other")
+                    ft = map_fuel(r.get("fueltype", ""))
                     fuels_seen.add(r.get("fueltype", ""))
                     batch.append((y, m, d, h, ft, float(v)))
                 if batch:
@@ -367,6 +384,16 @@ def main() -> None:
         print(f"  {r['market']:<6} gen {r['gen_rows']:>9,}  load {r['load_rows']:>9,}")
         print(f"         fuels: {', '.join(r['fuels'])}")
         print(f"         zones: {', '.join(r['zones'])}")
+
+    if _unmapped_fuels:
+        print("\n" + "=" * 62)
+        print("UNMAPPED fuel codes — these were stored as 'other':")
+        for code, n in sorted(_unmapped_fuels.items(), key=lambda kv: -kv[1]):
+            print(f"    {code:<8} {n:>10,} rows")
+        print("Add them to FUEL_MAP and re-run, or 'other' is overstated.")
+        print("=" * 62)
+    elif only in ("gen", "both"):
+        print("\nAll fuel codes mapped cleanly.")
 
 
 if __name__ == "__main__":

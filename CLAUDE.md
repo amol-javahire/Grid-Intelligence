@@ -265,12 +265,28 @@ convention, deliberately not renamed — touches a 4.7GB table + `mv_dispatch_mo
 + PyPSA queries; flag to the user before ever touching it). Minimum coverage
 required: Jan 2025 onward (both real tables below already start Jan 2024).
 
-| Table | Status |
+Seeded 2026-08-03 from EIA-930 via `scripts/src/seed-eia930-markets.py`,
+hourly, Jan 2024 → current month, ~180k rows each.
+
+| Table | Verified avg MW (2025+) |
 |---|---|
-| `ercot_hourly_gen_output` | live, Jan 2024+ (was `ercot_fuel_mix`) |
-| `aeso_hourly_gen_output` | live, Jan 2024+ (was `aeso_generation_mix`) |
-| `caiso_hourly_gen_output` | reserved, not built |
-| `pjm_hourly_gen_output` | reserved, not built |
+| `ercot_hourly_gen_output_by_fuel_agg` | gas 22.4 GW, wind 13.7, solar 8.4, coal 7.1, nuclear 4.7, storage 291 MW, **hydro 55 MW** |
+| `caiso_hourly_gen_output_by_fuel_agg` | gas 7.1 GW, solar 5.9, hydro 2.5, wind 2.4, nuclear 2.1, geothermal 722 MW |
+| `pjm_hourly_gen_output_by_fuel_agg` | gas 41.8 GW, nuclear 31.1, coal 16.8, wind 3.8, solar 3.1, hydro 1.8 |
+| `ercot_hourly_gen_output` | superseded by the `_by_fuel_agg` table above — repoint consumers then drop |
+| `aeso_hourly_gen_output` | live, Jan 2024+ (was `aeso_generation_mix`), AESO API not EIA |
+
+**CAISO `other` is NEGATIVE (−221 MW avg) — this is not a bug.** EIA-930 does
+not report a separate `BAT` series for CISO, so the ~10 GW battery fleet lands
+in `OTH`, and net of round-trip losses it consumes more than it delivers on an
+hourly average. Consequences:
+- CAISO has NO `storage` fuel line despite having one of the largest fleets.
+- A stacked-area chart will try to plot a negative series. Handle explicitly:
+  either render storage below the axis or exclude it and say so.
+PJM likewise reports no `PS`, so Bath County and other pumped storage sit
+inside `other` (1,754 MW avg) mixed with genuinely-other generation.
+
+ERCOT is the only one of the three with a clean `BAT` → `storage` series.
 
 Per-generator dispatch tables (ERCOT precedent: `ercot_hourly_dispatch`) are a
 DIFFERENT thing from gen-stack tables — one row per generator per hour, not
