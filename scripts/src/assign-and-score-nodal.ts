@@ -699,31 +699,54 @@ async function main() {
   );
 
   // ── Step 0c: Load per-zone CAISO resource node averages ───────────────────
-  const caisoZoneResourceRaw = await db.execute<{
-    zone: string; node_count: string;
-    avg_da: string; avg_vol: string; avg_neg_pct: string;
-  }>(sql`
-    SELECT
-      cnl.caiso_zone                          AS zone,
-      COUNT(DISTINCT cns.node)::text          AS node_count,
-      AVG(cns.avg_da_price)::float            AS avg_da,
-      AVG(cns.volatility)::float              AS avg_vol,
-      AVG(cns.neg_price_percent)::float       AS avg_neg_pct
-    FROM caiso_node_stats cns
-    JOIN caiso_node_locations cnl ON cns.node = cnl.node_name
-    WHERE cns.avg_da_price IS NOT NULL
-      AND cnl.caiso_zone IS NOT NULL
-    GROUP BY cnl.caiso_zone
-    HAVING COUNT(DISTINCT cns.node) >= 3
-  `);
+  // caiso_node_locations is a REPLIT-ERA TABLE THAT WAS NEVER MIGRATED to
+  // Azure — it exists nowhere in this repo (no schema, no seeder, only
+  // consumers). Discovered 2026-08-03 when this line hard-failed the whole
+  // scorer with 42P01.
+  //
+  // A zone-level fallback already sits immediately below, and the ERCOT
+  // equivalent (Step 0b) is wrapped in try/catch for exactly this reason, so
+  // this block is now wrapped to match. Losing the geo-derived path costs
+  // CAISO resolution — zone averages instead of per-resource-node averages —
+  // but it must not take ERCOT and PJM scoring down with it.
+  //
+  // The right fix is to rebuild caiso_node_locations from the CAISO node
+  // registry (lat/lon + DLAP/zone per node), mirroring ercot_node_locations.
+  let caisoZoneResource = new Map<string, NodeStats>();
+  try {
+    const caisoZoneResourceRaw = await db.execute<{
+      zone: string; node_count: string;
+      avg_da: string; avg_vol: string; avg_neg_pct: string;
+    }>(sql`
+      SELECT
+        cnl.caiso_zone                          AS zone,
+        COUNT(DISTINCT cns.node)::text          AS node_count,
+        AVG(cns.avg_da_price)::float            AS avg_da,
+        AVG(cns.volatility)::float              AS avg_vol,
+        AVG(cns.neg_price_percent)::float       AS avg_neg_pct
+      FROM caiso_node_stats cns
+      JOIN caiso_node_locations cnl ON cns.node = cnl.node_name
+      WHERE cns.avg_da_price IS NOT NULL
+        AND cnl.caiso_zone IS NOT NULL
+      GROUP BY cnl.caiso_zone
+      HAVING COUNT(DISTINCT cns.node) >= 3
+    `);
 
-  const caisoZoneResource = new Map<string, NodeStats>(
-    caisoZoneResourceRaw.rows.map(r => [r.zone, {
-      avg_da: Number(r.avg_da), avg_rt: 0,
-      avg_vol: Number(r.avg_vol), avg_neg_pct: Number(r.avg_neg_pct),
-      source: "resource" as const,
-    }])
-  );
+    caisoZoneResource = new Map<string, NodeStats>(
+      caisoZoneResourceRaw.rows.map(r => [r.zone, {
+        avg_da: Number(r.avg_da), avg_rt: 0,
+        avg_vol: Number(r.avg_vol), avg_neg_pct: Number(r.avg_neg_pct),
+        source: "resource" as const,
+      }])
+    );
+    console.log(`   Loaded ${caisoZoneResource.size} CAISO geo-derived zone profiles`);
+  } catch (e) {
+    console.warn(
+      `   ⚠  CAISO geo-derived zone stats unavailable (${(e as Error).message.split("\n")[0]})\n` +
+      `      → falling back to zone-level caiso_node_stats. CAISO basis/congestion\n` +
+      `        scores will be COARSER than ERCOT's until caiso_node_locations is rebuilt.`,
+    );
+  }
 
   // Fallback CAISO zone stats from caiso_node_stats (zone-level)
   const caisoZoneRaw = await db.execute<{
