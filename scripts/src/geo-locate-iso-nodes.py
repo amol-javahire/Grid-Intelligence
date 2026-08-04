@@ -393,6 +393,58 @@ def main() -> None:
         print(f"     DB node names (unmatched):  {unmatched_db}")
         print(f"     EIA LMP names (unmatched):  {unmatched_eia}")
 
+    # ── Phase 1b: substation + voltage match ────────────────────────────────
+    # EIA reports the individual generator PNODE (BALCH1_7_B2, VOLTA2_7_N002 —
+    # note the _B1/_B12/_N002 unit suffixes) while CAISO's price feed carries
+    # the AGGREGATE pricing node (…-APND). Those are different objects, so no
+    # string normalisation can reconcile the full names — phase 1 can only ever
+    # catch the minority where EIA happens to quote the APND.
+    #
+    # The first two underscore tokens are the SUBSTATION and VOLTAGE CLASS
+    # (BALCH1_7, VOLTA2_7). Units behind one substation at one voltage sit at
+    # the same physical plant, so the coordinate transfers correctly.
+    #
+    # GUARDED: only accepted when that substation+voltage maps to exactly ONE
+    # EIA plant. Where a prefix spans multiple plants the location is genuinely
+    # ambiguous and the node is left unlocated rather than assigned a coin-flip.
+    def sub_volt(name: str) -> str | None:
+        parts = name.split("_")
+        return f"{norm(parts[0])}_{norm(parts[1])}" if len(parts) >= 2 else None
+
+    eia_by_subvolt: dict[str, set[int]] = {}
+    eia_gen_by_subvolt: dict[str, dict] = {}
+    for g in gens:
+        if not g["lmp_node"]:
+            continue
+        key = sub_volt(g["lmp_node"])
+        if not key:
+            continue
+        eia_by_subvolt.setdefault(key, set()).add(g["plant_code"])
+        eia_gen_by_subvolt.setdefault(key, g)
+
+    p1b = ambiguous = 0
+    for name, nl in nodes.items():
+        if nl.precision != "unknown":
+            continue
+        key = sub_volt(name)
+        if not key or key not in eia_by_subvolt:
+            continue
+        if len(eia_by_subvolt[key]) > 1:
+            ambiguous += 1
+            continue
+        g = eia_gen_by_subvolt[key]
+        pl = plants.get(g["plant_code"])
+        if not pl:
+            continue
+        nl.latitude, nl.longitude = pl["lat"], pl["lon"]
+        nl.precision, nl.method, nl.source = "facility", "substation_match", "eia860_subvolt"
+        nl.confidence = 0.80          # below exact-LMP 0.90: same plant, inferred unit
+        nl.eia_plant_code, nl.eia_plant_name = g["plant_code"], pl["name"]
+        nl.technology = g["technology"]
+        p1b += 1
+    print(f"  Phase 1b — substation+voltage:    {p1b:,} nodes"
+          f"  ({ambiguous:,} skipped as ambiguous)")
+
     # ── Phase 4 runs BEFORE the USGS upgrades so that fuzzy-matched nodes can
     #    also be upgraded to imagery-verified coordinates.
     by_plant_norm: dict[str, dict] = {}
