@@ -1,0 +1,154 @@
+-- ============================================================================
+-- aeso_hourly_gen_output_by_fuel_agg — AESO's by-fuel hourly series, built from
+-- aeso_metered_volume so it matches the other three markets.
+--
+-- WHY
+--   ERCOT/CAISO/PJM each have {market}_hourly_gen_output_by_fuel_agg in LONG
+--   form (fuel_type, gen_mw) from EIA-930. AESO had no equivalent: the table
+--   aeso_hourly_gen_output exists but is WIDE (gas_mw, wind_mw, ...), has NO
+--   WRITER anywhere in the repo, has never held a row, and was documented in
+--   CLAUDE.md as "live, Jan 2024+". Any code that loops over markets breaks on
+--   both the shape difference and the emptiness.
+--
+--   aeso_metered_volume already carries fuel_type per asset per hour, so this
+--   is a GROUP BY — no API call, no new data.
+--
+-- LEVEL DIFFERENCE, deliberate and worth knowing
+--   ERCOT/CAISO/PJM by-fuel tables come from EIA-930, which reports SYSTEM
+--   generation including some behind-the-meter. AESO's comes from METERED
+--   VOLUME, which is net-to-grid per settled asset. Cogeneration in particular
+--   reads LOW here because most of its output is consumed behind the fence.
+--   These are not the same measurement and should not be compared across
+--   markets without saying so. Recorded in iso_table_metadata.
+--
+-- SIZE: ~8,700 hours x ~8 fuels = ~70k rows. Negligible.
+--
+-- Run:  psql "$DATABASE_URL" -f infra/2026-08-04-build-aeso-gen-output-by-fuel.sql
+-- ============================================================================
+
+\timing on
+
+\echo ''
+\echo '=== STEP 0: what fuel_type values does AESO actually emit? ==='
+\echo 'Read this before trusting the mapping below. ERCOT shipped a resource_type'
+\echo 'map keyed on words ERCOT never emits (PVGR/PWRSTR/CCGT90, not SOLAR/GAS),'
+\echo 'and everything silently became "other" for a year. Any value listed here'
+\echo 'that is NOT in the CASE below will be flagged, not quietly bucketed.'
+SELECT fuel_type, asset_class,
+       COUNT(DISTINCT asset_id) assets,
+       ROUND(AVG(metered_mw)::numeric, 1) avg_mw,
+       COUNT(*) rows
+FROM aeso_metered_volume
+GROUP BY fuel_type, asset_class
+ORDER BY rows DESC;
+
+BEGIN;
+
+CREATE TABLE IF NOT EXISTS aeso_hourly_gen_output_by_fuel_agg (
+  id          BIGSERIAL PRIMARY KEY,
+  date        DATE     NOT NULL,
+  hour_ending SMALLINT NOT NULL,
+  fuel_type   TEXT     NOT NULL,
+  gen_mw      NUMERIC(12,2) NOT NULL,
+  assets      SMALLINT,
+  source      TEXT     NOT NULL DEFAULT 'aeso_metered_volume',
+  CONSTRAINT aeso_gen_by_fuel_uniq UNIQUE (date, hour_ending, fuel_type)
+);
+
+COMMENT ON TABLE aeso_hourly_gen_output_by_fuel_agg IS
+  'hour: America/Edmonton HE_1_24 | source: aggregated from aeso_metered_volume '
+  '(net-to-grid per settled asset, NOT system generation like the EIA-930 '
+  'tables for ERCOT/CAISO/PJM) | cogeneration reads low: most output is '
+  'consumed behind the fence | see iso_table_metadata';
+
+CREATE INDEX IF NOT EXISTS aeso_gen_by_fuel_time_idx
+  ON aeso_hourly_gen_output_by_fuel_agg (date, hour_ending);
+CREATE INDEX IF NOT EXISTS aeso_gen_by_fuel_fuel_idx
+  ON aeso_hourly_gen_output_by_fuel_agg (fuel_type);
+
+-- Normalise AESO's fuel labels onto the same vocabulary the other three
+-- markets use, so a cross-market query is a filter and not a translation.
+-- Unmapped values are kept VERBATIM with an 'UNMAPPED:' prefix rather than
+-- folded into 'other' — the whole point is that they show up in the
+-- verification query below instead of disappearing.
+INSERT INTO aeso_hourly_gen_output_by_fuel_agg
+  (date, hour_ending, fuel_type, gen_mw, assets)
+SELECT date, hour_ending,
+       CASE UPPER(TRIM(COALESCE(fuel_type, '')))
+         WHEN 'GAS'            THEN 'natural_gas'
+         WHEN 'NATURAL GAS'    THEN 'natural_gas'
+         WHEN 'COAL'           THEN 'coal'
+         WHEN 'WIND'           THEN 'wind'
+         WHEN 'SOLAR'          THEN 'solar'
+         WHEN 'HYDRO'          THEN 'hydro'
+         WHEN 'ENERGY STORAGE' THEN 'storage'
+         WHEN 'STORAGE'        THEN 'storage'
+         WHEN 'DUAL FUEL'      THEN 'dual_fuel'
+         WHEN 'OTHER'          THEN 'other'
+         WHEN ''               THEN 'unknown'
+         ELSE 'UNMAPPED:' || UPPER(TRIM(fuel_type))
+       END,
+       ROUND(SUM(metered_mw)::numeric, 2),
+       COUNT(DISTINCT asset_id)
+FROM aeso_metered_volume
+WHERE metered_mw IS NOT NULL
+GROUP BY date, hour_ending, 3
+ON CONFLICT (date, hour_ending, fuel_type) DO UPDATE SET
+  gen_mw = EXCLUDED.gen_mw,
+  assets = EXCLUDED.assets;
+
+COMMIT;
+
+-- Register the convention alongside every other hourly table.
+INSERT INTO iso_table_metadata
+  (table_name, market, hour_time_zone, hour_convention, time_shape,
+   is_dst_aware, data_source, is_real, canonical_view, notes)
+VALUES
+  ('aeso_hourly_gen_output_by_fuel_agg','AESO','America/Edmonton','HE_1_24',
+   'date_he',TRUE,'aggregated from aeso_metered_volume',TRUE,NULL,
+   'Built 2026-08-04 by GROUP BY on aeso_metered_volume, which already carries fuel_type. NOT equivalent to the EIA-930 by-fuel tables for ERCOT/CAISO/PJM: this is NET-TO-GRID metered volume per settled asset, those are SYSTEM generation. Cogeneration reads low because most of its output never reaches the grid. Do not compare levels across markets without stating this.'),
+  ('aeso_hourly_gen_output','AESO','UNKNOWN','UNKNOWN','date_he',TRUE,
+   'none — orphan table',FALSE,NULL,
+   'ORPHAN. Wide shape (gas_mw/wind_mw/...), NO WRITER anywhere in the repo, never held a row, and was wrongly documented as live in CLAUDE.md. Superseded by aeso_hourly_gen_output_by_fuel_agg. DROP once nothing references it.')
+ON CONFLICT (table_name) DO UPDATE SET
+  hour_time_zone = EXCLUDED.hour_time_zone, hour_convention = EXCLUDED.hour_convention,
+  time_shape = EXCLUDED.time_shape, data_source = EXCLUDED.data_source,
+  is_real = EXCLUDED.is_real, notes = EXCLUDED.notes, updated_at = now();
+
+-- ── Verification ────────────────────────────────────────────────────────────
+
+\echo ''
+\echo '=== 1. UNMAPPED fuel types — must return ZERO rows ==='
+\echo 'Anything here needs adding to the CASE above and a re-run.'
+SELECT fuel_type, COUNT(*) rows, ROUND(AVG(gen_mw),1) avg_mw
+FROM aeso_hourly_gen_output_by_fuel_agg
+WHERE fuel_type LIKE 'UNMAPPED:%' GROUP BY 1 ORDER BY rows DESC;
+
+\echo ''
+\echo '=== 2. Coverage and average output by fuel ==='
+SELECT fuel_type, COUNT(*) hours, ROUND(AVG(gen_mw)) avg_mw,
+       ROUND(MAX(gen_mw)) peak_mw, ROUND(AVG(assets)) avg_assets
+FROM aeso_hourly_gen_output_by_fuel_agg
+GROUP BY fuel_type ORDER BY avg_mw DESC;
+
+\echo ''
+\echo '=== 3. Diurnal sanity — solar must peak midday LOCAL, wind flatter ==='
+\echo 'hour_ending is Mountain time here (NOT UTC like the EIA-930 tables),'
+\echo 'so solar should peak around HE 13-15, not HE 19-21.'
+SELECT hour_ending,
+       ROUND(AVG(gen_mw) FILTER (WHERE fuel_type='solar')) solar,
+       ROUND(AVG(gen_mw) FILTER (WHERE fuel_type='wind'))  wind,
+       ROUND(AVG(gen_mw) FILTER (WHERE fuel_type='natural_gas')) gas
+FROM aeso_hourly_gen_output_by_fuel_agg
+GROUP BY hour_ending ORDER BY hour_ending;
+
+\echo ''
+\echo '=== 4. Totals reconcile against the source? (should be ~0 difference) ==='
+SELECT ROUND(SUM(a.gen_mw)) AS agg_total,
+       (SELECT ROUND(SUM(metered_mw)) FROM aeso_metered_volume WHERE metered_mw IS NOT NULL) AS source_total
+FROM aeso_hourly_gen_output_by_fuel_agg a;
+
+\echo ''
+\echo '=== 5. Size ==='
+SELECT pg_size_pretty(pg_total_relation_size('aeso_hourly_gen_output_by_fuel_agg')) AS size,
+       COUNT(*) AS rows FROM aeso_hourly_gen_output_by_fuel_agg;

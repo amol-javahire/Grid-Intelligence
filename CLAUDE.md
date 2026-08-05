@@ -320,6 +320,30 @@ unified with `iso`/`zone` columns rather than 4 per-market tables, so
 cross-market queries are a filter not a UNION); `aeso_pool_price` →
 `aeso_hourly_pool_price`.
 
+## A seeder that cannot parse its input MUST ABORT, never substitute a default
+
+Four separate silent-failure bugs in this project, all of which reported
+SUCCESS while producing wrong or no data:
+
+1. `curl` without `-g` exited (code 3) BEFORE SENDING on every EIA URL
+   containing `data[0]` / `facets[x][]`. Seeders fell back to model data.
+2. `pl.read_database` returned ZERO ROWS instead of raising on a valid query
+   with a parameter-passing mismatch — a calibration script then reported
+   "no data available" for a table holding 22,528 rows.
+3. `seed-queue-real.ts` fabricated coordinates from `Math.random()` around a
+   state centroid, and picked the interconnection node at random, rather than
+   failing when the real queue fetch was unavailable.
+4. `parseAesoDatetime` DEFAULTED hour-ending to 1 when it could not find an
+   `HE##` marker. An endpoint returning `"2026-06-01 00:00"` therefore
+   collapsed all 24 hours of every day onto `hour_ending = 1`, and the upsert
+   overwrote the same row 24 times.
+
+The rule: when a seeder cannot parse, cannot fetch, or cannot match, it must
+raise and stop. A default value, a fallback dataset or a silently-empty result
+is indistinguishable from success at the call site, and every one of these cost
+a full debugging session to find. Verify with ROW COUNTS, not by reading the
+seeder — see "Real vs synthetic data" below, which records the same lesson.
+
 ## AESO market dynamics — how Alberta actually prices (2026-08-04)
 
 Domain knowledge from the user. This is not derivable from the tables and it
@@ -355,10 +379,24 @@ several of these land together:
    with ramp constraints is required, and that is a structural change.
 
 2. **A deterministic OPF at average conditions will never produce a spike.**
-   Spikes need the coincident outages. We already hold `aeso_generation_outage`
-   and `aeso_intertie_outage`, so HISTORICAL REPLAY is feasible: for each hour,
-   derate the units and ties that were actually out. That is the credible path
-   to reproducing scarcity — not tuning marginal costs.
+   Spikes need the coincident outages, so HISTORICAL REPLAY is the credible
+   path to reproducing scarcity — for each hour, derate the units and ties
+   that were actually out. Not tuning marginal costs.
+
+   BUT the data is NOT there yet. Verified 2026-08-04 by row count:
+   `aeso_generation_outage`, `aeso_intertie_outage` and `aeso_interchange` are
+   ALL EMPTY. An earlier note in this file claimed we held them — that came
+   from reading the schema and the INSERT statements rather than counting rows,
+   the same error that produced the merit-order claim below. Seed them first.
+
+   **Only 3 of ~13 AESO tables actually have data** (2026-08-04):
+   populated — `aeso_hourly_pool_price` (22.5k), `aeso_metered_volume` (14.9M,
+   2025-07 onward, carries `fuel_type` and `asset_class` so no join needed),
+   `aeso_asset_registry` (3,728).
+   empty — `aeso_actual_forecast` (AIL), `aeso_merit_order`,
+   `aeso_interchange`, `aeso_intertie_outage`, `aeso_generation_outage`,
+   `aeso_supply_demand`, `aeso_hourly_gen_output` (the last has NO WRITER at
+   all — drop it).
 
 3. **Calibration prediction, revised with this knowledge:**
    - cheap hours → model runs HIGH (fallback stack has no zero/negative offers)

@@ -1168,9 +1168,25 @@ const SECTIONS: Record<string, () => Promise<void>> = {
   "merit-order":      seedMeritOrder,       // per-asset offer prices
   "intertie-outage":  seedIntertiOutage,
   "interchange":      seedInterchange,
+  // NOT in DEFAULT_SECTIONS — opt-in only. See note below.
   "smp":              seedSMP,
   "unit-commitment":  seedUnitCommitment,
 };
+
+// Sections run when no arguments are given.
+//
+// EXCLUDED and why:
+//   smp — AESO's System Marginal Price re-prices whenever the marginal offer
+//     changes, i.e. sub-minute. Storing it HOURLY discards the intra-hour
+//     variation that is the only reason to want it, and storing it natively
+//     would be very large. The hourly pool price already IS its time-weighted
+//     average, and nothing in the platform reads aeso_smp. It has also failed
+//     with a schema mismatch on every month since 2024-01, so it has never
+//     worked. Run explicitly if intra-hour volatility work ever starts.
+//   unit-commitment — the v2 endpoint returns an empty array for historical
+//     dates; nothing to seed.
+const DEFAULT_SECTIONS = Object.keys(SECTIONS)
+  .filter(s => s !== "smp" && s !== "unit-commitment");
 
 async function main(): Promise<void> {
   const requested = process.argv.slice(2).filter(a => !a.startsWith("-"));
@@ -1180,7 +1196,7 @@ async function main(): Promise<void> {
     console.error(`Available: ${Object.keys(SECTIONS).join(", ")}`);
     process.exit(1);
   }
-  const toRun = requested.length ? requested : Object.keys(SECTIONS);
+  const toRun = requested.length ? requested : DEFAULT_SECTIONS;
 
   console.log("🍁 AESO Real Data Seeder");
   console.log("   Base URL:", BASE);
