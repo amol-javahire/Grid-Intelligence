@@ -88,19 +88,43 @@ CREATE INDEX IF NOT EXISTS aeso_gen_by_fuel_fuel_idx
 INSERT INTO aeso_hourly_gen_output_by_fuel_agg
   (date, hour_ending, fuel_type, gen_mw, assets)
 SELECT mv.date, mv.hour_ending,
+       -- The registry's fuel_type is finer than the cross-market vocabulary:
+       -- it names the GAS TECHNOLOGY (COMBINED CYCLE / COGENERATION / SIMPLE
+       -- CYCLE / GAS FIRED STEAM) rather than the fuel. All four collapse to
+       -- natural_gas here so this table matches ERCOT/CAISO/PJM. The technology
+       -- distinction is NOT lost — aeso_generators.py reads the registry
+       -- directly and maps them to ccgt / cogen / scgt carriers for the OPF.
        CASE UPPER(TRIM(COALESCE(ar.fuel_type, '')))
-         WHEN 'GAS'            THEN 'natural_gas'
-         WHEN 'NATURAL GAS'    THEN 'natural_gas'
-         WHEN 'COAL'           THEN 'coal'
-         WHEN 'WIND'           THEN 'wind'
-         WHEN 'SOLAR'          THEN 'solar'
-         WHEN 'HYDRO'          THEN 'hydro'
-         WHEN 'ENERGY STORAGE' THEN 'storage'
-         WHEN 'STORAGE'        THEN 'storage'
-         WHEN 'DUAL FUEL'      THEN 'dual_fuel'
-         WHEN 'OTHER'          THEN 'other'
-         WHEN ''               THEN CASE WHEN ar.asset_id IS NULL
-                                         THEN 'unregistered' ELSE 'unknown' END
+         WHEN 'GAS'              THEN 'natural_gas'
+         WHEN 'NATURAL GAS'      THEN 'natural_gas'
+         WHEN 'COMBINED CYCLE'   THEN 'natural_gas'
+         WHEN 'COGENERATION'     THEN 'natural_gas'
+         WHEN 'SIMPLE CYCLE'     THEN 'natural_gas'
+         WHEN 'GAS FIRED STEAM'  THEN 'natural_gas'
+         WHEN 'COAL'             THEN 'coal'
+         WHEN 'WIND'             THEN 'wind'
+         WHEN 'SOLAR'            THEN 'solar'
+         WHEN 'HYDRO'            THEN 'hydro'
+         WHEN 'ENERGY STORAGE'   THEN 'storage'
+         WHEN 'STORAGE'          THEN 'storage'
+         WHEN 'DUAL FUEL'        THEN 'dual_fuel'
+         WHEN 'BIOMASS AND OTHER' THEN 'biomass'
+         WHEN 'OTHER'            THEN 'other'
+         -- No fuel_type. Split by sub_fuel_type, which is AESO's own
+         -- SOURCE/SINK discriminator (verified 2026-08-04: 2,331 SINK assets
+         -- with zero fuel types, 1,397 SOURCE of which only 230 are classified
+         -- — those 230 total 23,393 MW, matching Alberta's installed fleet).
+         --
+         -- Metered volume covers LOAD as well as generation, so most of the
+         -- 2,068 metered assets are demand. Bucketing them explicitly is what
+         -- makes the totals reconcile; an earlier version deleted them as
+         -- "unknown" and silently dropped 62.5M MWh.
+         WHEN ''                 THEN
+           CASE WHEN ar.asset_id IS NULL                    THEN 'unregistered'
+                WHEN UPPER(TRIM(ar.sub_fuel_type)) = 'SINK' THEN 'load'
+                WHEN UPPER(TRIM(ar.sub_fuel_type)) = 'SOURCE'
+                                                            THEN 'generation_unclassified'
+                ELSE 'non_generation' END
          ELSE 'UNMAPPED:' || UPPER(TRIM(ar.fuel_type))
        END,
        ROUND(SUM(mv.metered_mw)::numeric, 2),
@@ -113,8 +137,10 @@ ON CONFLICT (date, hour_ending, fuel_type) DO UPDATE SET
   gen_mw = EXCLUDED.gen_mw,
   assets = EXCLUDED.assets;
 
--- The previous run wrote everything as 'unknown'. Clear those so a stale
--- bucket cannot survive alongside the corrected rows.
+-- Clear buckets from earlier attempts of this migration. NOT a data filter —
+-- an earlier version deleted 'unknown' and silently dropped 62.5M MWh of real
+-- metered volume, which is why check 4 stopped reconciling. Everything is kept
+-- and labelled now; nothing is deleted for being unclassified.
 DELETE FROM aeso_hourly_gen_output_by_fuel_agg WHERE fuel_type = 'unknown';
 
 COMMIT;
@@ -167,10 +193,25 @@ FROM aeso_hourly_gen_output_by_fuel_agg
 GROUP BY hour_ending ORDER BY hour_ending;
 
 \echo ''
-\echo '=== 4. Totals reconcile against the source? (should be ~0 difference) ==='
+\echo '=== 4. Totals reconcile against the source? (difference must be 0) ==='
+\echo 'ALL metered volume is kept — generation fuels PLUS load PLUS'
+\echo 'unclassified. Nothing is filtered out, so these must match exactly.'
 SELECT ROUND(SUM(a.gen_mw)) AS agg_total,
-       (SELECT ROUND(SUM(metered_mw)) FROM aeso_metered_volume WHERE metered_mw IS NOT NULL) AS source_total
+       (SELECT ROUND(SUM(metered_mw)) FROM aeso_metered_volume WHERE metered_mw IS NOT NULL) AS source_total,
+       ROUND(SUM(a.gen_mw)) -
+       (SELECT ROUND(SUM(metered_mw)) FROM aeso_metered_volume WHERE metered_mw IS NOT NULL) AS difference
 FROM aeso_hourly_gen_output_by_fuel_agg a;
+
+\echo ''
+\echo '=== 4b. Generation only — what a fuel-mix chart should show ==='
+\echo 'Excludes load / unclassified / unregistered. This is the number to'
+\echo 'compare against AESO published generation, NOT the reconciliation above.'
+SELECT fuel_type, ROUND(AVG(gen_mw)) avg_mw,
+       ROUND(100.0 * SUM(gen_mw) / SUM(SUM(gen_mw)) OVER (), 1) AS pct_of_gen
+FROM aeso_hourly_gen_output_by_fuel_agg
+WHERE fuel_type NOT IN ('load','generation_unclassified','unregistered','non_generation')
+  AND fuel_type NOT LIKE 'UNMAPPED:%'
+GROUP BY fuel_type ORDER BY avg_mw DESC;
 
 \echo ''
 \echo '=== 5. Size ==='
