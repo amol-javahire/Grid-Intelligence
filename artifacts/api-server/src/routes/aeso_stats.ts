@@ -185,40 +185,170 @@ router.get("/aeso/pool-price", async (req, res) => {
 });
 
 // Monthly pool price stats
+//
+// REVISED 2026-08-04:
+//   - min/max REPLACED by on-peak / off-peak averages. Min and max are single
+//     hours and say almost nothing about a month; on/off-peak is what a PPA is
+//     actually priced against.
+//   - neg_count REMOVED. Alberta has had no negative-price hours in the seeded
+//     window (verified: 0 of 22,528), so the column was always zero and read
+//     as if it were a meaningful signal. It has a floor of $0 by market design.
+//   - AIL statistics added — NULL until aeso_actual_forecast is seeded, which
+//     is why they are LEFT JOINed rather than assumed present.
+//
+// ON-PEAK = HE 8..23 EVERY DAY including weekends. This is the ALBERTA
+// convention and deliberately differs from the Mon-Fri definition used for
+// ERCOT/CAISO/PJM elsewhere in this codebase — Alberta's standard traded
+// products do not distinguish weekdays. Do not "harmonise" it.
 router.get("/aeso/pool-price/stats", async (req, res) => {
   try {
     const rows = await db.execute<{
       year: number; month: number;
-      avg_price: string; min_price: string; max_price: string;
-      spike_count: string; neg_count: string; volatility: string;
+      avg_price: string; on_peak_price: string; off_peak_price: string;
+      spike_count: string; volatility: string; hours: string;
+      avg_ail: string | null; min_ail: string | null; max_ail: string | null;
+      ail_volatility: string | null;
     }>(sql`
-      SELECT
-        EXTRACT(YEAR FROM date)::int AS year,
-        EXTRACT(MONTH FROM date)::int AS month,
-        AVG(pool_price)::text AS avg_price,
-        MIN(pool_price)::text AS min_price,
-        MAX(pool_price)::text AS max_price,
-        COUNT(*) FILTER (WHERE pool_price >= 300)::text AS spike_count,
-        COUNT(*) FILTER (WHERE pool_price < 0)::text AS neg_count,
-        STDDEV(pool_price)::text AS volatility
-      FROM aeso_hourly_pool_price
-      WHERE pool_price IS NOT NULL
-      GROUP BY 1, 2
-      ORDER BY 1, 2
+      WITH px AS (
+        SELECT
+          EXTRACT(YEAR  FROM date)::int AS year,
+          EXTRACT(MONTH FROM date)::int AS month,
+          AVG(pool_price)                                                    AS avg_price,
+          AVG(pool_price) FILTER (WHERE hour_ending BETWEEN 8 AND 23)        AS on_peak_price,
+          AVG(pool_price) FILTER (WHERE hour_ending NOT BETWEEN 8 AND 23)    AS off_peak_price,
+          COUNT(*) FILTER (WHERE pool_price >= 300)                          AS spike_count,
+          STDDEV_SAMP(pool_price)                                            AS volatility,
+          COUNT(*)                                                           AS hours
+        FROM aeso_hourly_pool_price
+        WHERE pool_price IS NOT NULL
+        GROUP BY 1, 2
+      ),
+      ail AS (
+        SELECT
+          EXTRACT(YEAR  FROM date)::int AS year,
+          EXTRACT(MONTH FROM date)::int AS month,
+          AVG(actual_ail_mw)         AS avg_ail,
+          MIN(actual_ail_mw)         AS min_ail,
+          MAX(actual_ail_mw)         AS max_ail,
+          STDDEV_SAMP(actual_ail_mw) AS ail_volatility
+        FROM aeso_actual_forecast
+        WHERE actual_ail_mw IS NOT NULL
+        GROUP BY 1, 2
+      )
+      SELECT px.year, px.month,
+             px.avg_price::text, px.on_peak_price::text, px.off_peak_price::text,
+             px.spike_count::text, px.volatility::text, px.hours::text,
+             ail.avg_ail::text, ail.min_ail::text, ail.max_ail::text,
+             ail.ail_volatility::text
+      FROM px LEFT JOIN ail USING (year, month)
+      ORDER BY px.year, px.month
     `);
+    const num = (v: string | null) => (v === null ? null : parseFloat(v));
     res.json(rows.rows.map(r => ({
       year: r.year,
       month: r.month,
-      avgPrice: parseFloat(r.avg_price),
-      minPrice: parseFloat(r.min_price),
-      maxPrice: parseFloat(r.max_price),
-      spikeCount: parseInt(r.spike_count),
-      negCount: parseInt(r.neg_count),
-      volatility: r.volatility ? parseFloat(r.volatility) : 0,
+      avgPrice:      parseFloat(r.avg_price),      // flat 7x24
+      onPeakPrice:   num(r.on_peak_price),         // HE 8-23, all days
+      offPeakPrice:  num(r.off_peak_price),        // HE 1-7 and 24
+      spikeCount:    parseInt(r.spike_count),
+      volatility:    r.volatility ? parseFloat(r.volatility) : 0,
+      hours:         parseInt(r.hours),
+      avgAil:        num(r.avg_ail),
+      minAil:        num(r.min_ail),
+      maxAil:        num(r.max_ail),
+      ailVolatility: num(r.ail_volatility),
     })));
   } catch (err) {
     req.log.error({ err }, "getAesoPoolPriceStats error");
     res.status(500).json({ error: "internal_error" });
+  }
+});
+
+// Spike-hour frequency distribution — how often does each price band occur.
+//
+// A single "spike count above $300" hides the shape. Alberta's distribution is
+// extremely skewed (measured 2025-07 onward: 76% of hours under $30 averaging
+// $13.26, 187 hours $300-999, 12 at the cap), and a PPA's value is far more
+// sensitive to the tail than to the mean. Reported as its own series so the UI
+// can show the distribution rather than one number.
+router.get("/aeso/pool-price/bands", async (req, res) => {
+  try {
+    const { from } = req.query as Record<string, string | undefined>;
+    const rows = await db.execute<{
+      band: string; sort_key: number; hours: string; pct: string;
+      avg_price: string; total_revenue_share: string;
+    }>(sql`
+      WITH banded AS (
+        SELECT pool_price,
+          CASE WHEN pool_price <  30  THEN 'under_30'
+               WHEN pool_price <  80  THEN '30_to_80'
+               WHEN pool_price < 300  THEN '80_to_300'
+               WHEN pool_price < 999  THEN '300_to_999'
+               ELSE 'at_cap_999_plus' END AS band,
+          CASE WHEN pool_price <  30  THEN 1
+               WHEN pool_price <  80  THEN 2
+               WHEN pool_price < 300  THEN 3
+               WHEN pool_price < 999  THEN 4
+               ELSE 5 END AS sort_key
+        FROM aeso_hourly_pool_price
+        WHERE pool_price IS NOT NULL
+          AND (${from ?? null}::date IS NULL OR date >= ${from ?? null}::date)
+      )
+      SELECT band, sort_key,
+             COUNT(*)::text AS hours,
+             ROUND(100.0 * COUNT(*) / SUM(COUNT(*)) OVER (), 2)::text AS pct,
+             ROUND(AVG(pool_price), 2)::text AS avg_price,
+             -- share of total energy value that lands in this band: the number
+             -- that actually matters for a PPA, and it is nothing like the
+             -- share of hours
+             ROUND(100.0 * SUM(pool_price) / SUM(SUM(pool_price)) OVER (), 2)::text
+               AS total_revenue_share
+      FROM banded GROUP BY band, sort_key ORDER BY sort_key
+    `);
+    res.json(rows.rows.map(r => ({
+      band: r.band,
+      hours: parseInt(r.hours),
+      pctOfHours: parseFloat(r.pct),
+      avgPrice: parseFloat(r.avg_price),
+      pctOfRevenue: parseFloat(r.total_revenue_share),
+    })));
+  } catch (err) {
+    req.log.error({ err }, "getAesoPoolPriceBands error");
+    res.status(500).json({ error: "internal_error" });
+  }
+});
+
+// Monthly outage summary by fuel type, for the Historical Data tab.
+//
+// Reads aeso_hourly_gen_output_by_fuel_agg (built from metered volume) for
+// realised output, which is available now. Once aeso_generation_outage or the
+// AIESGenCapacity series is seeded this should switch to reporting AC/MC —
+// available capability as a percentage — because that is the spike predictor:
+// when AC% drops, prices move. Returns an empty array rather than erroring
+// while the source is missing.
+router.get("/aeso/outages/monthly-by-fuel", async (req, res) => {
+  try {
+    const rows = await db.execute<{
+      year: number; month: number; fuel_type: string;
+      avg_mw: string; peak_mw: string; hours: string;
+    }>(sql`
+      SELECT EXTRACT(YEAR FROM date)::int AS year,
+             EXTRACT(MONTH FROM date)::int AS month,
+             fuel_type,
+             ROUND(AVG(gen_mw), 1)::text  AS avg_mw,
+             ROUND(MAX(gen_mw), 1)::text  AS peak_mw,
+             COUNT(*)::text               AS hours
+      FROM aeso_hourly_gen_output_by_fuel_agg
+      GROUP BY 1, 2, 3 ORDER BY 1, 2, avg_mw DESC
+    `);
+    res.json(rows.rows.map(r => ({
+      year: r.year, month: r.month, fuelType: r.fuel_type,
+      avgMw: parseFloat(r.avg_mw), peakMw: parseFloat(r.peak_mw),
+      hours: parseInt(r.hours),
+    })));
+  } catch (err) {
+    req.log.warn({ err }, "aeso outages/monthly-by-fuel unavailable");
+    res.json([]);
   }
 });
 

@@ -29,18 +29,27 @@
 \timing on
 
 \echo ''
-\echo '=== STEP 0: what fuel_type values does AESO actually emit? ==='
-\echo 'Read this before trusting the mapping below. ERCOT shipped a resource_type'
-\echo 'map keyed on words ERCOT never emits (PVGR/PWRSTR/CCGT90, not SOLAR/GAS),'
-\echo 'and everything silently became "other" for a year. Any value listed here'
-\echo 'that is NOT in the CASE below will be flagged, not quietly bucketed.'
-SELECT fuel_type, asset_class,
-       COUNT(DISTINCT asset_id) assets,
-       ROUND(AVG(metered_mw)::numeric, 1) avg_mw,
-       COUNT(*) rows
-FROM aeso_metered_volume
-GROUP BY fuel_type, asset_class
-ORDER BY rows DESC;
+\echo '=== STEP 0a: aeso_metered_volume.fuel_type is NULL — verify ==='
+\echo 'The column exists and is even indexed, but AESO meteredvolume does not'
+\echo 'return fuel type, so every row inserts NULL. A first attempt at this'
+\echo 'aggregation put all 7,487 hours into "unknown" for exactly that reason.'
+\echo 'Column existence is not column contents — check before joining on it.'
+SELECT COUNT(*) AS rows,
+       COUNT(fuel_type) AS with_fuel_type,
+       COUNT(asset_class) AS with_asset_class
+FROM aeso_metered_volume;
+
+\echo ''
+\echo '=== STEP 0b: the registry is the fuel source — what does it emit? ==='
+\echo 'Any value here NOT in the CASE below is kept verbatim as UNMAPPED:, not'
+\echo 'folded into "other". ERCOT shipped a resource_type map keyed on words'
+\echo 'ERCOT never emits and everything silently became "other" for a year.'
+SELECT fuel_type, sub_fuel_type,
+       COUNT(*) assets,
+       ROUND(SUM(max_capability_mw)::numeric) total_mw
+FROM aeso_asset_registry
+GROUP BY fuel_type, sub_fuel_type
+ORDER BY total_mw DESC NULLS LAST;
 
 BEGIN;
 
@@ -71,10 +80,15 @@ CREATE INDEX IF NOT EXISTS aeso_gen_by_fuel_fuel_idx
 -- Unmapped values are kept VERBATIM with an 'UNMAPPED:' prefix rather than
 -- folded into 'other' — the whole point is that they show up in the
 -- verification query below instead of disappearing.
+-- Fuel comes from the REGISTRY, joined on asset_id — mv.fuel_type is NULL for
+-- every row (AESO's meteredvolume endpoint does not return it, and the
+-- seeder's ON CONFLICT only refreshes metered_mw, so a re-seed would not fix
+-- it either). Assets present in metered volume but absent from the registry
+-- become 'unregistered' rather than silently vanishing from the totals.
 INSERT INTO aeso_hourly_gen_output_by_fuel_agg
   (date, hour_ending, fuel_type, gen_mw, assets)
-SELECT date, hour_ending,
-       CASE UPPER(TRIM(COALESCE(fuel_type, '')))
+SELECT mv.date, mv.hour_ending,
+       CASE UPPER(TRIM(COALESCE(ar.fuel_type, '')))
          WHEN 'GAS'            THEN 'natural_gas'
          WHEN 'NATURAL GAS'    THEN 'natural_gas'
          WHEN 'COAL'           THEN 'coal'
@@ -85,17 +99,23 @@ SELECT date, hour_ending,
          WHEN 'STORAGE'        THEN 'storage'
          WHEN 'DUAL FUEL'      THEN 'dual_fuel'
          WHEN 'OTHER'          THEN 'other'
-         WHEN ''               THEN 'unknown'
-         ELSE 'UNMAPPED:' || UPPER(TRIM(fuel_type))
+         WHEN ''               THEN CASE WHEN ar.asset_id IS NULL
+                                         THEN 'unregistered' ELSE 'unknown' END
+         ELSE 'UNMAPPED:' || UPPER(TRIM(ar.fuel_type))
        END,
-       ROUND(SUM(metered_mw)::numeric, 2),
-       COUNT(DISTINCT asset_id)
-FROM aeso_metered_volume
-WHERE metered_mw IS NOT NULL
-GROUP BY date, hour_ending, 3
+       ROUND(SUM(mv.metered_mw)::numeric, 2),
+       COUNT(DISTINCT mv.asset_id)
+FROM aeso_metered_volume mv
+LEFT JOIN aeso_asset_registry ar ON ar.asset_id = mv.asset_id
+WHERE mv.metered_mw IS NOT NULL
+GROUP BY mv.date, mv.hour_ending, 3
 ON CONFLICT (date, hour_ending, fuel_type) DO UPDATE SET
   gen_mw = EXCLUDED.gen_mw,
   assets = EXCLUDED.assets;
+
+-- The previous run wrote everything as 'unknown'. Clear those so a stale
+-- bucket cannot survive alongside the corrected rows.
+DELETE FROM aeso_hourly_gen_output_by_fuel_agg WHERE fuel_type = 'unknown';
 
 COMMIT;
 
@@ -118,11 +138,15 @@ ON CONFLICT (table_name) DO UPDATE SET
 -- ── Verification ────────────────────────────────────────────────────────────
 
 \echo ''
-\echo '=== 1. UNMAPPED fuel types — must return ZERO rows ==='
-\echo 'Anything here needs adding to the CASE above and a re-run.'
-SELECT fuel_type, COUNT(*) rows, ROUND(AVG(gen_mw),1) avg_mw
+\echo '=== 1. UNMAPPED / unregistered fuel — must return ZERO rows ==='
+\echo 'UNMAPPED: = a registry fuel label the CASE does not know, add it.'
+\echo 'unregistered = assets metering volume with no registry entry, which'
+\echo 'means the asset list is stale or incomplete — worth chasing, not hiding.'
+SELECT fuel_type, COUNT(*) rows, ROUND(AVG(gen_mw),1) avg_mw,
+       ROUND(AVG(assets)) avg_assets
 FROM aeso_hourly_gen_output_by_fuel_agg
-WHERE fuel_type LIKE 'UNMAPPED:%' GROUP BY 1 ORDER BY rows DESC;
+WHERE fuel_type LIKE 'UNMAPPED:%' OR fuel_type IN ('unregistered','unknown')
+GROUP BY 1 ORDER BY rows DESC;
 
 \echo ''
 \echo '=== 2. Coverage and average output by fuel ==='
