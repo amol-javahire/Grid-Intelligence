@@ -21,17 +21,39 @@ provincial pool price; there are no nodal prices in the real market. So:
                   congestion INDICATOR, not a price forecast, and must never be
                   presented as a predicted settlement price.
 
-KNOWN BIAS GOING IN
+KNOWN BIASES GOING IN — three, in expected order of size
 ---------------------------------------------------------------------------
-The three boundary buses (BC/MT/SK) have no generator and no load attached, so
-all three intertie lines carry exactly zero flow — Alberta is currently modelled
-as an island. Real Alberta imports up to ~1,260 MW, disproportionately cheap BC
-hydro. The model should therefore run HIGH at high load, dispatching Alberta gas
-where reality imports. If the measured bias shows that shape, it corroborates
-the diagnosis; if it does not, something else dominates and the intertie fix is
-second-order.
+1. CHEAP HOURS: model runs HIGH.
+   76% of Alberta hours settle under $30, averaging $13.26 — overnight wind
+   normally holds prices under $20. If aeso_merit_order is empty, every unit
+   falls back to CARRIER_MC whose cheapest dispatchable price is gas at ~$48.
+   The model then has no way to price a cheap hour at all. Check the
+   `supply stack used` line before reading anything else.
 
-That is the point of measuring before building.
+2. SPIKE HOURS: model runs LOW.
+   Alberta spikes are COINCIDENT-EVENT driven, not load driven — two or more
+   gas units out, plus solar drop-off, plus wind under-delivering, plus a steep
+   ramp, plus the BC-AB tie on outage. A deterministic OPF at average
+   availability cannot produce any of that, so it will under-predict the tail.
+   Fixing this needs historical replay with real outages from
+   aeso_generation_outage / aeso_intertie_outage — NOT marginal-cost tuning.
+
+3. HIGH LOAD: model runs HIGH.
+   The three boundary buses (BC/MT/SK) have no generator and no load attached,
+   so all three ties carry exactly zero flow and Alberta is modelled as an
+   island. ~1,260 MW of mostly cheap BC hydro is unavailable to the model.
+
+STRUCTURAL LIMIT — do not expect calibration to fix this
+---------------------------------------------------------------------------
+Alberta's volatility now lives in the MORNING RAMP (before sunrise, solar not
+yet up) and the EVENING RAMP (sunset, solar dropping as wind picks up); the
+summer midday peak has been flattened by the solar buildout. A single-snapshot
+OPF — set_snapshots(RangeIndex(1)) — has no ramp rates and no intertemporal
+coupling, so it cannot represent ramp-driven volatility at all. Multi-period
+with ramp constraints is a structural change, not a tuning exercise.
+
+Calibration measures the price LEVEL. It cannot measure ramp behaviour, and a
+good bias figure here should not be read as the model being fit for purpose.
 
 Output goes to aeso_opf_calibration so the UI can show the model's accuracy
 alongside its predictions, rather than presenting unvalidated numbers.
@@ -161,12 +183,36 @@ def stratified_sample(df: pl.DataFrame, n: int) -> pl.DataFrame:
     """
     if df.height <= n:
         return df
-    # Sort by load, then take every k-th row. Guarantees even coverage of the
-    # whole load range including both tails, with no dependence on polars'
-    # group_by/map_groups API (which has shifted between versions).
-    k = df.height / n
-    idx = [int(i * k) for i in range(n)]
-    return df.sort("ail_mw")[idx]
+
+    # Stratify on PRICE, not load.
+    #
+    # Measured 2025-07 onward, the Alberta price distribution is extreme:
+    #   <$30      6,869 hrs (76%)  avg $13.26
+    #   $30-80    1,967 hrs (22%)
+    #   $80-300     367 hrs ( 4%)
+    #   $300-999    187 hrs ( 2%)
+    #   >=$999       12 hrs
+    #
+    # Price is the variable being predicted and it is what a PPA valuation is
+    # sensitive to. A load-stratified or random sample would be ~76% cheap
+    # hours and would barely touch the ~199 hours above $300 — precisely where
+    # an islanded model (no imports) should fail hardest. Equal allocation per
+    # band buys real statistical power in the tail at the cost of a sample that
+    # is not representative of frequency, which is why the report weights
+    # bands separately rather than quoting one pooled average.
+    bands = [(-1e9, 30.0), (30.0, 80.0), (80.0, 300.0), (300.0, 999.0), (999.0, 1e9)]
+    per_band = max(1, n // len(bands))
+    parts = []
+    for lo, hi in bands:
+        sub = df.filter((pl.col("pool_price") >= lo) & (pl.col("pool_price") < hi))
+        if sub.height == 0:
+            continue
+        take = min(per_band, sub.height)
+        # Even stride through the band rather than a random draw, so the run is
+        # reproducible and covers the whole band rather than clustering.
+        k = sub.height / take
+        parts.append(sub.sort("pool_price")[[int(i * k) for i in range(take)]])
+    return pl.concat(parts) if parts else df.head(n)
 
 
 def main() -> None:
@@ -186,7 +232,10 @@ def main() -> None:
           f"({obs['date'].min()} → {obs['date'].max()})")
 
     sample = stratified_sample(obs, args.hours)
-    print(f"  sampling {sample.height:,} hours, stratified across 10 load deciles\n")
+    print(f"  sampling {sample.height:,} hours, stratified across 5 PRICE bands")
+    print(f"  (equal allocation per band — deliberately over-weights the "
+          f"scarcity tail, so bands are reported separately below and the "
+          f"pooled average is NOT frequency-representative)\n")
 
     rows = []
     for i, r in enumerate(sample.iter_rows(named=True), 1):

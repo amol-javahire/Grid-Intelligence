@@ -1087,29 +1087,57 @@ async function seedUnitCommitment(): Promise<void> {
 
 // ─── Main ────────────────────────────────────────────────────────────────────
 
+// Named sections so one can be run without the others. Added 2026-08-04:
+// an audit found aeso_merit_order and aeso_actual_forecast EMPTY while
+// aeso_metered_volume held 14.9M rows, and the only way to fill the two empty
+// ones was a full re-run that would re-walk metered volume for no reason.
+//
+// The merit_order gap was the expensive one. aeso_generators.py builds the
+// per-unit supply stack from real offer prices in that table, which is what
+// fixes the flat-LMP problem in the regional OPF. With the table empty every
+// unit silently fell back to CARRIER_MC — six flat prices — so the fix was
+// present in code, wired in, and completely inert. Nothing reported this
+// because the fallback is deliberate and logs only a warning.
+const SECTIONS: Record<string, () => Promise<void>> = {
+  "pool-price":       seedPoolPrice,
+  "actual-forecast":  seedActualForecast,   // AIL — actual_ail_mw / forecast_ail_mw
+  "gen-capacity":     seedGenCapacity,
+  "operating-reserve": seedOperatingReserve,
+  "load-outage":      seedLoadOutage,
+  "metered-volume":   seedMeteredVolume,    // per-generator hourly output (large)
+  "asset-list":       seedAssetList,
+  "pool-participants": seedPoolParticipants,
+  "merit-order":      seedMeritOrder,       // per-asset offer prices
+  "intertie-outage":  seedIntertiOutage,
+  "interchange":      seedInterchange,
+  "smp":              seedSMP,
+  "unit-commitment":  seedUnitCommitment,
+};
+
 async function main(): Promise<void> {
+  const requested = process.argv.slice(2).filter(a => !a.startsWith("-"));
+  const invalid = requested.filter(s => !(s in SECTIONS));
+  if (invalid.length) {
+    console.error(`Unknown section(s): ${invalid.join(", ")}`);
+    console.error(`Available: ${Object.keys(SECTIONS).join(", ")}`);
+    process.exit(1);
+  }
+  const toRun = requested.length ? requested : Object.keys(SECTIONS);
+
   console.log("🍁 AESO Real Data Seeder");
   console.log("   Base URL:", BASE);
   // Never log any portion of the key — a prefix still narrows a brute-force
   // search and can leak into shared CI/PM2 logs. Confirm presence only.
   console.log("   API key:", API_KEY ? "configured" : "MISSING");
   console.log("   Date range: Jan 2024 → today");
+  console.log("   Sections:", toRun.join(", "));
   console.log("");
 
-  // Run in sequence (rate-limit friendly)
-  await seedPoolPrice();
-  await seedActualForecast();
-  await seedGenCapacity();
-  await seedOperatingReserve();
-  await seedLoadOutage();
-  await seedMeteredVolume();
-  await seedAssetList();
-  await seedPoolParticipants();
-  await seedMeritOrder();
-  await seedIntertiOutage();
-  await seedInterchange();
-  await seedSMP();
-  await seedUnitCommitment();
+  // Sequential by design — the gateway rate-limits, and each section already
+  // skips months it has fully seeded, so re-running is a safe gap-fill.
+  for (const name of toRun) {
+    await SECTIONS[name]!();
+  }
 
   console.log("\n✅ AESO real data seeding complete!");
   process.exit(0);

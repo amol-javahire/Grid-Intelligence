@@ -320,6 +320,57 @@ unified with `iso`/`zone` columns rather than 4 per-market tables, so
 cross-market queries are a filter not a UNION); `aeso_pool_price` →
 `aeso_hourly_pool_price`.
 
+## AESO market dynamics — how Alberta actually prices (2026-08-04)
+
+Domain knowledge from the user. This is not derivable from the tables and it
+determines what the PyPSA model can and cannot reproduce.
+
+**Load is driven by CALGARY temperature**, not a provincial average. Use the
+Calgary zone in `iso_hourly_temps` for the load regression, not a composite.
+- Summer (Jun-Aug): load climbs hard above **+25 °C**.
+- Winter: load is very high below **−20 °C**.
+
+**The summer midday peak is now SUPPRESSED by the solar buildout.** The old
+afternoon peak has flattened. Volatility has moved to the two ramps:
+- **Morning ramp before sunrise** — load rising, solar not yet up.
+- **Evening ramp at sunset** — solar dropping off as wind typically picks up.
+
+**Overnight wind normally holds prices below $20.** This matches the observed
+distribution: 76% of hours under $30, averaging $13.26.
+
+**Spikes are COINCIDENT-EVENT driven, not load driven.** Prices spike when
+several of these land together:
+  - two or more gas units trip or are on outage
+  - solar drops off
+  - wind under-delivers vs forecast
+  - a steep load ramp
+  - the **BC-AB tie on outage**
+
+### What this means for the 9-bus OPF — read before "improving" the model
+
+1. **A single-snapshot DC OPF cannot reproduce Alberta's volatility.** The
+   ramps are inherently intertemporal; `net.set_snapshots(pd.RangeIndex(1))`
+   has no ramp rates, no unit commitment, no intertemporal coupling at all.
+   Fixing the price LEVEL (merit-order stack) does not touch this. Multi-period
+   with ramp constraints is required, and that is a structural change.
+
+2. **A deterministic OPF at average conditions will never produce a spike.**
+   Spikes need the coincident outages. We already hold `aeso_generation_outage`
+   and `aeso_intertie_outage`, so HISTORICAL REPLAY is feasible: for each hour,
+   derate the units and ties that were actually out. That is the credible path
+   to reproducing scarcity — not tuning marginal costs.
+
+3. **Calibration prediction, revised with this knowledge:**
+   - cheap hours → model runs HIGH (fallback stack has no zero/negative offers)
+   - spike hours → model runs LOW (no outages applied, no ramp constraints)
+   An earlier guess that the model would over-predict at high load was only
+   half right; without outages it will under-predict the tail.
+
+4. **The BC-AB tie matters more than its MW suggests** — it appears in the
+   spike mechanism directly. The three boundary buses currently have no
+   generator and no load, so all three ties carry zero flow and the model
+   cannot represent a tie outage at all.
+
 ## TIMEZONE — hourly tables do NOT share one convention (2026-08-03)
 
 `(year, month, day, hour)` means different things in different tables. Joining
