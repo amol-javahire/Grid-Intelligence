@@ -36,18 +36,50 @@ const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
 // ─── Date utilities ─────────────────────────────────────────────────────────
 
-/** Parse AESO datetime strings: "01/01/2024 HE01" or "2024-01-01 HE01" */
+/**
+ * Parse AESO datetime strings. Two formats are in use across the endpoints:
+ *
+ *   "01/01/2024 HE01" / "2024-01-01 HE01"   — explicit hour-ending marker
+ *   "2026-06-01 00:00"                      — MPT clock time, NO HE marker
+ *
+ * The second form is what actualforecast-api returns. Previously the HE regex
+ * simply failed to match it and hourEnding silently DEFAULTED TO 1, so every
+ * row of a 24-hour day collapsed onto hour_ending = 1 and the ON CONFLICT
+ * upsert kept overwriting the same row. That is a silent 24:1 data loss, not a
+ * parse error — the run reported success.
+ *
+ * Clock time to hour-ending: MPT 00:00 begins the interval ENDING at 01:00, so
+ * HE = hour + 1, and 23:00 -> HE 24. Throwing on an unrecognised format is
+ * deliberate: defaulting is what caused the bug.
+ */
 function parseAesoDatetime(dt: string): { date: string; hourEnding: number } {
   const heMatch = dt.match(/HE(\d+)/i);
-  const hourEnding = heMatch ? parseInt(heMatch[1], 10) : 1;
+  const clockMatch = dt.match(/\d{4}-\d{2}-\d{2}[ T](\d{2}):(\d{2})/);
 
-  // MM/DD/YYYY HE##
+  let hourEnding: number;
+  if (heMatch) {
+    hourEnding = parseInt(heMatch[1], 10);
+  } else if (clockMatch) {
+    hourEnding = parseInt(clockMatch[1], 10) + 1;   // 00:00 -> HE1, 23:00 -> HE24
+  } else {
+    throw new Error(
+      `Cannot determine hour-ending from AESO datetime: "${dt}". ` +
+      `Expected an HE## marker or an HH:MM clock time. Refusing to default ` +
+      `to HE1 — that silently collapsed every day onto one hour.`,
+    );
+  }
+
+  if (hourEnding < 1 || hourEnding > 24) {
+    throw new Error(`Hour-ending ${hourEnding} out of range from "${dt}"`);
+  }
+
+  // MM/DD/YYYY
   const mdyMatch = dt.match(/(\d{2})\/(\d{2})\/(\d{4})/);
   if (mdyMatch) {
     const [, m, d, y] = mdyMatch;
     return { date: `${y}-${m}-${d}`, hourEnding };
   }
-  // YYYY-MM-DD HE##
+  // YYYY-MM-DD
   const ymdMatch = dt.match(/(\d{4})-(\d{2})-(\d{2})/);
   if (ymdMatch) {
     const [, y, m, d] = ymdMatch;
@@ -207,18 +239,44 @@ async function seedActualForecast(): Promise<void> {
         continue;
       }
 
+      // FIELD NAMES CORRECTED 2026-08-04. The seeder was reading actual_ail,
+      // forecast_ail, actual_posted_pool_price and friends — none of which this
+      // endpoint returns. Verified response shape:
+      //   begin_datetime_mpt              "2026-06-01 00:00"
+      //   begin_datetime_utc              "2026-06-01 06:00"
+      //   alberta_internal_load           "9115"   (string)
+      //   forecast_alberta_internal_load  "9179"   (string)
+      // It carries LOAD ONLY — no pool prices. Those come from the pool-price
+      // endpoint, so the three price columns are NULL here by design.
+      //
+      // Every row previously parsed to all-NULL and the ON CONFLICT DO UPDATE
+      // would have happily written them; the run reported "total: 0 rows" while
+      // attempting to insert ~22k junk records. Guarded below.
+      let parsed = 0;
       const values = rows.map((r: Record<string, unknown>) => {
         const dt = parseAesoDatetime(String(r["begin_datetime_mpt"] ?? ""));
+        const actual = safeFloat(r["alberta_internal_load"]);
+        const forecast = safeFloat(r["forecast_alberta_internal_load"]);
+        if (actual !== null || forecast !== null) parsed++;
+        const err = (actual !== null && forecast !== null)
+          ? (forecast - actual).toFixed(2) : "NULL";
         return `(
           '${dt.date}', ${dt.hourEnding},
-          ${safeFloat(r["actual_posted_pool_price"]) ?? "NULL"},
-          ${safeFloat(r["day_ahead_forecast_pool_price"]) ?? "NULL"},
-          ${safeFloat(r["real_time_forecast_pool_price"]) ?? "NULL"},
-          ${safeFloat(r["forecast_ail"]) ?? "NULL"},
-          ${safeFloat(r["actual_ail"]) ?? "NULL"},
-          ${safeFloat(r["forecast_ail_and_actual_ail_difference"]) ?? "NULL"}
+          NULL, NULL, NULL,
+          ${forecast ?? "NULL"},
+          ${actual ?? "NULL"},
+          ${err}
         )`;
       }).join(",\n");
+
+      // Abort rather than write a batch that parsed to nothing. An upstream
+      // schema change is a recurring event and must not look like success.
+      if (parsed === 0) {
+        console.error(`  ❌ ActualForecast ${label}: ${rows.length} rows returned but `
+          + `NONE parsed — the API field names have changed. Response keys: `
+          + `${Object.keys(rows[0] ?? {}).join(", ")}`);
+        process.exit(1);
+      }
 
       await db.execute(sql.raw(`
         INSERT INTO aeso_actual_forecast
