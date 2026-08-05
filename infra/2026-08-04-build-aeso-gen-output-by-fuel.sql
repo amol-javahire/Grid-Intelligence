@@ -80,6 +80,19 @@ CREATE INDEX IF NOT EXISTS aeso_gen_by_fuel_fuel_idx
 -- Unmapped values are kept VERBATIM with an 'UNMAPPED:' prefix rather than
 -- folded into 'other' — the whole point is that they show up in the
 -- verification query below instead of disappearing.
+-- FULL REBUILD — clear first, inside this transaction.
+--
+-- Without this, re-running accumulates stale buckets: an earlier pass wrote
+-- UNMAPPED:COMBINED CYCLE / UNMAPPED:COGENERATION, the next pass wrote the same
+-- MWh as natural_gas, and ON CONFLICT only touches matching keys — so both
+-- survived and gas was counted twice (+38.6M MWh, rows 67,383 -> 89,844).
+--
+-- DELETE and INSERT are in ONE transaction deliberately. infra/rebuild-ercot-
+-- gen-output-from-sced.sql ran them as separate autocommitting statements, was
+-- interrupted between the two, and destroyed 2024-01 through 2026-05. An
+-- interrupted run here rolls back to a no-op instead.
+DELETE FROM aeso_hourly_gen_output_by_fuel_agg;
+
 -- Fuel comes from the REGISTRY, joined on asset_id — mv.fuel_type is NULL for
 -- every row (AESO's meteredvolume endpoint does not return it, and the
 -- seeder's ON CONFLICT only refreshes metered_mw, so a re-seed would not fix
@@ -137,11 +150,17 @@ ON CONFLICT (date, hour_ending, fuel_type) DO UPDATE SET
   gen_mw = EXCLUDED.gen_mw,
   assets = EXCLUDED.assets;
 
--- Clear buckets from earlier attempts of this migration. NOT a data filter —
--- an earlier version deleted 'unknown' and silently dropped 62.5M MWh of real
--- metered volume, which is why check 4 stopped reconciling. Everything is kept
--- and labelled now; nothing is deleted for being unclassified.
-DELETE FROM aeso_hourly_gen_output_by_fuel_agg WHERE fuel_type = 'unknown';
+-- Refuse to commit an empty or short table. Guards against a source table that
+-- has been truncated upstream turning this rebuild into a silent wipe.
+DO $$
+DECLARE n bigint; src bigint;
+BEGIN
+  SELECT COUNT(*) INTO n   FROM aeso_hourly_gen_output_by_fuel_agg;
+  SELECT COUNT(*) INTO src FROM aeso_metered_volume WHERE metered_mw IS NOT NULL;
+  IF n = 0 AND src > 0 THEN
+    RAISE EXCEPTION 'Rebuild produced 0 rows from % source rows — aborting', src;
+  END IF;
+END $$;
 
 COMMIT;
 
