@@ -37,6 +37,26 @@ const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 // ─── Date utilities ─────────────────────────────────────────────────────────
 
 /**
+ * Extract the real Postgres error from a Drizzle wrapper.
+ *
+ * Drizzle's Error.message is "Failed query:" followed by the entire SQL text,
+ * which pushes the actual cause off the top of any tail/grep. A plain
+ * "column X does not exist" therefore looked like an opaque query failure and
+ * went unnoticed across 31 monthly iterations — the seeder printed an error per
+ * month AND "complete!" at the end, and nobody could see what was wrong.
+ */
+function pgError(e: unknown): string {
+  const err = e as { message?: string; cause?: { message?: string; code?: string; hint?: string } };
+  const cause = err?.cause;
+  if (cause?.message) {
+    return `${cause.code ? `[${cause.code}] ` : ""}${cause.message}`
+      + (cause.hint ? ` — HINT: ${cause.hint}` : "");
+  }
+  // No cause: fall back to the first line only, never the whole SQL dump.
+  return (err?.message ?? String(e)).split("\n")[0]!;
+}
+
+/**
  * Parse AESO datetime strings. Two formats are in use across the endpoints:
  *
  *   "01/01/2024 HE01" / "2024-01-01 HE01"   — explicit hour-ending marker
@@ -258,14 +278,11 @@ async function seedActualForecast(): Promise<void> {
         const actual = safeFloat(r["alberta_internal_load"]);
         const forecast = safeFloat(r["forecast_alberta_internal_load"]);
         if (actual !== null || forecast !== null) parsed++;
-        const err = (actual !== null && forecast !== null)
-          ? (forecast - actual).toFixed(2) : "NULL";
         return `(
           '${dt.date}', ${dt.hourEnding},
-          NULL, NULL, NULL,
           ${forecast ?? "NULL"},
           ${actual ?? "NULL"},
-          ${err}
+          'aeso_actualforecast_api'
         )`;
       }).join(",\n");
 
@@ -278,23 +295,35 @@ async function seedActualForecast(): Promise<void> {
         process.exit(1);
       }
 
+      // COLUMN LIST CORRECTED 2026-08-04. The previous version inserted into
+      // day_ahead_forecast_pool_price, rt_forecast_pool_price and
+      // ail_forecast_error_mw — NONE of which exist on this table. Every month
+      // since 2024-01 failed with "column does not exist", and the catch block
+      // reported it as a generic "Failed query" while the run still printed
+      // "complete!". The parsing was correct the whole time.
+      //
+      // This endpoint returns LOAD ONLY. Pool prices come from the pool-price
+      // endpoint into aeso_hourly_pool_price, so the price columns here stay
+      // untouched rather than being overwritten with NULLs.
+      //
+      // No ail_forecast_error column exists and none is added — it is
+      // forecast_ail_mw - actual_ail_mw, derivable at query time.
       await db.execute(sql.raw(`
         INSERT INTO aeso_actual_forecast
-          (date, hour_ending, actual_pool_price, day_ahead_forecast_pool_price,
-           rt_forecast_pool_price, forecast_ail_mw, actual_ail_mw, ail_forecast_error_mw)
+          (date, hour_ending, forecast_ail_mw, actual_ail_mw, source)
         VALUES ${values}
         ON CONFLICT (date, hour_ending) DO UPDATE SET
-          actual_pool_price              = EXCLUDED.actual_pool_price,
-          day_ahead_forecast_pool_price  = EXCLUDED.day_ahead_forecast_pool_price,
-          rt_forecast_pool_price         = EXCLUDED.rt_forecast_pool_price,
-          forecast_ail_mw                = EXCLUDED.forecast_ail_mw,
-          actual_ail_mw                  = EXCLUDED.actual_ail_mw,
-          ail_forecast_error_mw          = EXCLUDED.ail_forecast_error_mw
+          forecast_ail_mw = EXCLUDED.forecast_ail_mw,
+          actual_ail_mw   = EXCLUDED.actual_ail_mw,
+          source          = EXCLUDED.source
       `));
       total += rows.length;
       console.log(`  ✓ ActualForecast ${label}: ${rows.length} rows`);
     } catch (e: unknown) {
-      console.error(`  ❌ ActualForecast ${label}: ${(e as Error).message}`);
+      // Drizzle's own message is just "Failed query:" plus the whole SQL, which
+      // is how a plain "column does not exist" stayed invisible for 31 straight
+      // months. The actual Postgres error lives in `cause`.
+      console.error(`  ❌ ActualForecast ${label}: ${pgError(e)}`);
     }
     await sleep(DELAY_MS);
   }
