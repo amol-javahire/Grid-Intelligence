@@ -105,9 +105,11 @@ def load_observed(args) -> pl.DataFrame:
     Observed hourly load, pool price and wind/solar output, joined on
     (date, hour_ending).
 
-    aeso_hourly_gen_output is WIDE — one column per fuel (gas_mw, wind_mw,
-    solar_mw, ...) — not the long fuel_type/gen_mw shape the EIA-930 tables use.
-    Two AESO tables, two different layouts; check before writing the join.
+    Sources, all verified 2026-08-04 by row count rather than by schema:
+      pool price  aeso_hourly_pool_price      (22.5k hrs, Jan 2024+)
+      LOAD        aeso_actual_forecast        (NOT pool_price.ail_mw, 100% NULL)
+      generation  aeso_hourly_gen_output_by_fuel_agg, long (fuel_type, gen_mw)
+                  — NOT aeso_hourly_gen_output, an orphan with no writer.
 
     TIMEZONE: both tables are date + hour_ending 1..24 in MOUNTAIN time, so they
     join directly. Do NOT join either to an EIA-930 table on these columns —
@@ -121,12 +123,21 @@ def load_observed(args) -> pl.DataFrame:
     end = args.end or date.today().isoformat()
     conn = psycopg2.connect(DB_URL)
 
+    # LOAD COMES FROM aeso_actual_forecast, NOT aeso_hourly_pool_price.
+    # That table has an ail_mw column but it is 100% NULL — the pool-price
+    # endpoint does not return load. AIL is published separately by
+    # actualforecast-api and lands in aeso_actual_forecast.actual_ail_mw.
+    # An earlier version of this script filtered on the NULL column and
+    # reported "no observed hours", which read as missing price data.
     price_rows = _query(conn, """
-        SELECT date::text, hour_ending, pool_price::float8, ail_mw::float8
-        FROM aeso_hourly_pool_price
-        WHERE date >= %s AND date <= %s
-          AND pool_price IS NOT NULL AND ail_mw IS NOT NULL AND ail_mw > 0
-        ORDER BY date, hour_ending
+        SELECT p.date::text, p.hour_ending, p.pool_price::float8, af.actual_ail_mw::float8
+        FROM aeso_hourly_pool_price p
+        JOIN aeso_actual_forecast af
+          ON af.date = p.date AND af.hour_ending = p.hour_ending
+        WHERE p.date >= %s AND p.date <= %s
+          AND p.pool_price IS NOT NULL
+          AND af.actual_ail_mw IS NOT NULL AND af.actual_ail_mw > 0
+        ORDER BY p.date, p.hour_ending
     """, (args.start, end))
     price = pl.DataFrame(
         {"date": [r[0] for r in price_rows],
@@ -139,11 +150,17 @@ def load_observed(args) -> pl.DataFrame:
     print(f"  pool price rows: {price.height:,}")
 
     try:
+        # aeso_hourly_gen_output is an ORPHAN — wide shape, no writer, never had
+        # a row. The real series is aeso_hourly_gen_output_by_fuel_agg, built
+        # from aeso_metered_volume joined to the asset registry, in LONG form
+        # (fuel_type, gen_mw) matching ERCOT/CAISO/PJM.
         gen_rows = _query(conn, """
             SELECT date::text, hour_ending,
-                   COALESCE(wind_mw, 0)::float8, COALESCE(solar_mw, 0)::float8
-            FROM aeso_hourly_gen_output
+                   COALESCE(SUM(gen_mw) FILTER (WHERE fuel_type = 'wind'), 0)::float8,
+                   COALESCE(SUM(gen_mw) FILTER (WHERE fuel_type = 'solar'), 0)::float8
+            FROM aeso_hourly_gen_output_by_fuel_agg
             WHERE date >= %s AND date <= %s
+            GROUP BY date, hour_ending
             ORDER BY date, hour_ending
         """, (args.start, end))
         gen = pl.DataFrame(
