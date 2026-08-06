@@ -371,6 +371,16 @@ one complete seasonal cycle, and no more than that — Alberta finished its coal
 phase-out in 2024, so older offers describe a fleet that no longer exists.
 A short recent window is not "fresher", it is the wrong season.
 
+**A generator offers MULTIPLE BLOCKS at different prices.** The supply curve
+lives in the blocks, not the units — collapsing an asset's blocks to one
+capacity-weighted price (which `aeso_generators.py` currently does) destroys
+the shape that makes it a curve. Per-block gives ~1,150 steps against ~230.
+For the per-block price estimator across a window, MODE has historically
+forecast best: generators repeat a standing offer most hours, so the mode
+captures the normal offer while the mean is dragged by occasional strategic or
+scarcity pricing. Test min/max/avg/mode against realised price before fixing
+a default.
+
 **Spikes are COINCIDENT-EVENT driven, not load driven.** Prices spike when
 several of these land together:
   - two or more gas units trip or are on outage
