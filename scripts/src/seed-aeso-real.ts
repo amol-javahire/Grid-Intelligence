@@ -222,7 +222,7 @@ async function seedPoolPrice(): Promise<void> {
       total += rows.length;
       console.log(`  ✓ Pool price ${label}: ${rows.length} rows`);
     } catch (e: unknown) {
-      console.error(`  ❌ Pool price ${label}: ${(e as Error).message}`);
+      console.error(`  ❌ Pool price ${label}: ${pgError(e)}`);
     }
     await sleep(DELAY_MS);
   }
@@ -423,7 +423,7 @@ async function seedGenCapacity(): Promise<void> {
       total += rows.length;
       console.log(`  ✓ GenCapacity ${label}: ${rows.length} rows`);
     } catch (e: unknown) {
-      console.error(`  ❌ GenCapacity ${label}: ${(e as Error).message}`);
+      console.error(`  ❌ GenCapacity ${label}: ${pgError(e)}`);
     }
     await sleep(DELAY_MS);
   }
@@ -513,7 +513,7 @@ async function seedOperatingReserve(): Promise<void> {
       total += rows.length;
       console.log(`  ✓ OpReserve ${label}: ${rows.length} rows`);
     } catch (e: unknown) {
-      console.error(`  ❌ OpReserve ${label}: ${(e as Error).message}`);
+      console.error(`  ❌ OpReserve ${label}: ${pgError(e)}`);
     }
     await sleep(DELAY_MS);
   }
@@ -570,7 +570,7 @@ async function seedLoadOutage(): Promise<void> {
       console.log(`  ✓ Load outage: ${rows.length} rows upserted into aeso_supply_demand`);
     }
   } catch (e: unknown) {
-    console.error(`  ❌ Load outage: ${(e as Error).message}`);
+    console.error(`  ❌ Load outage: ${pgError(e)}`);
   }
 }
 
@@ -642,7 +642,7 @@ async function seedMeteredVolume(): Promise<void> {
       total += rows.length;
       console.log(`  ✓ MeteredVol ${s}→${e}: ${rows.length} rows`);
     } catch (e2: unknown) {
-      console.error(`  ❌ MeteredVol ${s}→${e}: ${(e2 as Error).message}`);
+      console.error(`  ❌ MeteredVol ${s}→${e}: ${pgError(e2)}`);
     }
     await sleep(DELAY_MS);
   }
@@ -712,7 +712,7 @@ async function seedAssetList(): Promise<void> {
     }
     console.log(`  ✓ Asset registry: ${total} assets`);
   } catch (e: unknown) {
-    console.error(`  ❌ Asset registry: ${(e as Error).message}`);
+    console.error(`  ❌ Asset registry: ${pgError(e)}`);
   }
 }
 
@@ -760,7 +760,7 @@ async function seedPoolParticipants(): Promise<void> {
       console.log(`  ✓ Pool participants: ${rows.length} records`);
     }
   } catch (e: unknown) {
-    console.error(`  ❌ Pool participants: ${(e as Error).message}`);
+    console.error(`  ❌ Pool participants: ${pgError(e)}`);
   }
 }
 
@@ -889,7 +889,13 @@ async function seedMeritOrder(): Promise<void> {
           // starts, so no running total is needed — and unlike a hand-rolled
           // accumulator it stays correct regardless of the order rows arrive in.
           const cumMw = safeFloat(b["to_MW"] ?? b["from_MW"]) ?? 0;
-          const rank = parseInt(String(b["block_number"] ?? "0"), 10) || null;
+          // `parseInt(...) || null` turned a legitimate block_number of 0 into
+          // NULL, because 0 is falsy. merit_order_rank is part of the unique
+          // key, so a NULL there would let duplicate rows through for the same
+          // asset-hour and inflate the supply curve. Check for a real number
+          // instead of relying on truthiness.
+          const rankRaw = Number.parseInt(String(b["block_number"] ?? ""), 10);
+          const rank = Number.isFinite(rankRaw) ? rankRaw : null;
           const assetId = String(b["asset_ID"] ?? "").replace(/'/g, "''");
           const assetName = String(b["offer_control"] ?? "").replace(/'/g, "''");
           const ppId = String(b["import_or_export"] ?? "").replace(/'/g, "''");
@@ -918,6 +924,10 @@ async function seedMeritOrder(): Promise<void> {
                pool_participant_id, fuel_type, block_mw, offer_price,
                dispatched_mw, cumulative_mw, is_marginal)
             VALUES ${values}
+            -- Requires aeso_merit_order_block_uq. That constraint did NOT exist
+            -- until 2026-08-04, so every insert here failed with 42P10 while
+            -- the run reported success. See
+            -- infra/2026-08-04-fix-aeso-merit-order-key.sql
             ON CONFLICT (date, hour_ending, asset_id, merit_order_rank) DO UPDATE SET
               block_mw      = EXCLUDED.block_mw,
               offer_price   = EXCLUDED.offer_price,
@@ -930,13 +940,17 @@ async function seedMeritOrder(): Promise<void> {
       total += rows.length;
       console.log(`  ✓ MeritOrder ${s}: ${rows.length} blocks`);
     } catch (e2: unknown) {
-      const msg = (e2 as Error).message;
+      const raw = (e2 as Error).message ?? "";
       // "No Data available for this day" is AESO stating the obvious for dates
       // inside the publication lag or before coverage — not a failure.
-      if (msg.includes("No Data available")) {
+      if (raw.includes("No Data available")) {
         skippedNoData++;
       } else {
-        console.error(`  ❌ MeritOrder ${s}: ${msg}`);
+        // pgError() unwraps the Postgres cause. Drizzle's own message is
+        // "Failed query:" plus the entire SQL, which is how a 365-day run
+        // fetched 37 MB successfully, failed every INSERT, and reported
+        // "0 blocks / complete!" with no visible reason.
+        console.error(`  ❌ MeritOrder ${s}: ${pgError(e2)}`);
       }
     }
     await sleep(DELAY_MS);
@@ -1012,7 +1026,7 @@ async function seedIntertiOutage(): Promise<void> {
         console.log(`  ✓ IntertieOutage ${label}: ${rows.length} rows`);
       }
     } catch (e: unknown) {
-      console.error(`  ❌ IntertieOutage ${label}: ${(e as Error).message}`);
+      console.error(`  ❌ IntertieOutage ${label}: ${pgError(e)}`);
     }
     await sleep(DELAY_MS);
   }
@@ -1099,7 +1113,7 @@ async function seedInterchange(): Promise<void> {
       total += rows.length;
       console.log(`  ✓ Interchange ${label}: ${rows.length} rows`);
     } catch (e: unknown) {
-      console.error(`  ❌ Interchange ${label}: ${(e as Error).message}`);
+      console.error(`  ❌ Interchange ${label}: ${pgError(e)}`);
     }
     await sleep(DELAY_MS);
   }
@@ -1181,7 +1195,7 @@ async function seedSMP(): Promise<void> {
       total += rows.length;
       console.log(`  ✓ SMP ${label}: ${rows.length} rows`);
     } catch (e: unknown) {
-      console.error(`  ❌ SMP ${label}: ${(e as Error).message}`);
+      console.error(`  ❌ SMP ${label}: ${pgError(e)}`);
     }
     await sleep(DELAY_MS);
   }
@@ -1269,7 +1283,7 @@ async function seedUnitCommitment(): Promise<void> {
       total += rows.length;
       console.log(`  ✓ UnitCommitment ${s}→${e}: ${rows.length} rows`);
     } catch (e2: unknown) {
-      console.error(`  ❌ UnitCommitment ${s}: ${(e2 as Error).message}`);
+      console.error(`  ❌ UnitCommitment ${s}: ${pgError(e2)}`);
     }
     await sleep(DELAY_MS);
   }
