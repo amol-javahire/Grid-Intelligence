@@ -712,68 +712,129 @@ async function seedPoolParticipants(): Promise<void> {
 }
 
 // ─── 9. Energy Merit Order (supply stack) ────────────────────────────────────
-// Pulls last 90 days (data is large — one row per offer block per generator per hour)
+//
+// REWRITTEN 2026-08-04 against the ACTUAL response. The previous version never
+// wrote a row and reported success, for two compounding reasons:
+//
+//  1. THE RESPONSE IS NESTED. It flattened `Object.values(return)` and got the
+//     `data` array — one object PER HOUR — then looked for block fields on
+//     those hour objects. The offers live one level deeper, in `energy_blocks`:
+//
+//       return.data[]            { begin_dateTime_mpt, energy_blocks[] }
+//         └ energy_blocks[]      { asset_ID, block_price, block_size, ... }
+//
+//  2. NEARLY EVERY FIELD NAME WAS WRONG, including the capitalisation:
+//       begin_datetime_mpt -> begin_dateTime_mpt   (capital T)
+//       offer_price        -> block_price
+//       block_mw           -> block_size / available_MW
+//       dispatched_mw      -> dispatched_MW
+//       merit_order_rank   -> block_number  (per-ASSET index, not a merit rank)
+//
+//     Those fallback chains (`offer_price ?? price ?? energy_price`) were three
+//     guesses, and none was right. Verified shape from a live call, not assumed.
+//
+// PUBLICATION LAG: offers appear ~60 days after the fact. Confirmed by probe —
+// 2026-06-01 returns data, 2026-06-20 returns "No Data available for this day".
+// The old window ran to TODAY, so a third of its requests could only ever 400.
+//
+// NO fuel_type in this response, and no global merit rank. Fuel comes from
+// aeso_asset_registry on asset_id. Stack position comes from from_MW/to_MW,
+// which are already cumulative — better than a rank because they give the MW
+// coordinate of each block directly.
+const MERIT_ORDER_LAG_DAYS = 62;   // 60 + margin; the API is the authority
+
+// How far back to pull, ending at the lag boundary. Default 90 days.
+//
+// SIZE: ~7,000 blocks/day, so 90 days is ~630k rows (~100-150 MB with indexes)
+// and a full year would be ~2.5M rows (~400-600 MB). Capped at 365 — offers
+// older than that describe a fleet that no longer exists (Alberta finished its
+// coal phase-out in 2024), so they would make the supply stack less
+// representative, not more.
+//
+// Override:  MERIT_ORDER_DAYS=180 pnpm --filter @workspace/scripts seed-aeso-real merit-order
+const MERIT_ORDER_DAYS = Math.min(
+  365,
+  Math.max(1, parseInt(process.env.MERIT_ORDER_DAYS ?? "90", 10) || 90),
+);
 
 async function seedMeritOrder(): Promise<void> {
-  console.log("\n📋 Seeding energy merit order / supply stack (last 90 days)...");
   const today = new Date();
-  const start = offsetDate(today, -90);
+  const latest = offsetDate(today, -MERIT_ORDER_LAG_DAYS);
+  const start = offsetDate(latest, -MERIT_ORDER_DAYS);
+  console.log(`\n📋 Seeding energy merit order / supply stack ` +
+              `(${start.toISOString().slice(0, 10)} → ${latest.toISOString().slice(0, 10)}, ` +
+              `${MERIT_ORDER_DAYS} days, ${MERIT_ORDER_LAG_DAYS}-day publication lag)...`);
 
-  // Pull in 7-day chunks to stay under response size limits
-  const chunks: Array<{ s: string; e: string }> = [];
+  // One request per DAY — the endpoint takes a single startDate and returns
+  // that day only (~1.6 MB, 24 hours of blocks).
+  const days: string[] = [];
   let cur = new Date(start);
-  while (cur < today) {
-    const next = offsetDate(cur, 7);
-    const e = next > today ? today : next;
-    chunks.push({ s: cur.toISOString().slice(0, 10), e: e.toISOString().slice(0, 10) });
-    cur = next;
+  while (cur <= latest) {
+    days.push(cur.toISOString().slice(0, 10));
+    cur = offsetDate(cur, 1);
   }
 
+  // Skip days already seeded so this is a resumable gap-fill.
+  const existingRes = await db.execute(sql`SELECT DISTINCT date::text AS d FROM aeso_merit_order`);
+  const seeded = new Set<string>(existingRes.rows.map((r: Record<string, unknown>) => String(r["d"])));
+
   let total = 0;
-  for (const { s } of chunks) {
+  let skippedNoData = 0;
+  for (const s of days) {
+    if (seeded.has(s)) continue;
     try {
       const data = await aFetch("energymeritorder-api/v1/meritOrder/energy", {
         startDate: s,
       }) as Record<string, unknown>;
 
-      const ret = (data as Record<string, Record<string, unknown[]>>)?.return ?? {};
-      const rows: Record<string, unknown>[] = [];
-      for (const v of Object.values(ret)) {
-        if (Array.isArray(v)) rows.push(...v as Record<string, unknown>[]);
-      }
-
-      if (rows.length === 0) {
-        console.log(`  ⚠️  MeritOrder ${s}: empty`);
+      // return.data[] — one entry per hour, each holding energy_blocks[]
+      const hours = ((data as Record<string, Record<string, unknown>>)?.return?.["data"] ?? []) as Record<string, unknown>[];
+      if (!Array.isArray(hours) || hours.length === 0) {
+        console.log(`  ⚠️  MeritOrder ${s}: no hours in response`);
         await sleep(DELAY_MS);
         continue;
       }
 
-      // Build cumulative MW per hour as we process rows in merit order
-      const hourCumulative: Record<string, number> = {};
+      // Flatten to (hour, block) pairs.
+      const rows: Array<{ dt: { date: string; hourEnding: number }; b: Record<string, unknown> }> = [];
+      for (const h of hours) {
+        const dtStr = String(h["begin_dateTime_mpt"] ?? h["begin_datetime_mpt"] ?? "");
+        let dt: { date: string; hourEnding: number };
+        try { dt = parseAesoDatetime(dtStr); }
+        catch { continue; }
+        const blocks = (h["energy_blocks"] ?? []) as Record<string, unknown>[];
+        if (!Array.isArray(blocks)) continue;
+        for (const b of blocks) rows.push({ dt, b });
+      }
+
+      if (rows.length === 0) {
+        console.error(`  ❌ MeritOrder ${s}: ${hours.length} hours returned but ZERO blocks ` +
+          `parsed — response shape has changed. Hour keys: ${Object.keys(hours[0] ?? {}).join(", ")}`);
+        process.exit(1);
+      }
 
       const CHUNK = 500;
       for (let i = 0; i < rows.length; i += CHUNK) {
-        const chunk = rows.slice(i, i + CHUNK) as Record<string, unknown>[];
-        const values = chunk.map((r: Record<string, unknown>) => {
-          const dtStr = String(r["begin_datetime_mpt"] ?? r["datetime_mpt"] ?? "");
-          let dt: { date: string; hourEnding: number };
-          try { dt = parseAesoDatetime(dtStr); }
-          catch { return null; }
+        const chunk = rows.slice(i, i + CHUNK);
+        const values = chunk.map(({ dt, b }) => {
+          // block_size is the MW width of this block; available_MW is what the
+          // asset could actually deliver from it. Prefer block_size for the
+          // supply curve, fall back to available_MW.
+          const blockMw = safeFloat(b["block_size"] ?? b["available_MW"]) ?? 0;
+          // from_MW is ALREADY the cumulative stack position where this block
+          // starts, so no running total is needed — and unlike a hand-rolled
+          // accumulator it stays correct regardless of the order rows arrive in.
+          const cumMw = safeFloat(b["to_MW"] ?? b["from_MW"]) ?? 0;
+          const rank = parseInt(String(b["block_number"] ?? "0"), 10) || null;
+          const assetId = String(b["asset_ID"] ?? "").replace(/'/g, "''");
+          const assetName = String(b["offer_control"] ?? "").replace(/'/g, "''");
+          const ppId = String(b["import_or_export"] ?? "").replace(/'/g, "''");
+          const fuelType = "";   // not in this response — join aeso_asset_registry
+          const offerPrice = safeFloat(b["block_price"]);
+          const dispatchedMw = safeFloat(b["dispatched_MW"]);
+          const isMarginal = String(b["dispatched?"] ?? "N").toUpperCase() === "Y" ? "true" : "false";
 
-          const hourKey = `${dt.date}-${dt.hourEnding}`;
-          const blockMw = safeFloat(r["block_mw"] ?? r["offer_quantity_mw"] ?? r["quantity_mw"]) ?? 0;
-          hourCumulative[hourKey] = (hourCumulative[hourKey] ?? 0) + blockMw;
-          const cumMw = hourCumulative[hourKey];
-
-          const rank = parseInt(String(r["merit_order_rank"] ?? r["rank"] ?? "0"), 10) || null;
-          const assetId = String(r["asset_ID"] ?? r["asset_id"] ?? "").replace(/'/g, "''");
-          const assetName = String(r["asset_name"] ?? "").replace(/'/g, "''");
-          const ppId = String(r["pool_participant_ID"] ?? r["pool_participant_id"] ?? "").replace(/'/g, "''");
-          const fuelType = String(r["fuel_type"] ?? r["fuelType"] ?? "").replace(/'/g, "''");
-          const offerPrice = safeFloat(r["offer_price"] ?? r["price"] ?? r["energy_price"]);
-          const dispatchedMw = safeFloat(r["dispatched_mw"] ?? r["dispatch_mw"] ?? r["actual_mw"]);
-          const isMarginal = String(r["marginal_ind"] ?? r["is_marginal"] ?? "0") === "1" ? "true" : "false";
-
+          if (!assetId) return null;
           return `(
             '${dt.date}', ${dt.hourEnding},
             ${rank ?? "NULL"},
@@ -803,13 +864,21 @@ async function seedMeritOrder(): Promise<void> {
         }
       }
       total += rows.length;
-      console.log(`  ✓ MeritOrder ${s}: ${rows.length} rows`);
+      console.log(`  ✓ MeritOrder ${s}: ${rows.length} blocks`);
     } catch (e2: unknown) {
-      console.error(`  ❌ MeritOrder ${s}: ${(e2 as Error).message}`);
+      const msg = (e2 as Error).message;
+      // "No Data available for this day" is AESO stating the obvious for dates
+      // inside the publication lag or before coverage — not a failure.
+      if (msg.includes("No Data available")) {
+        skippedNoData++;
+      } else {
+        console.error(`  ❌ MeritOrder ${s}: ${msg}`);
+      }
     }
     await sleep(DELAY_MS);
   }
-  console.log(`  MeritOrder total: ${total} rows`);
+  console.log(`  MeritOrder total: ${total.toLocaleString()} blocks` +
+              (skippedNoData ? `  (${skippedNoData} days had no data published)` : ""));
 }
 
 // ─── 10. Intertie Outages (BC/SK flowgate outages) ───────────────────────────
