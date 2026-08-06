@@ -259,6 +259,28 @@ FUEL_TO_CARRIER: dict[str, str] = {
 # Fallback price when an asset has no merit-order offer history. Same values
 # aeso_network_regional.CARRIER_MC uses — kept here so this module is
 # self-contained, but they must stay in sync.
+# Fallback prices for assets with NO offer in the selected window. Used only
+# when the merit order has nothing for that asset — every asset that did offer
+# gets its real per-block prices instead.
+#
+# HOW ALBERTA UNITS ACTUALLY OFFER (from the merit order, confirmed by Amol):
+#   · Renewables offer at $0 — price takers.
+#   · Efficient newer gas offers its FIRST block at $0 too, to stay in merit.
+#     Measured 2026-06-01 HE18: CAL1, EC01, GNR1, GNR2, SCR1 all have a $0
+#     first block and climb from there.
+#   · Only PEAKERS and inefficient older units start high. Their first block is
+#     roughly  heat_rate x gas_price + start cost + variable O&M  — the floor
+#     that makes starting worth it. NPP1 (simple cycle) offers all five blocks
+#     at ~$539.
+#
+# So a single number per carrier is wrong in principle for anything except
+# renewables: real units have a CURVE, not a price. These values stand in only
+# where no curve is available, and scgt is high precisely because a peaker's
+# first block already carries its start cost.
+#
+# TODO: derive the gas entries from the live AECO price and a per-technology
+# heat rate rather than hardcoding, so they track fuel. Needs the Alberta
+# Reference Price wired into the engine (it is already in the frontend).
 CARRIER_MC_FALLBACK = {
     "wind": 0.0, "solar": 0.0, "hydro": 5.0, "cogen": 45.0,
     "ccgt": 55.0, "scgt": 120.0, "storage": 20.0, "other": 40.0,
@@ -326,18 +348,58 @@ def _map_carrier(fuel: Optional[str], sub_fuel: Optional[str]) -> str:
     return "other"
 
 
-def load_real_generators(offer_days: int = 30) -> Optional[dict[str, Any]]:
+def load_real_generators(
+    offer_days: int = 30,
+    estimator: str = "mode",
+    months: Optional[list[int]] = None,
+) -> Optional[dict[str, Any]]:
     """
-    Return per-unit generators for the 9-bus model, or None to signal the
+    Return PER-BLOCK generators for the 9-bus model, or None to signal the
     caller should keep the aggregated LTP blocks.
+
+    ONE COMPONENT PER OFFER BLOCK, NOT PER ASSET
+    ---------------------------------------------------------------------------
+    An earlier version collapsed each asset's blocks into one capacity-weighted
+    price:  SUM(offer_price * block_mw) / SUM(block_mw).  That destroys the
+    supply curve, because Alberta generators routinely place their final block
+    at the $999.99 cap. Measured on 2026-06-01 HE18:
+
+        CAL1  6 blocks  $0 - 999.99   weighted avg $398.91
+        EC01  4 blocks  $0 - 999.96   weighted avg $499.43
+        CMH1  6 blocks  $0 - 999.99   weighted avg $304.56
+
+    CAL1's first MW is free, and the averaged model charged $398.91 for all of
+    it. Those cap-block units are the flexible gas plants that set price in
+    mid-load hours, so the model priced its most important marginal units two
+    orders of magnitude too high. Calibration showed the consequence: hours that
+    settled at $13.53 were modelled at $216.63 — WORSE than the crude carrier
+    fallback, despite using real data.
+
+    Per-block keeps each step at its own price. ~287 blocks/hour against ~188
+    assets, so roughly 100 extra components — nothing for the solver.
+
+    ESTIMATOR — how to collapse one block's price across the window.
+    A block's price varies hour to hour, so some statistic is needed. `mode`
+    is the default because generators repeat a standing offer most hours: the
+    mode captures that normal offer, while the mean is dragged upward by
+    occasional strategic or scarcity pricing. min/max/avg are available for
+    comparison; the right choice is an empirical question, not a given.
+
+    SEASON — `months` restricts the window to specific calendar months.
+    Offer behaviour is seasonal: large units take maintenance outages in SPRING,
+    so a spring stack misrepresents summer. Passing months=[6,7,8] builds the
+    stack from summer offers regardless of how recent they are. Default None
+    keeps the trailing `offer_days` window.
 
     Returns:
       {
         "generators": [ {name, bus, carrier, p_nom, marginal_cost,
-                         price_source, asset_id}, ... ],
+                         price_source, asset_id, block_number}, ... ],
         "diagnostics": { ... coverage stats, unmapped locations ... },
       }
     """
+    if estimator not in {"mode", "avg", "min", "max"}:
+        raise ValueError(f"estimator must be mode/avg/min/max, got {estimator!r}")
     try:
         import psycopg2
     except ImportError:
@@ -365,21 +427,61 @@ def load_real_generators(offer_days: int = 30) -> Optional[dict[str, Any]]:
             """)
             assets = cur.fetchall()
 
-            # Real offer prices, capacity-weighted per asset over the recent
-            # window. This is what gives the supply curve hundreds of steps.
-            offers: dict[str, float] = {}
+            # PER-ASSET, PER-BLOCK offers — each block keeps its own price.
+            # See the docstring for why collapsing them to one price per asset
+            # is destructive.
+            #
+            # mode() WITHIN GROUP is Postgres' statistical mode. Prices are
+            # rounded to the CENT first: offers repeat exactly, so cent-rounding
+            # finds genuine repeats, whereas rounding to the dollar would merge
+            # distinct offers that merely sit close together.
+            blocks: list[tuple] = []
+            window_desc = ""
             try:
-                cur.execute("""
+                if months:
+                    season_sql = "AND EXTRACT(MONTH FROM date)::int = ANY(%(months)s)"
+                    params: dict[str, Any] = {"months": months}
+                    window_desc = f"months={months}"
+                else:
+                    season_sql = ("AND date >= (SELECT MAX(date) FROM aeso_merit_order) "
+                                  "- %(days)s::int")
+                    params = {"days": offer_days}
+                    window_desc = f"trailing {offer_days}d"
+
+                cur.execute(f"""
                     SELECT asset_id,
-                           SUM(offer_price * block_mw) / NULLIF(SUM(block_mw), 0)
+                           merit_order_rank AS block_number,
+                           mode() WITHIN GROUP (ORDER BY ROUND(offer_price, 2)) AS price_mode,
+                           AVG(offer_price) AS price_avg,
+                           MIN(offer_price) AS price_min,
+                           MAX(offer_price) AS price_max,
+                           AVG(block_mw)    AS block_mw,
+                           COUNT(*)         AS observations
                     FROM aeso_merit_order
-                    WHERE date >= (SELECT MAX(date) FROM aeso_merit_order) - %s::int
-                      AND offer_price IS NOT NULL AND block_mw > 0
-                    GROUP BY asset_id
-                """, (offer_days,))
-                offers = {r[0]: float(r[1]) for r in cur.fetchall() if r[1] is not None}
+                    WHERE offer_price IS NOT NULL AND block_mw > 0
+                      {season_sql}
+                    GROUP BY asset_id, merit_order_rank
+                    ORDER BY asset_id, merit_order_rank
+                """, params)
+                blocks = cur.fetchall()
             except Exception as e:
-                logger.warning("merit-order offers unavailable (%s) — using carrier fallback prices", e)
+                logger.warning("merit-order blocks unavailable (%s) — using carrier fallback prices", e)
+
+            # asset_id -> [ {block_number, price, mw, observations}, ... ]
+            _PRICE_COL = {"mode": 2, "avg": 3, "min": 4, "max": 5}[estimator]
+            offer_blocks: dict[str, list[dict[str, Any]]] = {}
+            for row in blocks:
+                price, mw = row[_PRICE_COL], row[6]
+                if price is None or mw is None:
+                    continue
+                offer_blocks.setdefault(row[0], []).append({
+                    "block_number": row[1],
+                    "price": float(price),
+                    "mw": float(mw),
+                    "observations": int(row[7]),
+                })
+            for lst in offer_blocks.values():
+                lst.sort(key=lambda b: b["price"])   # cheapest first = merit order
     finally:
         conn.close()
 
@@ -389,6 +491,7 @@ def load_real_generators(offer_days: int = 30) -> Optional[dict[str, Any]]:
 
     generators: list[dict[str, Any]] = []
     unmapped: dict[str, float] = {}
+    capacity_mismatch: dict[str, tuple[float, float]] = {}
     mapped_mw = 0.0
     total_mw = 0.0
     priced_real = 0
@@ -421,25 +524,59 @@ def load_real_generators(offer_days: int = 30) -> Optional[dict[str, Any]]:
         mw_by_confidence[confidence or "low"] = mw_by_confidence.get(confidence or "low", 0.0) + cap
 
         carrier = _map_carrier(fuel, sub_fuel)
-        offer = offers.get(asset_id)
-        if offer is not None and offer > -1000:
-            mc, src = float(offer), "merit_order"
-            priced_real += 1
-        else:
-            mc, src = CARRIER_MC_FALLBACK.get(carrier, 40.0), "carrier_assumption"
+        asset_blocks = offer_blocks.get(asset_id)
 
-        generators.append({
-            "name": f"{asset_id}_{carrier}",
-            "asset_id": asset_id,
-            "asset_name": name or asset_id,
-            "bus": bus,
-            "carrier": carrier,
-            "p_nom": cap,
-            "marginal_cost": mc,
-            "price_source": src,
-            "location_confidence": confidence or "low",
-        })
-        mapped_mw += cap
+        if asset_blocks:
+            # ONE COMPONENT PER BLOCK. Each keeps its own offered price, so a
+            # unit whose first block is free stays free for that much capacity
+            # and only becomes expensive further up its own curve.
+            #
+            # Renewables offer at $0 and efficient gas offers its FIRST block at
+            # $0 to stay in merit — that zero-priced tranche is most of why
+            # Alberta settles under $30 for three quarters of the year. Averaging
+            # it against the same unit's $999.99 cap block erased it entirely.
+            offered_mw = sum(b["mw"] for b in asset_blocks)
+            for b in asset_blocks:
+                generators.append({
+                    "name": f"{asset_id}_b{b['block_number']}_{carrier}",
+                    "asset_id": asset_id,
+                    "asset_name": name or asset_id,
+                    "block_number": b["block_number"],
+                    "bus": bus,
+                    "carrier": carrier,
+                    "p_nom": b["mw"],
+                    "marginal_cost": b["price"],
+                    "price_source": f"merit_order_{estimator}",
+                    "observations": b["observations"],
+                    "location_confidence": confidence or "low",
+                })
+            priced_real += 1
+            mapped_mw += offered_mw
+
+            # Offered capacity should broadly track registered capability. A
+            # large gap means the asset offered only part of itself in this
+            # window (outage, derate, or partial participation) — worth seeing
+            # rather than silently accepting.
+            if cap > 0 and abs(offered_mw - cap) / cap > 0.25:
+                capacity_mismatch[asset_id] = (offered_mw, cap)
+        else:
+            # No offers in this window: price-takers that never appear in the
+            # stack, or units that simply did not offer. Fall back to the
+            # carrier assumption at registered capability.
+            mc = CARRIER_MC_FALLBACK.get(carrier, 40.0)
+            generators.append({
+                "name": f"{asset_id}_{carrier}",
+                "asset_id": asset_id,
+                "asset_name": name or asset_id,
+                "block_number": None,
+                "bus": bus,
+                "carrier": carrier,
+                "p_nom": cap,
+                "marginal_cost": mc,
+                "price_source": "carrier_assumption",
+                "location_confidence": confidence or "low",
+            })
+            mapped_mw += cap
 
     coverage = mapped_mw / total_mw if total_mw else 0.0
 
@@ -478,20 +615,43 @@ def load_real_generators(offer_days: int = 30) -> Optional[dict[str, Any]]:
         "high_confidence_mw": round(hi_mw, 1),
         "low_confidence_mw": round(mw_by_confidence.get("low", 0.0), 1),
         "high_confidence_pct_of_placed": round(100 * hi_mw / mapped_mw, 1) if mapped_mw else 0.0,
-        "units_with_real_offer_price": priced_real,
-        "units_with_assumed_price": len(generators) - priced_real,
+        "assets_with_real_offers": priced_real,
+        "assets_with_assumed_price": sum(1 for g in generators
+                                         if g["price_source"] == "carrier_assumption"),
+        "offer_blocks": sum(1 for g in generators if g.get("block_number") is not None),
+        "price_estimator": estimator,
+        "offer_window": window_desc,
         "distinct_price_steps": len({round(g["marginal_cost"], 2) for g in generators}),
+        # How much capacity sits at or near zero. Renewables offer at $0 and
+        # efficient gas offers its FIRST block at $0 to stay in merit, so this
+        # tranche is most of why Alberta settles under $30 three quarters of the
+        # year. A per-asset average destroyed it — this figure makes its
+        # survival checkable at a glance.
+        "zero_priced_mw": round(sum(g["p_nom"] for g in generators
+                                    if g["marginal_cost"] <= 0.01), 1),
+        "capacity_at_cap_mw": round(sum(g["p_nom"] for g in generators
+                                        if g["marginal_cost"] >= 999.0), 1),
         "capacity_by_bus_mw": {k: round(v, 1) for k, v in sorted(by_bus.items())},
         "unplaced_assets_mw": {k: round(v, 1) for k, v in
                                sorted(unmapped.items(), key=lambda kv: -kv[1])[:30]},
+        "offered_vs_registered_mismatch": {
+            k: {"offered_mw": round(v[0], 1), "registered_mw": round(v[1], 1)}
+            for k, v in sorted(capacity_mismatch.items(),
+                               key=lambda kv: -abs(kv[1][0] - kv[1][1]))[:15]
+        },
     }
 
     logger.info(
-        "Real AESO stack: %d units, %.0f MW placed (%.0f%% of active fleet, "
-        "%.0f%% high-confidence), %d distinct price steps (%d real offers / %d assumed)",
-        len(generators), mapped_mw, 100 * coverage,
-        diagnostics["high_confidence_pct_of_placed"],
-        diagnostics["distinct_price_steps"], priced_real, len(generators) - priced_real,
+        "Real AESO stack: %d components from %d assets (%d offer blocks, %s over %s), "
+        "%.0f MW placed (%.0f%% of fleet), %d distinct price steps, "
+        "%.0f MW at $0 / %.0f MW at cap",
+        len(generators), priced_real + diagnostics["assets_with_assumed_price"],
+        diagnostics["offer_blocks"], estimator, window_desc,
+        mapped_mw, 100 * coverage, diagnostics["distinct_price_steps"],
+        diagnostics["zero_priced_mw"], diagnostics["capacity_at_cap_mw"],
     )
+    if capacity_mismatch:
+        logger.info("  %d assets offered materially less/more than registered capability "
+                    "(outage, derate or partial participation)", len(capacity_mismatch))
 
     return {"generators": generators, "diagnostics": diagnostics}

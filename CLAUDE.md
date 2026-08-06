@@ -372,9 +372,30 @@ phase-out in 2024, so older offers describe a fleet that no longer exists.
 A short recent window is not "fresher", it is the wrong season.
 
 **A generator offers MULTIPLE BLOCKS at different prices.** The supply curve
-lives in the blocks, not the units — collapsing an asset's blocks to one
-capacity-weighted price (which `aeso_generators.py` currently does) destroys
-the shape that makes it a curve. Per-block gives ~1,150 steps against ~230.
+lives in the blocks, not the units. Collapsing an asset's blocks to one
+capacity-weighted price destroys the shape — and is WORSE than a crude carrier
+assumption. Measured 2026-06-01 HE18:
+
+    CAL1  6 blocks  $0 - 999.99   weighted avg $398.91
+    EC01  4 blocks  $0 - 999.96   weighted avg $499.43
+    CMH1  6 blocks  $0 - 999.99   weighted avg $304.56
+
+CAL1's first MW is free; the averaged model charged $398.91 for all of it.
+Calibration confirmed the damage: hours settling at $13.53 were modelled at
+$216.63, against $15.40 using the crude fallback. Fixed 2026-08-04 — one PyPSA
+component per block.
+
+**How Alberta units actually offer:**
+  - Renewables offer at **$0** — price takers.
+  - Efficient newer gas offers its **FIRST block at $0** too, to stay in merit
+    (CAL1, EC01, GNR1, GNR2, SCR1 all confirmed). This zero-priced tranche is
+    most of why 76% of hours settle under $30.
+  - Only **peakers and inefficient older units** start high. Their first block
+    is roughly `heat_rate x gas_price + start cost + variable O&M` — the floor
+    that makes starting worthwhile. NPP1 offers all five blocks at ~$539.
+
+A single price per carrier is therefore wrong in principle for everything
+except renewables. Real units have a curve.
 For the per-block price estimator across a window, MODE has historically
 forecast best: generators repeat a standing offer most hours, so the mode
 captures the normal offer while the mean is dragged by occasional strategic or
