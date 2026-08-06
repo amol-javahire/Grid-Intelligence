@@ -389,6 +389,26 @@ several of these land together:
   - a steep load ramp
   - the **BC-AB tie on outage**
 
+**The MW-at-risk threshold for a spike is TEMPERATURE-DEPENDENT.** This is the
+sharpest quantitative statement of the spike mechanism and it is directly
+testable:
+  - IN SEASON (summer above +25 °C, winter below −20 °C): **100–200 MW**
+    tripping or going offline is enough to spike prices.
+  - OFF SEASON: it takes **300–400 MW** to produce the same move.
+So the same outage has a very different price consequence depending on ambient
+temperature — the supply cushion is thin only when temperature has already
+pushed load up. Model spike probability as a function of (temperature, load,
+MW offline), not of load alone.
+
+The MW-offline signal does NOT require per-unit outage data: `AIESGenCapacity`
+gives hourly MC (maximum capability) and AC (available capability) BY FUEL, so
+MC−AC is MW offline and AC/MC is the cushion. Big THERMAL units are the ones
+that matter — they are the marginal units.
+
+Everything needed for this analysis now exists: `iso_hourly_temps` (Calgary),
+`aeso_hourly_pool_price`, and `aeso_actual_forecast.actual_ail_mw` (AIL, seeded
+2026-08-04). Only the `gen-capacity` seed is outstanding.
+
 ### What this means for the 9-bus OPF — read before "improving" the model
 
 1. **A single-snapshot DC OPF cannot reproduce Alberta's volatility.** The
