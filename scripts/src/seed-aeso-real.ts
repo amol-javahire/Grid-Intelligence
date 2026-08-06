@@ -743,18 +743,29 @@ async function seedPoolParticipants(): Promise<void> {
 // coordinate of each block directly.
 const MERIT_ORDER_LAG_DAYS = 62;   // 60 + margin; the API is the authority
 
-// How far back to pull, ending at the lag boundary. Default 90 days.
+// How far back to pull, ending at the lag boundary. Default 365 days —
+// EXACTLY ONE SEASONAL CYCLE, and that is the point.
 //
-// SIZE: ~7,000 blocks/day, so 90 days is ~630k rows (~100-150 MB with indexes)
-// and a full year would be ~2.5M rows (~400-600 MB). Capped at 365 — offers
-// older than that describe a fleet that no longer exists (Alberta finished its
-// coal phase-out in 2024), so they would make the supply stack less
-// representative, not more.
+// WHY NOT LESS. Offer behaviour is seasonal because large generators take
+// MAINTENANCE OUTAGES IN SPRING, so the spring supply curve is structurally
+// different from summer's. To model summer prices you want LAST SUMMER's
+// curve, not the most recent spring. A 90-day window ending at the lag
+// boundary gives spring only — the worst possible window for a summer forecast.
+// The stack model is built on four seasons for this reason.
+//
+// WHY NOT MORE. Alberta finished its coal phase-out in 2024. Offers older than
+// about a year describe a fleet with coal still setting price, which makes the
+// stack less representative rather than more. One year is the point where
+// seasonal coverage is complete and fleet drift has not yet set in.
+//
+// SIZE: ~7,000 blocks/day → ~2.5M rows, roughly 400-600 MB with indexes.
+// Days already seeded are skipped, so widening the window later only fetches
+// the gap rather than re-pulling everything.
 //
 // Override:  MERIT_ORDER_DAYS=180 pnpm --filter @workspace/scripts seed-aeso-real merit-order
 const MERIT_ORDER_DAYS = Math.min(
   365,
-  Math.max(1, parseInt(process.env.MERIT_ORDER_DAYS ?? "90", 10) || 90),
+  Math.max(1, parseInt(process.env.MERIT_ORDER_DAYS ?? "365", 10) || 365),
 );
 
 async function seedMeritOrder(): Promise<void> {

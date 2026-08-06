@@ -362,6 +362,15 @@ afternoon peak has flattened. Volatility has moved to the two ramps:
 **Overnight wind normally holds prices below $20.** This matches the observed
 distribution: 76% of hours under $30, averaging $13.26.
 
+**Offer behaviour is SEASONAL — match the season, not the calendar distance.**
+Large generators take maintenance outages in SPRING, so the spring supply curve
+is structurally different from summer's. To model summer prices you compare
+against LAST SUMMER, not the most recent spring. This is why the stack model
+works on four seasons, and why `aeso_merit_order` pulls a full 365 days:
+one complete seasonal cycle, and no more than that — Alberta finished its coal
+phase-out in 2024, so older offers describe a fleet that no longer exists.
+A short recent window is not "fresher", it is the wrong season.
+
 **Spikes are COINCIDENT-EVENT driven, not load driven.** Prices spike when
 several of these land together:
   - two or more gas units trip or are on outage
