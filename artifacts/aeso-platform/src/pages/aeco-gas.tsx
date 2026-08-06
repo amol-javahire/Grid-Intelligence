@@ -247,7 +247,7 @@ export default function ForwardPrices() {
         <strong>Also relevant:</strong> AESO's own public price forecast looks roughly two hours
         ahead — it is not a forward curve. The AESO Long-Term Outlook forecasts load and
         generation adequacy, not a tradable power price. Neither substitutes for the tables above.
-        For settled history rather than forwards, see the Historical Prices tab.
+        For settled history rather than forwards, see the Historical Data tab.
       </p>
     </div>
   );

@@ -1,4 +1,5 @@
 import { useState, useMemo } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useGetAesoPoolPriceStats } from "@workspace/api-client-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -37,20 +38,66 @@ interface Row {
   label: string;        // "Jul 2026"
   year: number;
   monthNum: number;
-  avgPower: number | null;
-  minPower: number | null;
-  maxPower: number | null;
+  avgPower: number | null;      // flat 7x24
+  onPeak: number | null;        // HE 8-23, EVERY day (Alberta convention)
+  offPeak: number | null;       // HE 1-7 and 24
   volatility: number | null;
   spikeCount: number | null;
-  negCount: number | null;
+  avgAil: number | null;
+  minAil: number | null;
+  maxAil: number | null;
+  ailVolatility: number | null;
   gasGj: number | null;
   heatRate: number | null;
+  sparkSpread: number | null;
 }
 
+/**
+ * Assumed heat rate for the spark spread, GJ/MWh (HHV).
+ *
+ * ~6.9 is a modern Alberta CCGT at full load. This is an ASSUMPTION, not a
+ * measurement — it is what makes spark spread a hypothetical margin for a
+ * reference unit rather than an observed one. The implied heat rate column
+ * beside it is the measured quantity (pool / gas) and needs no assumption,
+ * which is why both are shown.
+ */
+const SPARK_HEAT_RATE_GJ_PER_MWH = 6.9;
+
+interface Band {
+  band: string;
+  hours: number;
+  pctOfHours: number;
+  avgPrice: number;
+  pctOfRevenue: number;
+}
+
+const BAND_LABELS: Record<string, string> = {
+  under_30:        "under C$30",
+  "30_to_80":      "C$30 – 80",
+  "80_to_300":     "C$80 – 300",
+  "300_to_999":    "C$300 – 999",
+  at_cap_999_plus: "at cap (C$999+)",
+};
+
 const fmt = (n: number | null | undefined, d = 2) => (n != null ? n.toFixed(d) : "—");
+const fmtInt = (n: number | null | undefined) =>
+  n != null ? Math.round(n).toLocaleString() : "—";
 
 export default function HistoricalPrices() {
   const { data: stats, isLoading } = useGetAesoPoolPriceStats();
+
+  // Price-band distribution. Plain fetch rather than a generated hook — this
+  // route is new and the client package has not been regenerated.
+  const { data: bandsData, isLoading: bandsLoading } = useQuery<Band[]>({
+    queryKey: ["aeso-pool-price-bands"],
+    queryFn: async () => {
+      const res = await fetch("/api/aeso/pool-price/bands");
+      if (!res.ok) throw new Error(`bands returned ${res.status}`);
+      return res.json();
+    },
+    staleTime: 10 * 60 * 1000,
+  });
+  const bands: Band[] = bandsData ?? [];
 
   // Build the joined monthly series, newest first.
   const allRows: Row[] = useMemo(() => {
@@ -66,13 +113,21 @@ export default function HistoricalPrices() {
         year: y,
         monthNum: m,
         avgPower,
-        minPower: s.minPrice != null ? Number(s.minPrice) : null,
-        maxPower: s.maxPrice != null ? Number(s.maxPrice) : null,
+        onPeak:  s.onPeakPrice  != null ? Number(s.onPeakPrice)  : null,
+        offPeak: s.offPeakPrice != null ? Number(s.offPeakPrice) : null,
         volatility: s.volatility != null ? Number(s.volatility) : null,
         spikeCount: s.spikeCount != null ? Number(s.spikeCount) : null,
-        negCount: s.negCount != null ? Number(s.negCount) : null,
+        avgAil:        s.avgAil        != null ? Number(s.avgAil)        : null,
+        minAil:        s.minAil        != null ? Number(s.minAil)        : null,
+        maxAil:        s.maxAil        != null ? Number(s.maxAil)        : null,
+        ailVolatility: s.ailVolatility != null ? Number(s.ailVolatility) : null,
         gasGj,
         heatRate: avgPower != null && gasGj != null ? impliedHeatRate(avgPower, gasGj) : null,
+        // Spark spread = power − (gas × assumed heat rate). Positive means a
+        // reference CCGT covered its fuel cost on the month's average price.
+        sparkSpread: avgPower != null && gasGj != null
+          ? avgPower - gasGj * SPARK_HEAT_RATE_GJ_PER_MWH
+          : null,
       } as Row;
     });
     return powerRows.sort((a, b) => b.month.localeCompare(a.month));
@@ -97,9 +152,9 @@ export default function HistoricalPrices() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-3xl font-bold tracking-tight">Historical Prices</h1>
+        <h1 className="text-3xl font-bold tracking-tight">Historical Data</h1>
         <p className="text-muted-foreground text-sm mt-1">
-          Alberta pool price and natural gas reference price — monthly averages, most recent first
+          Alberta pool price, internal load (AIL) and natural gas reference price — monthly, most recent first
         </p>
       </div>
 
@@ -228,7 +283,9 @@ export default function HistoricalPrices() {
         <CardHeader className="pb-3">
           <CardTitle className="text-base font-semibold">Monthly detail</CardTitle>
           <p className="text-xs text-muted-foreground mt-0.5">
-            Most recent month at the top. Spike hours are ≥ C$300/MWh; negative hours are &lt; C$0.
+            Most recent first. On-peak is HE 8–23 <span className="font-medium">every day</span> —
+            the Alberta convention, which unlike the US markets does not exempt weekends.
+            Spike hours are ≥ C$300/MWh. Spark spread assumes a {SPARK_HEAT_RATE_GJ_PER_MWH} GJ/MWh CCGT.
           </p>
         </CardHeader>
         <CardContent>
@@ -240,13 +297,17 @@ export default function HistoricalPrices() {
                 <thead className="sticky top-0 bg-card">
                   <tr className="border-b border-border text-muted-foreground">
                     <th className="text-left py-2 pr-3 font-medium">Month</th>
-                    <th className="text-right py-2 px-2 font-medium">Avg $/MWh</th>
+                    <th className="text-right py-2 px-2 font-medium">Flat $/MWh</th>
+                    <th className="text-right py-2 px-2 font-medium">On-peak</th>
+                    <th className="text-right py-2 px-2 font-medium">Off-peak</th>
+                    <th className="text-right py-2 px-2 font-medium">σ price</th>
+                    <th className="text-right py-2 px-2 font-medium">Spike hrs</th>
+                    <th className="text-right py-2 px-2 font-medium border-l border-border/60">Avg AIL</th>
                     <th className="text-right py-2 px-2 font-medium">Min</th>
                     <th className="text-right py-2 px-2 font-medium">Max</th>
-                    <th className="text-right py-2 px-2 font-medium">σ</th>
-                    <th className="text-right py-2 px-2 font-medium">Spike hrs</th>
-                    <th className="text-right py-2 px-2 font-medium">Neg hrs</th>
-                    <th className="text-right py-2 px-2 font-medium">Gas $/GJ</th>
+                    <th className="text-right py-2 px-2 font-medium">σ AIL</th>
+                    <th className="text-right py-2 px-2 font-medium border-l border-border/60">Gas $/GJ</th>
+                    <th className="text-right py-2 px-2 font-medium">Spark</th>
                     <th className="text-right py-2 pl-2 font-medium">Implied HR</th>
                   </tr>
                 </thead>
@@ -255,27 +316,77 @@ export default function HistoricalPrices() {
                     <tr key={r.month} className="border-b border-border/40 hover:bg-muted/30">
                       <td className="py-1.5 pr-3 font-medium">{r.label}</td>
                       <td className="text-right py-1.5 px-2 tabular-nums font-semibold">{fmt(r.avgPower)}</td>
-                      <td className={`text-right py-1.5 px-2 tabular-nums ${(r.minPower ?? 0) < 0 ? "text-red-400" : "text-muted-foreground"}`}>
-                        {fmt(r.minPower)}
-                      </td>
-                      <td className="text-right py-1.5 px-2 tabular-nums text-muted-foreground">{fmt(r.maxPower, 0)}</td>
+                      <td className="text-right py-1.5 px-2 tabular-nums">{fmt(r.onPeak)}</td>
+                      <td className="text-right py-1.5 px-2 tabular-nums text-muted-foreground">{fmt(r.offPeak)}</td>
                       <td className="text-right py-1.5 px-2 tabular-nums text-muted-foreground">{fmt(r.volatility, 0)}</td>
                       <td className={`text-right py-1.5 px-2 tabular-nums ${(r.spikeCount ?? 0) > 0 ? "text-amber-500" : "text-muted-foreground"}`}>
                         {r.spikeCount ?? "—"}
                       </td>
-                      <td className={`text-right py-1.5 px-2 tabular-nums ${(r.negCount ?? 0) > 0 ? "text-red-400" : "text-muted-foreground"}`}>
-                        {r.negCount ?? "—"}
+                      <td className="text-right py-1.5 px-2 tabular-nums border-l border-border/60">{fmtInt(r.avgAil)}</td>
+                      <td className="text-right py-1.5 px-2 tabular-nums text-muted-foreground">{fmtInt(r.minAil)}</td>
+                      <td className="text-right py-1.5 px-2 tabular-nums text-muted-foreground">{fmtInt(r.maxAil)}</td>
+                      <td className="text-right py-1.5 px-2 tabular-nums text-muted-foreground">{fmt(r.ailVolatility, 0)}</td>
+                      <td className="text-right py-1.5 px-2 tabular-nums text-amber-500 border-l border-border/60">{fmt(r.gasGj)}</td>
+                      <td className={`text-right py-1.5 px-2 tabular-nums ${(r.sparkSpread ?? 0) < 0 ? "text-red-400" : "text-emerald-500"}`}>
+                        {fmt(r.sparkSpread, 1)}
                       </td>
-                      <td className="text-right py-1.5 px-2 tabular-nums text-amber-500">{fmt(r.gasGj)}</td>
                       <td className="text-right py-1.5 pl-2 tabular-nums text-muted-foreground">{fmt(r.heatRate, 1)}</td>
                     </tr>
                   ))}
                   {visible.length === 0 && (
-                    <tr><td colSpan={9} className="py-6 text-center text-muted-foreground">No data</td></tr>
+                    <tr><td colSpan={13} className="py-6 text-center text-muted-foreground">No data</td></tr>
                   )}
                 </tbody>
               </table>
             </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Price-band distribution — how often, and how much of the money.
+          Separated from the monthly table because the interesting comparison is
+          share of HOURS against share of REVENUE, and those diverge sharply in
+          Alberta: the cheap band is most of the year and very little of the
+          value. A single "spike count" column cannot show that. */}
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base font-semibold">Price bands — frequency vs value</CardTitle>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            Across the whole seeded period. The two percentage columns are the point:
+            hours tell you what the market usually does, revenue share tells you where
+            a PPA's value actually comes from.
+          </p>
+        </CardHeader>
+        <CardContent>
+          {bandsLoading ? (
+            <Skeleton className="w-full h-40" />
+          ) : bands.length === 0 ? (
+            <div className="py-6 text-center text-xs text-muted-foreground">No data</div>
+          ) : (
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b border-border text-muted-foreground">
+                  <th className="text-left py-2 pr-3 font-medium">Band</th>
+                  <th className="text-right py-2 px-2 font-medium">Hours</th>
+                  <th className="text-right py-2 px-2 font-medium">% of hours</th>
+                  <th className="text-right py-2 px-2 font-medium">Avg $/MWh</th>
+                  <th className="text-right py-2 pl-2 font-medium">% of revenue</th>
+                </tr>
+              </thead>
+              <tbody>
+                {bands.map((b) => (
+                  <tr key={b.band} className="border-b border-border/40 hover:bg-muted/30">
+                    <td className="py-1.5 pr-3 font-medium">{BAND_LABELS[b.band] ?? b.band}</td>
+                    <td className="text-right py-1.5 px-2 tabular-nums">{b.hours.toLocaleString()}</td>
+                    <td className="text-right py-1.5 px-2 tabular-nums text-muted-foreground">{fmt(b.pctOfHours, 1)}%</td>
+                    <td className="text-right py-1.5 px-2 tabular-nums">{fmt(b.avgPrice)}</td>
+                    <td className="text-right py-1.5 pl-2 tabular-nums font-semibold text-amber-500">
+                      {fmt(b.pctOfRevenue, 1)}%
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           )}
         </CardContent>
       </Card>

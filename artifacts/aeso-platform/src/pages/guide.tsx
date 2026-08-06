@@ -46,7 +46,7 @@ const GROUPS: GuideGroup[] = [
         dataSource: "aeso_hourly_pool_price, aeso_supply_demand, aeso_hourly_gen_output, aeso_queue_projects (latest hour)",
       },
       {
-        title: "Historical Prices",
+        title: "Historical Data",
         href: "/historical-prices",
         icon: DollarSign,
         color: C.teal,

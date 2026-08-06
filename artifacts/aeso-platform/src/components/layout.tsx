@@ -18,7 +18,7 @@ import {
 const navItems = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
   { href: "/rankings", label: "Asset Rankings", icon: ListOrdered },
-  { href: "/historical-prices", label: "Historical Prices", icon: DollarSign },
+  { href: "/historical-prices", label: "Historical Data", icon: DollarSign },
   { href: "/forward-prices", label: "Forward Prices", icon: Flame },
   { href: "/generation-stack", label: "Generation Stack", icon: BarChart3 },
   { href: "/csd", label: "CSD", icon: Scale },
