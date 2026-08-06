@@ -272,9 +272,27 @@ async function seedActualForecast(): Promise<void> {
       // Every row previously parsed to all-NULL and the ON CONFLICT DO UPDATE
       // would have happily written them; the run reported "total: 0 rows" while
       // attempting to insert ~22k junk records. Guarded below.
+      // DST FALL-BACK produces a duplicate (date, hour_ending) inside a single
+      // batch: Mountain time repeats 01:00 on the November transition day, both
+      // occurrences parse to HE 2, and Postgres rejects the whole statement with
+      // "ON CONFLICT DO UPDATE command cannot affect row a second time" (21000).
+      // That killed all of 2025-11 while every other month succeeded.
+      //
+      // The schema keys on (date, hour_ending) and so cannot represent a 25-hour
+      // day. Keep the FIRST occurrence — the pre-transition hour — and report
+      // the dropped one rather than discarding it silently. Spring-forward needs
+      // no handling: a 23-hour day is simply one row short, no collision.
       let parsed = 0;
+      const seenKeys = new Set<string>();
+      const dropped: string[] = [];
       const values = rows.map((r: Record<string, unknown>) => {
         const dt = parseAesoDatetime(String(r["begin_datetime_mpt"] ?? ""));
+        const key = `${dt.date}-${dt.hourEnding}`;
+        if (seenKeys.has(key)) {
+          dropped.push(`${key} (utc ${String(r["begin_datetime_utc"] ?? "?")})`);
+          return null;
+        }
+        seenKeys.add(key);
         const actual = safeFloat(r["alberta_internal_load"]);
         const forecast = safeFloat(r["forecast_alberta_internal_load"]);
         if (actual !== null || forecast !== null) parsed++;
@@ -284,7 +302,13 @@ async function seedActualForecast(): Promise<void> {
           ${actual ?? "NULL"},
           'aeso_actualforecast_api'
         )`;
-      }).join(",\n");
+      }).filter(Boolean).join(",\n");
+
+      if (dropped.length) {
+        console.log(`     ↳ DST fall-back: dropped ${dropped.length} repeated `
+          + `hour(s) — ${dropped.join(", ")}. The (date, hour_ending) key cannot `
+          + `hold a 25-hour day; the first occurrence is kept.`);
+      }
 
       // Abort rather than write a batch that parsed to nothing. An upstream
       // schema change is a recurring event and must not look like success.
